@@ -419,7 +419,7 @@ rule annotate_contigs:
         #> ${{proj_dir}}/{log}
         """
 
-rule sample_annotation:
+rule metaG_annotation:
     input: 
         expand("data/omics/metagenomes/{sample}/annotation", sample = metaG_samples),
         #expand("data/omics/metagenomes/{sample}/bins/metabat2_bins", sample = metaG_samples),
