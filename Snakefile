@@ -422,9 +422,9 @@ rule annotate_contigs:
 rule sample_annotation:
     input: 
         expand("data/omics/metagenomes/{sample}/annotation", sample = metaG_samples),
-        expand("data/omics/metagenomes/{sample}/bins/metabat2_bins", sample = metaG_samples),
-        expand("data/omics/metagenomes/{sample}/bins/gtdbtk", sample = metaG_samples),
-        expand("data/omics/metagenomes/{sample}/bins/checkm.txt", sample = metaG_samples)
+        #expand("data/omics/metagenomes/{sample}/bins/metabat2_bins", sample = metaG_samples),
+        #expand("data/omics/metagenomes/{sample}/bins/gtdbtk", sample = metaG_samples),
+        #expand("data/omics/metagenomes/{sample}/bins/checkm.txt", sample = metaG_samples)
 
 
 # rule initial_binning:
@@ -587,7 +587,7 @@ rule gtdbtk:
         gtdbtk classify_wf --extension fa --genome_dir {input.bins} --out_dir {output} --cpus {resources.cpus}
         """
 
-rule coverm:
+rule mag_coverage:
     input:
         fwd_reads = rules.remove_contaminants.output.cleaned_fwd,
         rev_reads = rules.remove_contaminants.output.cleaned_rev,
@@ -607,6 +607,73 @@ rule coverm:
             -o {output}
         """
 
+rule map_to_bins_for_reassembly:
+    input:
+        fwd_reads = rules.remove_contaminants.output.cleaned_fwd,
+        rev_reads = rules.remove_contaminants.output.cleaned_rev,
+        bins_folder = rules.dastool.output.das_bins_folder,
+        bin = "data/omics/metagenomes/{sample}/bins/DASTool/_DASTool_bins/{bin}.fa"
+    output:
+        #unfiltered_bam = "data/omics/metagenomes/{sample}/bins/reassembly/reads/{bin}_prefilt.bam",
+        unfiltered_bam_dir = temp(directory("data/omics/metagenomes/{sample}/bins/reassembly/mapped_reads/{bin}__bam_unfiltered")),
+        filtered_bam = temp("data/omics/metagenomes/{sample}/bins/reassembly/mapped_reads/{bin}.bam"),
+        #filtered_bam_dir = directory("data/omics/metagenomes/{sample}/bins/reassembly/reads/{bin}__bam_filtered"),
+        fwd_reads = temp("data/omics/metagenomes/{sample}/bins/reassembly/mapped_reads/{bin}_R1.fastq.gz"),
+        rev_reads = temp("data/omics/metagenomes/{sample}/bins/reassembly/mapped_reads/{bin}_R2.fastq.gz")
+    conda: "config/conda_yaml/coverm.yaml"
+    resources: cpus=24, mem_mb=100000, time_min=2880
+    shell:
+        """
+        coverm make \
+            -t {resources.cpus} \
+            -1 {input.fwd_reads} \
+            -2 {input.rev_reads} \
+            --reference {input.bin} \
+            -o {output.unfiltered_bam_dir}
+
+        coverm filter \
+            -b {output.unfiltered_bam_dir}/*.bam \
+            -o {output.filtered_bam} \
+            --min-read-percent-identity 0.98 \
+            --threads {resources.cpus}
+
+        samtools fastq -@ {resources.cpus} \
+            {output.filtered_bam} \
+            -1 {output.fwd_reads} \
+            -2 {output.rev_reads} \
+            -0 /dev/null -s /dev/null -n
+        """
+
+rule reassemble_bin:
+    input:
+        fwd_reads = rules.map_to_bins_for_reassembly.output.fwd_reads,
+        rev_reads = rules.map_to_bins_for_reassembly.output.rev_reads,
+        bin = "data/omics/metagenomes/{sample}/bins/DASTool/_DASTool_bins/{bin}.fa"
+    output:
+        #assembly_dir = directory("data/omics/metagenomes/{sample}/bins/reassembly/{bin}"),
+        contigs = "data/omics/metagenomes/{sample}/bins/reassembly/{bin}_reassembled_contigs.fasta"
+    params: 
+        assembly_dir = directory("data/omics/metagenomes/{sample}/bins/reassembly/{bin}")
+    conda: "config/conda_yaml/main.yaml"
+    log: "logs/bin_reassembly/{sample}/{bin}.log"
+    benchmark: "logs/bin_reassembly/{sample}/{bin}.log"
+    resources: cpus = 16, time_min=20160, mem_mb = 16000
+        #mem_mb = lambda wildcards, attempt: attempt * 100000
+    shell:
+        """
+        spades.py \
+            -t {resources.cpus} \
+            -m $(echo "scale=-1; ({resources.mem_mb}/1000)/1" | bc) \
+            --careful \
+		    --untrusted-contigs {input.bin} \
+		    -1 {input.fwd_reads} \
+		    -2 {input.rev_reads} \
+		    -o {params.assembly_dir} > {log}
+
+        mv {params.assembly_dir}/contigs.fasta {output.contigs}
+        rm -r {params.assembly_dir}
+        """
+
 rule gather_bin:
     input: expand("data/omics/metagenomes/{sample}/bins/ran_dastool.touch",sample=metaG_samples)
     output: directory("data/omics/metagenome_bins")
@@ -616,6 +683,16 @@ rule gather_bin:
         
         ln data/omics/metagenomes/*/bins/DASTool/_DASTool_bins/*.fa {output}
         """
+
+rule binning:
+    input: 
+        #"data/omics/metagenome_bins",
+        #expand("data/omics/metagenomes/{sample}/bins/reassembly/{bin}_reassembled_contigs.fasta", sample = metaG_samples, bin = glob_wildcards("data/omics/metagenomes/{sample}/bins/reassembly/{bin}_reassembled_contigs.fasta").bin),
+        "data/omics/metagenomes/0ae7941e0cc52de7e4913cf5defec020/bins/reassembly/0ae7941e0cc52de7e4913cf5defec020_concoct_bin.16_reassembled_contigs.fasta",
+        expand("data/omics/metagenomes/{sample}/bins/coverage.tsv", sample = metaG_samples),
+        expand("data/omics/metagenomes/{sample}/bins/checkm.txt", sample = metaG_samples),
+        expand("data/omics/metagenomes/{sample}/bins/gtdbtk", sample = metaG_samples)
+
 
 # rule gtdbtk_all:
 #     input:

@@ -33,6 +33,6 @@ Snakemake is used extensively to manage the workflows used in this database.
 ## Pipeline overview
 ![Overview of the snakemake pipeline](rulegraph.png)
 
-Add:
+## To Add:
 - Instructions for importing samples
 - Instructions for running individual pipelines and all pipelines together
