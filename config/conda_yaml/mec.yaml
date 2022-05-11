@@ -1,0 +1,11 @@
+channels:
+  - defaults
+  - bioconda
+  - conda-forge
+dependencies:
+  - python=2.7
+  - pysam=0.8.4
+  - cython=0.25.2
+  - bowtie2=2.2.8
+  - samtools=1.2
+  - numpy=1.16.1

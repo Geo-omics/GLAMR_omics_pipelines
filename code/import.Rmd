@@ -1,0 +1,78 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = here::here())
+library(tidyverse)
+library(glue)
+```
+
+```{r}
+files_to_import <- read_tsv("import/old_imports/import_data.txt")
+```
+
+```{r}
+import_table <- files_to_import %>% 
+  pivot_longer(c("F_reads","R_reads"),names_to = "read_type", values_to = "reads") %>%
+  mutate(read_dir = if_else(read_type == "F_reads","fwd","rev")) %>% 
+  rowwise() %>% 
+  mutate(sampleID = digest::digest(paste0(Sample,Project),algo = "md5"),
+         staged_read_fp = glue("import/{sample_type}s/{reads}"),
+         staged_reads_present = file.exists(staged_read_fp),
+         is_compressed = if_else(str_detect(staged_read_fp, ".gz"), TRUE, FALSE),
+         compressed_staged_read_fp = if_else(is_compressed == TRUE, staged_read_fp, paste0(staged_read_fp,".gz")),
+         sample_dir = glue("data/omics/{sample_type}s/{sampleID}"),
+         raw_reads_dir = glue("{sample_dir}/reads"),
+         imported_read_fp = glue("{raw_reads_dir}/raw_{read_dir}_reads.fastq.gz"),
+         previously_imported = file.exists(imported_read_fp))
+
+new_imports <- import_table %>% 
+  filter(previously_imported == FALSE,
+         staged_reads_present == TRUE)
+
+```
+
+```{r}
+# Create directories
+mapply(dir.create,unique(new_imports$raw_reads_dir),MoreArgs = list(recursive = TRUE, showWarnings = FALSE))
+
+# Compress uncompressed files
+to_compress <- new_imports %>%
+  filter(is_compressed == FALSE)
+
+parallel::mcmapply(R.utils::gzip,to_compress$staged_read_fp,mc.cores = 48)
+
+# Copy forward and reverse reads
+mapply(file.rename,new_imports$compressed_staged_read_fp,new_imports$imported_read_fp)
+```
+
+Check that reads are where they were expected
+```{r}
+import_check <- new_imports %>% 
+  mutate(import_sucess = file.exists(imported_read_fp),
+         import_time = date())
+
+write_tsv(import_check,"data/import_log.tsv",append = TRUE)
+```
+
+
+
+For cleaning up/redoing imports
+```{r}
+existing_samples <- list.dirs("data/omics/metagenomes",recursive = FALSE)%>% 
+  data.frame(sample_dir = .) %>% 
+  mutate(sampleID = str_remove(sample_dir, "data/omics/metagenomes/"),
+         fwd_reads_present = if_else(file.exists(paste0(sample_dir,"/reads/raw_fwd_reads.fastq.gz")),TRUE, FALSE),
+         rev_reads_present = if_else(file.exists(paste0(sample_dir,"/reads/raw_rev_reads.fastq.gz")),TRUE,FALSE)) %>% 
+  left_join(import_table)
+
+incomplete_imports <- existing_samples %>% 
+  filter(fwd_reads_present == FALSE | rev_reads_present==FALSE)
+
+unlink(incomplete_imports$sample_dir,recursive = TRUE)
+```
+
+
+

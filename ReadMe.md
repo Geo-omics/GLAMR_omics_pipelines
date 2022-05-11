@@ -27,22 +27,29 @@ GLAMR
 └── ReadMe.md
 ```
 
+## Snakemake
+Snakemake is used extensively to manage the workflows used in this database. 
+
+Add:
+- Instructions for adding samples
+- Instructions for running individual pipelines and all pipelines together
+- Image summarizing the rule-graph
 
 ## Incorporating code from outside repositories
 
 ### Examples:
 
 1. Adding an external repository
-```
-git subtree add --prefix code/Strain-Level_Metagenome_Analysis https://github.com/TealFurnholm/Strain-Level_Metagenome_Analysis.git master --squash
-```
+    ```
+    git subtree add --prefix code/Strain-Level_Metagenome_Analysis https://github.com/TealFurnholm/Strain-Level_Metagenome_Analysis.git master --squash
+    ```
 
 2. Updating an external repository
-```
-git subtree pull --prefix code/Strain-Level_Metagenome_Analysis https://github.com/TealFurnholm/Strain-Level_Metagenome_Analysis.git master --squash
-```
+    ```
+    git subtree pull --prefix code/Strain-Level_Metagenome_Analysis https://github.com/TealFurnholm/Strain-Level_Metagenome_Analysis.git master --squash
+    ```
 
 3. List subtrees
-```
-git subtree list --resolve
-```
+    ```
+    git subtree list --resolve
+    ```

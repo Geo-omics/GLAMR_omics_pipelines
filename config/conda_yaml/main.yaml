@@ -1,0 +1,15 @@
+channels:
+  - defaults
+  - bioconda
+  - conda-forge
+dependencies:
+  - bbmap=38.93
+  - spades=3.15.3
+  - megahit=1.2.9
+  - diamond=2.0.14
+  - prodigal=2.6.3
+  - perl-statistics-basic=1.6611
+  - perl-sort-naturally=1.03
+  - perl-perlio-gzip=0.20
+#  - pip:
+#    - git+https://github.com/bioinfomaticsCSU/MEC.git@ca734269c518d48e3a6088063961ccfff15da536

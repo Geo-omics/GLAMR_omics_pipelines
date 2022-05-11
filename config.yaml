@@ -1,0 +1,15 @@
+jobs: 500
+local-cores: 1
+cluster: "sbatch --parsable --time={resources.time_min} --mem={resources.mem_mb} -c {resources.cpus} -o logs/slurm/{rule}_{wildcards} -e logs/slurm/{rule}_{wildcards}"
+use-conda: true
+conda-frontend: mamba
+use-singularity: true
+default-resources: [cpus=1, mem_mb=16000, time_min=120]
+resources: [cpus=98, mem_mb=50000000]
+latency-wait: 60
+cluster-status: "slurm-status.py"
+max-status-checks-per-second: 1
+#singularity-args: "--home /home/akiledal:/home/akiledal --bind /work/akiledal:/home/akiledal/work,/mnt/maximus/data1/jmaresca:/home/akiledal/lab_space"
+#singularity-args: "--home /home/akiledal:/home/akiledal --bind /work/akiledal:/work/akiledal,/work/akiledal:/home/akiledal/work,/mnt/maximus/data1/jmaresca:/mnt/maximus/data1/jmaresca"
+singularity-args: "--home /home/akiledal:/home/akiledal --bind /geomicro:/geomicro"
+work_dir: /tmp

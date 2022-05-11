@@ -1,0 +1,7 @@
+channels:
+  - ursky
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - metawrap-mg=1.3.2

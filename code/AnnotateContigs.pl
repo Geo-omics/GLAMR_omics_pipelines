@@ -12,9 +12,7 @@ else{print "missing sample prefix ex: -s Toxin_Day2\nex:  Toxin_Day2.fastq\n"; d
 $time = localtime;
 $time = uc($time);
 $time =~ /^[A-Z]+\s+([A-Z]+)\s+\S+\s+\S+\s+(\d\d\d\d)/;
-$month=$1; 
-#$year=$2;
-$year = "2021";
+$month=$1; $year=$2;
 $version=$1."_".$2;
 $log=$samp."_AnalyzeContigs_".$version.".log";
 open(LOG, ">", $log)||die;
@@ -62,7 +60,7 @@ if($argv !~ /\w/ || $argv =~ /(^\-h|^\-help|\s\-h)/){
 
 
 
-
+print "Checking user files \n\n";
 
 ########################################################################
 ##########		CHECK USER FILES		################
@@ -88,14 +86,15 @@ print LOG "dir $dir\ningvu $ingvu\ningen $ingen\ningrc $ingrc\nincov $incov\ninc
 
 
 
-
+print "Checking reference files \n \n";
 
 ########################################################################
 ##########		CHECK REFERENCE FILES		################
 ########################################################################
 if($argv =~ /\s\-d\s+(\S+)/){ $refdir=$1;} else{ $refdir='./'; }
 if($refdir !~ /\/$/){$refdir.='/';}
-opendir(REFDIR, $refdir) or die "Could not open $refdir\n";
+$refdir = '/geomicro/data22/teals_pipeline/BOSS/';
+opendir(REFDIR, $refdir) or die "Could not open $dir\n";
 @FILES = grep(/\./i, readdir REFDIR);
 foreach my $file (@FILES){
 	if($file =~ /TAXONOMY\_DB.*$year\.txt/){	$intax	=$refdir.$file;}
@@ -111,7 +110,7 @@ print LOG "refdir $refdir\nintax $intax\nininfo $ininfo\ninfn $infn\n";
 ########################################################################
 
 
-
+print "Getting user settings \n \n";
 
 
 ########################################################################
@@ -151,19 +150,19 @@ print LOG "top $top\nmingen $mingen\nminid $minid\nmincov $mincov\nmin_mod $min_
         print "RETRIEVE CPD NAMES\n";
         $start=147;
         $count=0;
-        while($count <=10){
-        	$count++;
-        	$file='https://ftp.ebi.ac.uk/pub/databases/chebi/archive/rel'.$start.'/Flat_file_tab_delimited/names.tsv.gz';
-        	qx{wget -O nx.tsv.gz $file};
-        	qx{cat nx.tsv.gz >> names.tsv.gz};
-        	qx{rm nx.tsv.gz};
-        	$start+=12;
-        	print "on count $count start $start\n";
-        }
+        #while($count <=10){
+        #	$count++;
+        #	$file='https://ftp.ebi.ac.uk/pub/databases/chebi/archive/rel'.$start.'/Flat_file_tab_delimited/names.tsv.gz';
+        #	qx{wget -O nx.tsv.gz $file};
+        #	qx{cat nx.tsv.gz >> names.tsv.gz};
+        #	qx{rm nx.tsv.gz};
+        #	$start+=12;
+        #	print "on count $count start $start\n";
+        #}
 
 	#INPUT NAMES
 	print "INPUTTING NAMES\n";
-	qx{gunzip -f names.tsv.gz};
+	#qx{gunzip -f names.tsv.gz};
 	open(INCPDNM, "names.tsv")||last;
 	while(<INCPDNM>){
 	        if($_!~/\w/){next;}
@@ -416,7 +415,7 @@ undef(%GENE_SCO);
 $on=0;
 $time=localtime;
 print "input $ininfo time $time\n";
-open(INFO,$ininfo)||die; ### !!!!
+open(INFO,"TEST_ANCON.txt")||die; ### !!!!
 while(<INFO>){
 	if($_ !~ /\w/){next;}
 	$_=uc($_);
