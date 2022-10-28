@@ -419,10 +419,10 @@ while(<INFO>){
 	$_=~s/[\r\n]+//;
 	@stuff=split("\t",$_,-1);
 	$hit = $stuff[0];
-	$name = $stuff[1];
+	$name = $stuff[2];
 
 	#taxa
-	@tids = split(";",$stuff[5]); 
+	@tids = split(";",$stuff[7]);
 	%LINS=();
 	foreach my $tid (@tids){
 		if($PHY{$tid}!~/^(BACT|ARCH|MONA|EUKA|MICRO)/){next;}
@@ -444,23 +444,18 @@ while(<INFO>){
 
 	#functions
 	@IDS=();
-	for my $i (7..21){
+	for my $i (4..19){
+                if ($i == 7) {next;}  # tids are handled above
 		if($stuff[$i]!~/\w/){next;}
-		if($i==7 || $i==8 || $i==9){ $IDS[0]=$stuff[$i];}	#AA DOMAINS
+		if($i==4 || $i==5 || $i==6){ $IDS[0]=$stuff[$i];}	#AA DOMAINS
 		else{@IDS=split(";", $stuff[$i]);}
 		foreach my $id (@IDS){
-			if($i==10){$id="METAL-BINDING:".$id;}
-			if($i==12){$id="LOCATION:".$id;}
+			if($i==8){$id="METAL-BINDING:".$id;}
+			if($i==9){$id="LOCATION:".$id;}
 			$HIT_FUNCS{$hit}{$i}{$id}=1; 			#FOR MAKING GENE FUNC OUTPUTS LATER
 	}	}
 
-	#compounds
-	for my $i (22..24){
-		if($stuff[$i]!~/\w/){next;}
-		@IDS=split(";", $stuff[$i]);
-		foreach my $id (@IDS){if($id=~/\w/){$HIT_CPDS{$hit}{$i}{$id}=1;}}	#FOR MAKING GENE CPDS LATER
-	}
-	if($on%100000==0){print "on $on hit $hit tophitsco $TOP_HITS{$hit}\n";} $on++;
+	if($on%10000==0){print "on $on hit $hit tophitsco $TOP_HITS{$hit}\n";} $on++;
 	delete($TOP_HITS{$hit}); if(keys %TOP_HITS < 1){last;}
 }
 close(INFO) or die "$!";
