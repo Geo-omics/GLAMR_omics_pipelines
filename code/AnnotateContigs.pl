@@ -4,23 +4,6 @@ use Sort::Naturally 'nsort';
 
 
 ########################################################################
-##########                      BEGIN                        ###########
-########################################################################
-$argv=join(" ", @ARGV);
-if($argv =~ /\-s\s+(\S+)/){$samp=$1;} 
-else{print "missing sample prefix ex: -s Toxin_Day2\nex:  Toxin_Day2.fastq\n"; die;}
-$time = localtime;
-$time = uc($time);
-$time =~ /^[A-Z]+\s+([A-Z]+)\s+\S+\s+\S+\s+(\d\d\d\d)/;
-$month=$1; $year=$2;
-$version=$1."_".$2;
-$log=$samp."_AnalyzeContigs_".$version.".log";
-open(LOG, ">", $log)||die;
-print LOG "sample $samp version $version\n";
-
-
-
-########################################################################
 ########## 	GIVE INSTRUCTIONS IF NEEDED	#######################
 $argv = join(" ", @ARGV);
 if($argv !~ /\w/ || $argv =~ /(^\-h|^\-help|\s\-h)/){
@@ -38,7 +21,7 @@ if($argv !~ /\w/ || $argv =~ /(^\-h|^\-help|\s\-h)/){
 		print "You must specify the following: \n";
 		print "\t-d /path/to/UMRAD_reference/files/ \n";
 		print "\t-s the_sample_prefix\n";
-		print "\nEx: perl AnalyzeContigs.pl -s Control_Day_1 -d /reference_files/UMRAD/ \n\n";
+		print "\nEx: perl AnnotateContigs.pl -s Control_Day_1 -d /reference_files/UMRAD/ \n\n";
 		print "USER OPTIONS:\n";
 		print "\t-c \t Minimum \% query coverage (default -c=70)\n";
 		print "\t-m \t Minimum \% identity alignment (default -m=50)\n";
@@ -55,18 +38,28 @@ if($argv !~ /\w/ || $argv =~ /(^\-h|^\-help|\s\-h)/){
 		print "Many Excess/spurious hits and species are screened out later in the script.\n\n\n";
 		die;
 }
+
 ########################################################################
+##########                      BEGIN                        ###########
 ########################################################################
+if($argv =~ /\-s\s+(\S+)/){$samp=$1;}
+else{die "missing sample prefix ex: -s Toxin_Day2\nex:  Toxin_Day2.fastq\n";}
+$time = localtime;
+$time = uc($time);
+$time =~ /^[A-Z]+\s+([A-Z]+)\s+\S+\s+\S+\s+(\d\d\d\d)/;
+$month=$1; $year=$2;
+$version=$1."_".$2;
+$log=$samp."_AnnotateContigs_".$version.".log";
+open(LOG, ">", $log) or die "$!";
+print LOG "sample $samp version $version\n";
 
-
-
-print "Checking user files \n\n";
 
 ########################################################################
 ##########		CHECK USER FILES		################
 ########################################################################
+print "Checking user files\n";
 $dir = './';
-opendir(DIR, $dir) or die "Could not open $dir\n";
+opendir(DIR, $dir) or die "Could not open $dir: $!";
 @FILES = grep(/\./i, readdir DIR);
 foreach my $file (@FILES){
 	if($file =~ /$samp.*GENES\.m8/){ 		$ingvu=$file;}
@@ -75,47 +68,34 @@ foreach my $file (@FILES){
 	if($file =~ /$samp.*READSvsCONTIGS.rpkm/){ 	$incov=$file;}
 	if($file =~ /$samp.*MCDD.fa/){ 			$incon=$file;}
 }
-open(INGVU,$ingvu)||die "unable to open samp_GENES.m8 $ingvu:$!\n";
-open(INGEN,$ingen)||die "unable to open samp_GENES.fna $ingen:$!\n";
-open(INGRC,$ingrc)||die "unable to open samp_READSvsGENES.rpkm $ingrc:$!\n";
-open(INCC, $incov)||die "unable to open samp_READSvsCONTIGS.rpkm $incov:$!\n";
-open(INCON,$incon)||die "unable to open samp_MCDD.fa :$!\n";
+foreach my $fname ($ingvu, $ingen, $ingrc, $incov, $incon) {
+    -e $fname or die "file not found: $ingvu: $!";
+}
 print LOG "dir $dir\ningvu $ingvu\ningen $ingen\ningrc $ingrc\nincov $incov\nincon $incon\n";
-########################################################################
-########################################################################
 
 
-
-print "Checking reference files \n \n";
 
 ########################################################################
 ##########		CHECK REFERENCE FILES		################
 ########################################################################
-if($argv =~ /\s\-d\s+(\S+)/){ $refdir=$1;} else{ $refdir='./'; }
-if($refdir !~ /\/$/){$refdir.='/';}
-$refdir = '/geomicro/data22/teals_pipeline/BOSS/';
-opendir(REFDIR, $refdir) or die "Could not open $dir\n";
-@FILES = grep(/\./i, readdir REFDIR);
-foreach my $file (@FILES){
-	if($file =~ /TAXONOMY\_DB.*$year\.txt/){	$intax	=$refdir.$file;}
-	if($file =~ /UNIREF100\_INFO.*$year\.txt/){	$ininfo	=$refdir.$file;}
-	if($file =~ /Function\_Names.*\.txt/){		$infn	=$refdir.$file;}
-}
-open(INTAX, $intax)||die "unable to open intax $intax:$!\n";
-if($ininfo=~/\.gz$/){open(INFO, "gunzip -c $ininfo |")||die "unable to open uniref info file:$!\n";}
-else{open(INFO,$ininfo)||die "unable to open uniref info file:$!\n";}
-open(INFN, $infn)||die "unable to open function names file:$!\n";
+print "Checking reference files\n";
+if($argv =~ /\s\-d\s+(\S+)/){ $refdir=$1;} else { $refdir='./'; }
+-d $refdir or die "Reference data directory does not exist: $refdir";
+my $intax = "$refdir/TAXONOMY_DB.txt";
+-e $intax or die "taxonomy db does not exist: $intax";
+# my $ininfo = "$refdir/UNIREF100_INFO.txt";
+my $ininfo = "/geomicro/data2/heinro/work/glamr-metag-test/UNIREF100_INFO_custom.txt";
+-e $ininfo or die "uniref100 info file does not exist: $ininfo";
+my $infn = "$refdir/Function_Names.txt";
+-e $infn or die "function name reference does not exist: $infn";
+
 print LOG "refdir $refdir\nintax $intax\nininfo $ininfo\ninfn $infn\n";
-########################################################################
-########################################################################
-
-
-print "Getting user settings \n \n";
 
 
 ########################################################################
 ##########		GET USER SETTINGS		################
 ########################################################################
+print "Getting user settings\n";
 if($argv =~/\s\-k\s+([\d\.]+)/){$top=$1;}else{$top = 0.9;}
 if($argv =~/\s\-x\s+(\d+)/){$mingen=$1;} else{$mingen = 3;}
 if($argv =~/\s\-m\s+(\d+)/){$minid=$1;}  else{$minid = 60;}
@@ -133,8 +113,8 @@ print LOG "top $top\nmingen $mingen\nminid $minid\nmincov $mincov\nmin_mod $min_
 ########################################################################
 ##########              GET FUNCTION NAMES              ################
 ########################################################################
-	#INPUT FUNCTION NAMES
-        open(INFN, $infn)||die;
+        #INPUT FUNCTION NAMES
+        open(INFN, $infn) or die "unable to open function names file $infn: $!";
         while(<INFN>){
                 if($_ !~ /\w/){next;}
                 $_=uc($_);
@@ -143,7 +123,7 @@ print LOG "top $top\nmingen $mingen\nminid $minid\nmincov $mincov\nmin_mod $min_
                 $id=~s/\s//g;
                 $FUNC_NM{$id}=$name;
         }
-        close(INFN);
+        close(INFN) or die "$!";
 
 
 	#GET CHEBI CPD NAMES
@@ -163,7 +143,8 @@ print LOG "top $top\nmingen $mingen\nminid $minid\nmincov $mincov\nmin_mod $min_
 	#INPUT NAMES
 	print "INPUTTING NAMES\n";
 	#qx{gunzip -f names.tsv.gz};
-	open(INCPDNM, "names.tsv")||last;
+        my $innames = "$refdir/names.tsv";
+        open(INCPDNM, $innames) or die "failed opening $innames: $!";
 	while(<INCPDNM>){
 	        if($_!~/\w/){next;}
 	        $_=uc($_);
@@ -177,6 +158,7 @@ print LOG "top $top\nmingen $mingen\nminid $minid\nmincov $mincov\nmin_mod $min_
 	        $CPD_NODD{$cpd}{$name}=@PARTS;
 	        $CPD_NLEN{$cpd}{$name}=length($mn);
 	}
+        close(INCPDNM) or die "$!";
 	#qx{rm names.tsv*};
 
 	#GET/CLEAN CPD NAMES -> MAKE HUMAN READABLE
@@ -242,7 +224,7 @@ print LOG "top $top\nmingen $mingen\nminid $minid\nmincov $mincov\nmin_mod $min_
 $/=">";
 $time=localtime;
 print "INPUT CONTIG SEQUENCES time $time $incon\n";
-open(INCON, $incon)||die;
+open(INCON, $incon) or die "$!";
 while(<INCON>){
 		if($_ !~ /\w/){next;}
 		$_=uc($_);
@@ -260,12 +242,12 @@ while(<INCON>){
 		$CON_SEQ{$contig}=$seq;
 }
 $/="\n";
-close(INCON);
+close(INCON) or die "$!";
 
 ## INPUT CONTIG RPKM
 $time=localtime;
 print "INPUT CONTIG RPKMS time $time $incov\n";
-open(INCC, $incov)||die;
+open(INCC, $incov) or die "$!";
 while(<INCC>){
 		if($_ !~ /\d/){next;}
 		$_=uc($_);
@@ -280,13 +262,13 @@ while(<INCC>){
 		$CON_DEPTH{$contig}=$depth;
 		$CON_RPKM{$contig}=$rpkm;
 }
-close(INCC);
+close(INCC) or die "$!";
 
 ## INPUT CONTIG GENES
 $/=">";
 $time=localtime;
 print "INPUT CONTIG GENES time $time $ingen\n";
-open(INGEN,$ingen)||die;
+open(INGEN,$ingen) or die "$!";
 while(<INGEN>){
 		if($_ !~ /\w/){next;}
 		$_=uc($_);
@@ -313,12 +295,12 @@ while(<INGEN>){
 		$GENE_LEN{$gene}=$len;
 }
 $/="\n";
-close(INGEN);
+close(INGEN) or die "$!";
 
 ## INPUT GENE COVERAGE
 $time=localtime;
 print "INPUT GENE RPKMS time $time $ingrc\n";
-open(INGRC,$ingrc)||die;
+open(INGRC,$ingrc) or die "$!";
 while(<INGRC>){
 		if($_ !~ /\w/){next;}
 		if($_ =~ /^\#/){next;}
@@ -333,7 +315,7 @@ while(<INGRC>){
 		$GENE_DEPTH{$stuff[0]}=$depth;
 		$GENE_RPKM{$stuff[0]}=$rpkm; 
 }
-close(INGRC);
+close(INGRC) or die "$!";
 #####################################################
 #####################################################
 $genestart= keys %GENE_START;
@@ -365,7 +347,7 @@ print "congen $congen condepth $condepth conrpkm $conrpkm conpgc $conpgc conlen 
 ## INPUT TAXONOMY ##
 $time=localtime;
 print "INPUT TAXONOMY time $time $intax\n";
-open(INTAX, $intax)||die;
+open(INTAX, $intax) or die "$!";
 while(<INTAX>){
 	if($_ !~ /\w/){next;}
 	$_ =~ s/[\r\n]//;
@@ -376,12 +358,17 @@ while(<INTAX>){
         if(!exists($LIN_TID{$lin})){$LIN_TID{$lin}=$tid;}
         $PHY{$tid}=$lin;
 }
+close(INTAX) or die "$!";
+my $num_phy = keys %PHY;
+my $num_lin_tid = keys %LIN_TID;
+print "Taxonomy loaded:  PHY:$num_phy LIN_TID:$num_lin_tid\n";
 
 
 ## INPUT DIAMOND HITS ##
 $on=0;
 $time=localtime;
 print "input $ingvu time $time\n";
+open(INGVU, $ingvu) or die "$!";
 while(<INGVU>){
 	if($_ !~ /\w/){next;}
 	$_=uc($_);
@@ -406,8 +393,15 @@ while(<INGVU>){
 	if($sco >= $GENE_SCO{$gene}*$top){ 
 		$GENE_HITS{$gene}{$hit}=$sco; 
 		$HIT_GENES{$hit}{$gene}=$sco;
-}	}
+        }
+}
+close(INGVU) || die "$!";
 $start_hits = keys %TOP_HITS;
+my $len_gene_sco= keys %GENE_SCO;
+my $len_ag = keys %AG;
+my $len_gene_hits = keys %GENE_HITS;
+my $len_hit_genes = keys %HIT_GENES;
+print "hits loaded: TOP_HITS:$start_hits GENE_SCO:$len_gene_sco AG:$len_ag GENE_HITS:$len_gene_hits HIT_GENES:$len_hit_genes\n";
 undef(%GENE_SCO);
 
 
@@ -415,7 +409,10 @@ undef(%GENE_SCO);
 $on=0;
 $time=localtime;
 print "input $ininfo time $time\n";
-open(INFO,"TEST_ANCON.txt")||die; ### !!!!
+my @trace_hits = ();
+my @trace_lins = ();
+if($ininfo=~/\.gz$/) {open(INFO, "gunzip -c $ininfo |") or die "unable to open uniref info file $ininfo: $!";}
+else {open(INFO,$ininfo) or die "unable to open uniref info file $ininfo: $!";}
 while(<INFO>){
 	if($_ !~ /\w/){next;}
 	$_=uc($_);
@@ -466,10 +463,22 @@ while(<INFO>){
 	if($on%100000==0){print "on $on hit $hit tophitsco $TOP_HITS{$hit}\n";} $on++;
 	delete($TOP_HITS{$hit}); if(keys %TOP_HITS < 1){last;}
 }
+close(INFO) or die "$!";
 undef(%HIT_GENES);
 undef(%TOP_HITS);
 undef(%LINS);
 undef(%PHY);
+my $num_tot_lin_hits = keys %TOT_LIN_HITS;
+my $num_lin_hits = keys %LIN_HITS;
+my $num_hit_lins = keys %HIT_LINS;
+my $num_lin_genes = keys %LIN_GENES;
+my $num_lin_cons = keys %LIN_CONS;
+my $num_toss = keys %TOSS;
+my $num_hit_names = keys %HIT_NAMES;
+my $num_hit_funcs = keys %HIT_FUNCS;
+print "uniref100 info loaded: TOT_LIN_HITS:$num_tot_lin_hits LIN_HITS:$num_lin_hits HIT_LINS:$num_hit_lins LIN_GENES:$num_lin_genes LIN_CONS:$num_lin_cons TOSS:$num_toss HIT_NAMES:$num_hit_names HIT_FUNCS:$num_hit_funcs\n";
+
+
 
 ## GET UNIQUE GENES 
 $time=localtime;
@@ -560,10 +569,13 @@ while($al>0){
 	if(grep /$lin/, @ALL_LINS){next;}
 	if(grep /$lin/, @TIPS){next;}
 	push(@TIPS,$lin);
+        if (defined $trace_gene and grep(m/^$lin$/, @trace_lins)) {
+            print "GENE TRACE: pushed into TIPS lin:$lin \n";
+        }
 }
 
 # get reference genomes
-open(OUTTIPSTAT, ">", $samp."_TIP_STATS.txt")||die;
+open(OUTTIPSTAT, ">", $samp."_TIP_STATS.txt") or die "$!";
 print OUTTIPSTAT "tip\tn50\tlin_gc\tlin_sco\tlin_uniq\tlin_pgc\n";
 foreach my $lin (@TIPS){
 	$lin_gc		=keys %{$LIN_GENES{$lin}};
@@ -577,12 +589,13 @@ foreach my $lin (@TIPS){
 	$tip=$lin; $tip=~s/.*\;//g;
 	$sum_con_len=0;
 	%TIP_CONS=();
-	open(OUTTIP, ">", "PHYLOBIN_".$tip.".fasta")||die;
+        open(OUTTIP, ">", "PHYLOBIN_".$tip.".fasta") or die "$!";
 	foreach my $contig (keys %{$LIN_CONS{$lin}}){
 		print OUTTIP ">$contig\n$CON_SEQ{$contig}\n";
 		$sum_con_len += length($CON_SEQ{$contig});
 		$TIP_CONS{$contig}=$CON_LEN{$contig};
 	}
+        close(OUTTIP) or die "$!";
 	$min_n50=$sum_con_len/2;
 	$nextlen=0;
 	foreach my $contig (sort{$TIP_CONS{$b}<=>$TIP_CONS{$a}} keys %TIP_CONS){
@@ -593,6 +606,7 @@ foreach my $lin (@TIPS){
 	}
 	print OUTTIPSTAT "$tip\t$n50\t$lin_gc\t$lin_sco\t$lin_uniq\t$lin_pgc\n";
 }
+close(OUTTIPSTAT) or die "$!";
 undef(%AG);
 undef(@TIPS);
 undef(%TOSS);
@@ -603,25 +617,15 @@ undef(%LIN_SUM_SCO);
 undef(%LIN_SUM_UNIQ);
 undef(%LIN_GNM_PGC);
 undef(%TOT_LIN_HITS);
-########################################################################
-########################################################################
-
-
-
 
 
 
 ########################################################################
 ##########	COMPILE GENE AND CONTIG STATS		################
 ########################################################################
-open(OUTINFO, 	">", $samp."_contigs_".$version.".txt")||die "unable to open outinfo: $!\n";
-open(OUTCYTO,    ">", $samp."_community_".$version.".txt")||die "unable to open outcyto: $!\n";
-open(OUTFID, 	">", $samp."_functions_".$version.".txt")||die "unable to open outfid: $!\n";
-open(OUTCPD, 	">", $samp."_compounds_".$version.".txt")||die "unable to open outcpd: $!\n";
-open(OUTCINT, 	">", $samp."_cpd_int_".$version.".txt")||die "unable to open outcint: $!\n";
-
 
 ## LOOP THROUGH CONTIGS
+open(OUTINFO, 	">", $samp."_contigs_".$version.".txt")||die "unable to open outinfo: $!";
 $nov_con=0;
 $nog_con=0;
 foreach my $contig (sort(keys %CON_LEN)){
@@ -675,16 +679,18 @@ foreach my $contig (sort(keys %CON_LEN)){
 				if($conlen > 50000){
 					$nov_con++; 
 					$out_con = "LONG_NOVEL_CON_".$nov_con.".txt";
-					open(OUTLC, ">", $out_con)||die;
+					open(OUTLC, ">", $out_con) or die "$!";
 					print OUTLC ">$contig\n$CON_SEQ{$contig}\n";
+                                        close(OUTLC) or die "$!";
 		}		}
 		elsif(keys %{$CON_GENES{$contig}}<1){ 
 				$conlca="N0_GENE";
 				if($conlen > 50000){
 					$nog_con++; 
 					$out_con = "LONG_NO_GENE_CON_".$nog_con.".txt";
-					open(OUTLC, ">", $out_con)||die;
+					open(OUTLC, ">", $out_con) or die "$!";
 					print OUTLC ">$contig\n$CON_SEQ{$contig}\n";
+                                        close(OUTLC) or die "$!";
 		}		}
 		else{	   if($CON_LINS_G[0]=~/\w/){ 	$conlca=MakeLCA(@CON_LINS_G); foreach my $tid (keys %CON_TIDS_G){push(@CON_TIDS,$tid);}}
 			elsif($CON_LINS_I[0]=~/\w/){    $conlca=MakeLCA(@CON_LINS_I); foreach my $tid (keys %CON_TIDS_I){push(@CON_TIDS,$tid);}}
@@ -912,9 +918,11 @@ foreach my $contig (sort(keys %CON_LEN)){
 			print OUTINFO "$name\t$maxsco\t$besthit\t$funcs\t$reac\t$prod\t$tran\n";
 		}	
 }
+close(OUTINFO) or die "$!";
 
 
 #OUTPUT CYTOSCAPE
+open(OUTCYTO,    ">", $samp."_community_".$version.".txt")||die "unable to open outcyto: $!";
 print OUTCYTO "type\tSource\tTarget\tsum_con_len\tsum_gene_len\tsum_tot_gene\tcomplete_genes\tuniq_genes\tcon_rpkm\tgene_rpkm\tgene-con_rpkm\tgene_depth\tgene_lca\tcon_lca\n";
 foreach my $phyla (%TOT_PHYLA){
 	if($phyla!~/[A-Z]/){next;}
@@ -931,9 +939,11 @@ foreach my $phyla (%TOT_PHYLA){
 	$con_lca    =$CYTO_CON_LCA{$phyla};		if($con_lca !~/\w/){$con_lca =0;}
 	print OUTCYTO "$phyla\t$con_len\t$gen_len\t$tot_gen\t$part_gen\t$uniq_gen\t$con_rpkm\t$gen_rpkm\t$gen_con_rpkm\t$gen_dept\t$gen_lca\t$con_lca\n";
 }
+close(OUTCYTO) or die "$!";
 
 
 #OUTPUT FUNCTION TABLE
+open(OUTFID, 	">", $samp."_functions_".$version.".txt")||die "unable to open outfid: $!";
 print OUTFID "fid\tfname\tFUNC_GENES\tFUNC_SCOS\tFUNC_RPKM\tfidlca\n";
 foreach my $fid (sort(keys %FUNC_GENES)){
 	@FIDLINS=();
@@ -942,9 +952,11 @@ foreach my $fid (sort(keys %FUNC_GENES)){
 	$fname = $FUNC_NM{$fid};
 	print OUTFID "$fid\t$fname\t$FUNC_GENES{$fid}\t$FUNC_SCOS{$fid}\t$FUNC_RPKM{$fid}\t$fidlca\n";
 }
+close(OUTFID) or die "$!";
 
 
 #OUTPUT COMPOUND TABLE
+open(OUTCPD, 	">", $samp."_compounds_".$version.".txt")||die "unable to open outcpd: $!";
 print OUTCPD "cpd\tcpd_name\ttype\tCPD_GENES\tCPD_SCO\tCPD_RPKM\tcpdlca\n";
 foreach my $cpd (sort(keys %CPD_GENES)){
 	foreach my $type (sort(keys %{$CPD_GENES{$cpd}})){
@@ -957,9 +969,11 @@ foreach my $cpd (sort(keys %CPD_GENES)){
 		$cpdlca=MakeLCA(@CPDLINS);
 		print OUTCPD "$cpd\t$cpd_name\t$type\t$cpd_gc\t$cpd_sco\t$cpd_rpkm\t$cpdlca\n";
 }	}
+close(OUTCPD) or die "$!";
 
 
 #OUTPUT CPD INTERACTION
+open(OUTCINT, 	">", $samp."_cpd_int_".$version.".txt")||die "unable to open outcint: $!";
 print OUTCINT "cpd\tprot\ttype\tsource\ttarget\tgc\tsum_rpkm\n";
 foreach my $id (sort(keys %CPD_INT_CYTO)){
 	if(!exists($CPD_INT_CYTO{$id}{T})){next;} #no transporters, no care
@@ -970,6 +984,7 @@ foreach my $id (sort(keys %CPD_INT_CYTO)){
 			foreach my $gene (keys %{$CPD_INT_CYTO{$id}{$dir}{$phyla}}){ $sum_rpkm+=$CPD_INT_CYTO{$id}{$dir}{$phyla}{$gene}; }
 			print OUTCINT "$id\t$dir\t$phyla\t$gc\t$sum_rpkm\n";
 }	}	}
+close(OUTCINT) or die "$!";
 
 
 
