@@ -11,19 +11,20 @@ GLAMR
 │   ├── conda_yaml (for installing software dependencies)
 │   └── profiles (for snakemake)
 ├── data
-│   ├── environment
-│   ├── omics
-│   │   ├── amplicons
-│   │   ├── genomes
-│   │   ├── metabolomes
-│   │   ├── metagenomes
-│   │   └── metatranscriptomes
+│   ├── omics [primary data directory]
+│   │   └── {sample_type}
+|   |       └── {sample_directories}
+│   ├── projects [links to directories in the data/omics folder]
+|   |   └── project_name
+|   |       └── {sample_type}
+|   |           └── {sample_directories}
 │   ├── reference
 │   │   ├── amplicons
 │   │   ├── genomes
 │   │   ├── MAGs
 │   │   └── UMRAD
-│   └── sample_metadata
+│   |── sample_metadata
+|   └──environment
 └── ReadMe.md
 ```
 
