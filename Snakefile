@@ -1,7 +1,10 @@
 import os
 import re
+import subprocess
 import snakemake.io
 from glob import glob
+import pandas as pd
+import time
 
 configfile: "config.yaml"
 report: "code/report/workflow.rst"
@@ -25,13 +28,16 @@ localrules: make_rulegraph, link_reads_w_sample_names
 #metabolome_samples = glob_wildcards("import/metabolomes/{sample}/").sample
 #amplicon_samples = glob_wildcards("import/amplicons/{sample}/").sample
 
+
 # Get sample names
-metaG_samples = glob_wildcards("data/omics/metagenomes/{sample}/reads").sample
-all_metaG_samples = glob_wildcards("data/omics/metagenomes/{sample}/reads").sample
-assembled_samples = glob_wildcards("data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.fa").sample
-qcd_samples = glob_wildcards("data/omics/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz").sample
+start_time = time.time() # for testing how long it takes to parse out names
+
+metaG_samples = glob_wildcards("data/omics/metagenomes/{sample}/reads", followlinks=True).sample
+all_metaG_samples = glob_wildcards("data/omics/metagenomes/{sample}/reads", followlinks=True).sample
+assembled_samples = glob_wildcards("data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.fa", followlinks=True).sample
+qcd_samples = glob_wildcards("data/omics/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz", followlinks=True).sample
 qcd_samples = list(filter(lambda x: x.startswith('samp_'), qcd_samples))
-qcd_transcript_samples = glob_wildcards("data/omics/metatranscriptomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz").sample
+qcd_transcript_samples = glob_wildcards("data/omics/metatranscriptomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz", followlinks=True).sample
 qcd_transcript_samples = list(filter(lambda x: x.startswith('samp_'), qcd_transcript_samples))
 #metaG_samples = "jgi_coassembly"
 #jgi_samples = glob_wildcards("import/staging/jgi_2022/all_sample_filtered_reads/{sample}_interleaved.fastq.gz").sample
@@ -46,14 +52,21 @@ transect_samples = glob_wildcards("data/projects/WLE_transects_2022/metagenomes/
 #metaG_samples = glob_wildcards("data/projects/2022_geomicro_JGI_CSP/metagenomes/{sample}/").sample
 #metaG_samples = glob_wildcards("data/projects/PRJNA464361/metagenomes/{sample}/").sample
 #metaG_samples = ["E20212019","E20212012","E20212013","E20212010"]
-quast_samples = glob_wildcards("data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.fa").sample
-read_download_samples = glob_wildcards("data/omics/metagenomes/{sample}/reads/accession").sample
-read_download_transcript_samples = glob_wildcards("data/omics/metatranscriptomes/{sample}/reads/accession").sample
-read_download_amplicon_samples = glob_wildcards("data/omics/amplicons/{sample}/reads/accession").sample
-metaT_samples = glob_wildcards("data/omics/metatranscriptomes/{sample}/").sample
-metabolome_samples = glob_wildcards("data/omics/metabolomes/{sample}/").sample
-amplicon_samples = glob_wildcards("data/omics/amplicons/{sample}/").sample
+quast_samples = glob_wildcards("data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.fa", followlinks=True).sample
+read_download_samples = glob_wildcards("data/omics/metagenomes/{sample}/reads/accession", followlinks=True).sample
+read_download_transcript_samples = glob_wildcards("data/omics/metatranscriptomes/{sample}/reads/accession", followlinks=True).sample
+read_download_amplicon_samples = glob_wildcards("data/omics/amplicons/{sample}/reads/accession", followlinks=True).sample
+metaT_samples = glob_wildcards("data/omics/metatranscriptomes/{sample}/", followlinks=True).sample
+metabolome_samples = glob_wildcards("data/omics/metabolomes/{sample}/", followlinks=True).sample
+amplicon_samples = glob_wildcards("data/omics/amplicons/{sample}/", followlinks=True).sample
+# seagull_samples = pd.read_table('data/sample_metadata/size_sorted_HABs_samples_Seagull.tsv',header=None, names=["SampleID"]).set_index("SampleID", drop=False)
+seagull_samples = open("data/sample_metadata/size_sorted_HABs_samples_Seagull.tsv").read().splitlines()
 
+end_time = time.time() # Record end of name parsing
+execution_time = end_time - start_time
+print(f"Name processing time: {execution_time} seconds")
+
+# Target rules
 rule assemble:
     input: 
         #expand("data/omics/metagenomes/{sample}/assembly/metaspades/contigs.fasta",sample = metaG_samples),
@@ -85,6 +98,15 @@ rule test:
     input: expand("data/omics/metagenomes/{sample}/reads/raw_fwd_reads.fastq.gz",sample = metaG_samples)
     output: "test.out"
 
+rule lauren_assembly_and_BGC_test:
+    input:
+        # Assemblies
+        expand("data/omics/metagenomes/{sample}/assembly/metaspades/contigs.fasta",sample = glerl_samples + jgi_samples + transect_samples),
+        expand("data/omics/metagenomes/{sample}/assembly/megahit/final.contigs.fa",sample = glerl_samples + jgi_samples + transect_samples),
+        expand("data/omics/metagenomes/{sample}/assembly/metaspades_noNORM/contigs.fasta",sample = glerl_samples + jgi_samples + transect_samples),
+        expand("data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.fa",sample = glerl_samples + jgi_samples + transect_samples),
+        expand("data/omics/metagenomes/{sample}/assembly/biosyntheticSPAdes/scaffolds.fasta", sample = glerl_samples + jgi_samples + transect_samples),
+        expand("data/omics/metagenomes/{sample}/assembly/biosyntheticSPAdes_100x/scaffolds.fasta", sample = glerl_samples + jgi_samples + transect_samples)
 
 rule make_rulegraph:
     output:
@@ -467,20 +489,20 @@ rule remove_contaminants:
         adapters = "data/reference/contaminants/adapters.fa",
         bbmap_index = "data/reference/contaminants/ref"
     output:
-        trimmed_fwd = "data/omics/metagenomes/{sample}/reads/trimmed_fwd_reads.fastq.gz",
-        trimmed_rev = "data/omics/metagenomes/{sample}/reads/trimmed_rev_reads.fastq.gz",
-        phix_rm_fwd = "data/omics/metagenomes/{sample}/reads/phix_fwd_reads.fastq.gz",
-        phix_rm_rev = "data/omics/metagenomes/{sample}/reads/phix_rev_reads.fastq.gz",
-        decon_fwd = "data/omics/metagenomes/{sample}/reads/decon_fwd_reads.fastq.gz",
-        decon_rev = "data/omics/metagenomes/{sample}/reads/decon_rev_reads.fastq.gz",
-        cleaned_fwd = "data/omics/metagenomes/{sample}/reads/cleaned_fwd_reads.fastq.gz",
-        cleaned_rev = "data/omics/metagenomes/{sample}/reads/cleaned_rev_reads.fastq.gz"
+        trimmed_fwd = "data/omics/{sample_type}/{sample}/reads/trimmed_fwd_reads.fastq.gz",
+        trimmed_rev = "data/omics/{sample_type}/{sample}/reads/trimmed_rev_reads.fastq.gz",
+        phix_rm_fwd = "data/omics/{sample_type}/{sample}/reads/phix_fwd_reads.fastq.gz",
+        phix_rm_rev = "data/omics/{sample_type}/{sample}/reads/phix_rev_reads.fastq.gz",
+        decon_fwd = "data/omics/{sample_type}/{sample}/reads/decon_fwd_reads.fastq.gz",
+        decon_rev = "data/omics/{sample_type}/{sample}/reads/decon_rev_reads.fastq.gz",
+        cleaned_fwd = "data/omics/{sample_type}/{sample}/reads/cleaned_fwd_reads.fastq.gz",
+        cleaned_rev = "data/omics/{sample_type}/{sample}/reads/cleaned_rev_reads.fastq.gz"
     params:
         bbmap_index_path = "data/reference/contaminants"
     conda: "config/conda_yaml/main.yaml"
-    log: "logs/read_qc/{sample}.log"
+    log: "logs/read_qc/{sample_type}-{sample}.log"
     benchmark:
-        "benchmarks/remove_contaminants/{sample}.txt"
+        "benchmarks/remove_contaminants/{sample_type}-{sample}.txt"
     resources: cpus = 24, mem_mb = lambda wildcards, attempt: attempt * 120000, time_min = 2880
     shell:
         """        
@@ -697,13 +719,13 @@ rule bbnorm:
         fwd_reads = rules.remove_contaminants_fastp.output.decon_fwd,
         rev_reads = rules.remove_contaminants_fastp.output.decon_rev
     output:
-        fwd_norm = temp("data/omics/metagenomes/{sample}/reads/bbnorm_fwd_reads.fastq.gz"),
-        rev_norm = temp("data/omics/metagenomes/{sample}/reads/bbnorm_rev_reads.fastq.gz")
+        fwd_norm = temp("data/omics/{sample_type}/{sample}/reads/bbnorm_fwd_reads.fastq.gz"),
+        rev_norm = temp("data/omics/{sample_type}/{sample}/reads/bbnorm_rev_reads.fastq.gz")
     params: "target=100 mindepth=2 bits=16 prefilter ecc=t"
     conda: "config/conda_yaml/main.yaml"
-    log: "logs/bbnorm/{sample}.log"
+    log: "logs/bbnorm/{sample_type}/{sample}.log"
     benchmark:
-        "benchmarks/bbnorm/{sample}.txt"
+        "benchmarks/bbnorm/{sample_type}/{sample}.txt"
     resources: cpus = 36, mem_mb = lambda wildcards, attempt: attempt * 80000, time_min = 2880
     shell:
         """        
@@ -737,15 +759,16 @@ rule count_reads_fastp:
         #bbnorm_reads_rev = rules.bbnorm.output.rev_norm,
     output:
         "data/omics/{sample_type}/{sample}/reads/{sample}_read_count_fastp.tsv"
+    resources: cpus=4
     shell:
         """
         printf "read_state\tfwd_read_count\trev_read_count\n" > {output}
-        printf "raw_reads\t$(($(zcat {input.raw_reads_fwd} | wc -l) / 4 ))\t$(($(zcat {input.raw_reads_rev} | wc -l) / 4 ))\n" >> {output}
-        printf "deduped_reads\t$(($(zcat {input.deduped_reads_fwd} | wc -l) / 4 ))\t$(($(zcat {input.deduped_reads_rev} | wc -l) / 4 ))\n" >> {output}
-        printf "filt_and_trimmed_reads\t$(($(zcat {input.qual_filt_and_trimmed_fwd} | wc -l) / 4 ))\t$(($(zcat {input.qual_filt_and_trimmed_rev} | wc -l) / 4 ))\n" >> {output}
-        printf "decon_reads\t$(($(zcat {input.decon_reads_fwd} | wc -l) / 4 ))\t$(($(zcat {input.decon_reads_rev} | wc -l) / 4 ))\n" >> {output}
+        printf "raw_reads\t$(($(pigz -dc -p {resources.cpus} {input.raw_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.raw_reads_rev} | wc -l) / 4 ))\n" >> {output}
+        printf "deduped_reads\t$(($(pigz -dc -p {resources.cpus} {input.deduped_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.deduped_reads_rev} | wc -l) / 4 ))\n" >> {output}
+        printf "filt_and_trimmed_reads\t$(($(pigz -dc -p {resources.cpus} {input.qual_filt_and_trimmed_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.qual_filt_and_trimmed_rev} | wc -l) / 4 ))\n" >> {output}
+        printf "decon_reads\t$(($(pigz -dc -p {resources.cpus} {input.decon_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.decon_reads_rev} | wc -l) / 4 ))\n" >> {output}
         """
-        #printf "bbnorm_reads\t$(($(zcat {input.bbnorm_reads_fwd} | wc -l) / 4 ))\t$(($(zcat {input.bbnorm_reads_rev} | wc -l) / 4 ))\n" >> {output}
+        #printf "bbnorm_reads\t$(($(pigz -dc -p {resources.cpus} {input.bbnorm_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.bbnorm_reads_rev} | wc -l) / 4 ))\n" >> {output}
 
 rule run_count_reads:
     input: 
@@ -754,7 +777,7 @@ rule run_count_reads:
 
 rule run_count_reads_fastp:
     input:
-        expand("data/omics/metagenomes/{sample}/reads/{sample}_read_count_fastp.tsv", sample=all_metaG_samples)
+        expand("data/omics/metagenomes/{sample}/reads/{sample}_read_count_fastp.tsv", sample=qcd_samples)
 
 
 
@@ -763,11 +786,11 @@ rule assemble_metaspades:
         fwd_reads = rules.bbnorm.output.fwd_norm,
         rev_reads = rules.bbnorm.output.rev_norm
     output:
-        assembly_dir = directory("data/omics/metagenomes/{sample}/assembly/metaspades"),
-        contigs = "data/omics/metagenomes/{sample}/assembly/metaspades/contigs.fasta"
+        assembly_dir = directory("data/omics/{sample_type}/{sample}/assembly/metaspades"),
+        contigs = "data/omics/{sample_type}/{sample}/assembly/metaspades/contigs.fasta"
     conda: "config/conda_yaml/main.yaml"
-    log: "logs/assembly/metaspades/{sample}.log"
-    benchmark: "benchmarks/metaspades/{sample}.txt"
+    log: "logs/assembly/metaspades/{sample_type}_{sample}.log"
+    benchmark: "benchmarks/metaspades/{sample_type}_{sample}.txt"
     #resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
     #resources: cpus = 24, time_min=20000, mem_mb = 500000, partition = "largemem"
     resources: cpus = 36, time_min=20000, mem_mb = 170000
@@ -789,11 +812,11 @@ rule assemble_metaspades_noNORM:
         fwd_reads = rules.remove_contaminants_fastp.output.decon_fwd,
         rev_reads = rules.remove_contaminants_fastp.output.decon_rev
     output:
-        assembly_dir = directory("data/omics/metagenomes/{sample}/assembly/metaspades_noNORM"),
-        contigs = "data/omics/metagenomes/{sample}/assembly/metaspades_noNORM/contigs.fasta"
+        assembly_dir = directory("data/omics/{sample_type}/{sample}/assembly/metaspades_noNORM"),
+        contigs = "data/omics/{sample_type}/{sample}/assembly/metaspades_noNORM/contigs.fasta"
     conda: "config/conda_yaml/main.yaml"
-    log: "logs/assembly/metaspades_noNORM/{sample}.log"
-    benchmark: "benchmarks/metaspades_noNORM/{sample}.txt"
+    log: "logs/assembly/metaspades_noNORM/{sample_type}_{sample}.log"
+    benchmark: "benchmarks/metaspades_noNORM/{sample_type}_{sample}.txt"
     #resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
     #resources: cpus = 24, time_min=20000, mem_mb = 500000, partition = "largemem"
     #resources: cpus = 36, time_min=20000, mem_mb = 170000
@@ -815,15 +838,15 @@ rule assemble_biosyntheticSPAdes:
         fwd_reads = rules.remove_contaminants_fastp.output.decon_fwd,
         rev_reads = rules.remove_contaminants_fastp.output.decon_rev
     output:
-        assembly_dir = directory("data/omics/metagenomes/{sample}/assembly/biosyntheticSPAdes"),
-        contigs = "data/omics/metagenomes/{sample}/assembly/biosyntheticSPAdes/scaffolds.fasta"
+        assembly_dir = directory("data/omics/{sample_type}/{sample}/assembly/biosyntheticSPAdes"),
+        contigs = "data/omics/{sample_type}/{sample}/assembly/biosyntheticSPAdes/scaffolds.fasta"
     conda: "config/conda_yaml/main.yaml"
-    log: "logs/assembly/metaspades_noNORM/{sample}.log"
-    benchmark: "benchmarks/metaspades_noNORM/{sample}.txt"
+    log: "logs/assembly/metaspades_noNORM/{sample_type}_{sample}.log"
+    benchmark: "benchmarks/metaspades_noNORM/{sample_type}_{sample}.txt"
     #resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
-    #resources: cpus = 24, time_min=20000, mem_mb = 500000, partition = "largemem"
+    resources: cpus = 24, time_min=20000, mem_mb = 500000, partition = "largemem"
     #resources: cpus = 36, time_min=20000, mem_mb = 170000
-    resources: cpus = 64, time_min=20000, mem_mb = 500000
+    #resources: cpus = 64, time_min=20000, mem_mb = 500000
     shell:
         """
         export OMP_NUM_THREADS={resources.cpus}
@@ -837,15 +860,43 @@ rule assemble_biosyntheticSPAdes:
             -o {output.assembly_dir} 2>&1 | tee {log}
         """
 
+rule assemble_biosyntheticSPAdes_100x:
+    input:
+        fwd_reads = rules.remove_contaminants_fastp.output.decon_fwd,
+        rev_reads = rules.remove_contaminants_fastp.output.decon_rev
+    output:
+        assembly_dir = directory("data/omics/{sample_type}/{sample}/assembly/biosyntheticSPAdes_100x"),
+        contigs = "data/omics/{sample_type}/{sample}/assembly/biosyntheticSPAdes_100x/scaffolds.fasta"
+    conda: "config/conda_yaml/main.yaml"
+    log: "logs/assembly/metaspades_100x/{sample_type}_{sample}.log"
+    benchmark: "benchmarks/metaspades_100x/{sample_type}_{sample}.txt"
+    #resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
+    resources: cpus = 24, time_min=20000, mem_mb = 500000, partition = "largemem"
+    #resources: cpus = 36, time_min=20000, mem_mb = 170000
+    #resources: cpus = 64, time_min=20000, mem_mb = 500000
+    shell:
+        """
+        export OMP_NUM_THREADS={resources.cpus}
+
+        metaspades.py \
+            -t {resources.cpus} \
+            --bio \
+            --memory $(({resources.mem_mb}/1024)) \
+            -1 {input.fwd_reads} \
+            -2 {input.rev_reads} \
+            -o {output.assembly_dir} 2>&1 | tee {log}
+        """
+
+
 rule rename_metaspades_contigs:
     input: 
         script = "code/rename_contigs.R",
-        contigs = "data/projects/{project}/metagenomes/{sample}/assembly/metaspades_noNORM/contigs.fasta",
-        #assembly_done = "data/omics/metagenomes/{sample}/assembly/megahit/.done"
+        contigs = "data/projects/{project}/{sample_type}/{sample}/assembly/metaspades_noNORM/contigs.fasta",
+        #assembly_done = "data/omics/{sample_type}/{sample}/assembly/megahit/.done"
     output:
-        contigs = "data/projects/{project}/metagenomes/{sample}/assembly/metaspades_noNORM/contigs.renamed.fasta",
-        contig_info = "data/projects/{project}/metagenomes/{sample}/assembly/metaspades_noNORM/contigs_info.tsv"
-        #done = touch("data/omics/metagenomes/{sample}/assembly/megahit/.contigs_renamed")
+        contigs = "data/projects/{project}/{sample_type}/{sample}/assembly/metaspades_noNORM/contigs.renamed.fasta",
+        contig_info = "data/projects/{project}/{sample_type}/{sample}/assembly/metaspades_noNORM/contigs_info.tsv"
+        #done = touch("data/omics/{sample_type}/{sample}/assembly/megahit/.contigs_renamed")
     container: "docker://eandersk/r_microbiome"
     resources: cpus = 1, time_min=200, mem_mb = 50000
     shell:
@@ -898,13 +949,13 @@ rule assemble_megahit:
         fwd_reads = rules.bbnorm.output.fwd_norm,
         rev_reads = rules.bbnorm.output.rev_norm
     output:
-        contigs = "data/omics/metagenomes/{sample}/assembly/megahit/final.contigs.fa",
-        #touch("data/omics/metagenomes/{sample}/assembly/megahit/.done")
+        contigs = "data/omics/{sample_type}/{sample}/assembly/megahit/final.contigs.fa",
+        #touch("data/omics/{sample_type}/{sample}/assembly/megahit/.done")
     params:
-        assembly_dir = "data/omics/metagenomes/{sample}/assembly/megahit"
+        assembly_dir = "data/omics/{sample_type}/{sample}/assembly/megahit"
     conda: "config/conda_yaml/main.yaml"
-    log: "logs/assembly/megahit/{sample}.log"
-    benchmark: "benchmarks/megahit/{sample}.txt"
+    log: "logs/assembly/megahit/{sample_type}_{sample}.log"
+    benchmark: "benchmarks/megahit/{sample_type}_{sample}.txt"
     resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 100000
     shell:
         """
@@ -917,13 +968,13 @@ rule assemble_megahit_noNORM:
         fwd_reads = rules.remove_contaminants_fastp.output.decon_fwd,
         rev_reads = rules.remove_contaminants_fastp.output.decon_rev
     output:
-        contigs = "data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.fa",
-        #touch("data/omics/metagenomes/{sample}/assembly/megahit/.done")
+        contigs = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.fa",
+        #touch("data/omics/{sample_type}/{sample}/assembly/megahit/.done")
     params:
-        assembly_dir = "data/omics/metagenomes/{sample}/assembly/megahit_noNORM"
+        assembly_dir = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM"
     conda: "config/conda_yaml/main.yaml"
-    log: "logs/assembly/megahit_noNORM/{sample}.log"
-    benchmark: "benchmarks/megahit_noNORM/{sample}.txt"
+    log: "logs/assembly/megahit_noNORM/{sample_type}_{sample}.log"
+    benchmark: "benchmarks/megahit_noNORM/{sample_type}_{sample}.txt"
     resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 150000
     shell:
         """
@@ -935,13 +986,13 @@ rule assemble_megahit_noNORM:
 rule rename_contigs:
     input: 
         script = "code/rename_contigs.R",
-        #assembly_dir = "data/omics/metagenomes/{sample}/assembly/megahit",
-        contigs = "data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.fa",
-        #assembly_done = "data/omics/metagenomes/{sample}/assembly/megahit/.done"
+        #assembly_dir = "data/omics/{sample_type}/{sample}/assembly/megahit",
+        contigs = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.fa",
+        #assembly_done = "data/omics/{sample_type}/{sample}/assembly/megahit/.done"
     output:
-        contigs = "data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa",
-        contig_info = "data/omics/metagenomes/{sample}/assembly/megahit_noNORM/contigs_info.tsv"
-        #done = touch("data/omics/metagenomes/{sample}/assembly/megahit/.contigs_renamed")
+        contigs = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa",
+        contig_info = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/contigs_info.tsv"
+        #done = touch("data/omics/{sample_type}/{sample}/assembly/megahit/.contigs_renamed")
     container: "docker://eandersk/r_microbiome"
     resources: cpus = 1, time_min=200, mem_mb = 50000
     shell:
@@ -959,12 +1010,12 @@ rule quast_megahit:
     input:
         megahit_contigs = rules.rename_contigs.output.contigs
     output:
-        report = "data/omics/metagenomes/{sample}/assembly/megahit_noNORM/quast/report.tsv"
+        report = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/quast/report.tsv"
     params:
-        out_dir = "data/omics/metagenomes/{sample}/assembly/megahit_noNORM/quast"
-    log: "logs/assembly/quast_megahit/{sample}.log"
+        out_dir = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/quast"
+    log: "logs/assembly/quast_megahit/{sample_type}_{sample}.log"
     benchmark:
-        "benchmarks/assembly/quast_megahit/{sample}.txt"
+        "benchmarks/assembly/quast_megahit/{sample_type}_{sample}.txt"
     conda:
         "config/conda_yaml/quast.yaml"
     resources:
@@ -993,13 +1044,13 @@ rule COassemble_megahit:
         concat_fwd = "tmp/fwd_concat.fastq",
         concat_rev = "tmp/rev_concat.fastq"
     output:
-        contigs = "data/omics/metagenomes/jgi_coassembly/assembly/megahit_noNORM/final.contigs.fa",
-        #touch("data/omics/metagenomes/{sample}/assembly/megahit/.done")
+        contigs = "data/omics/{sample_type}/jgi_coassembly/assembly/megahit_noNORM/final.contigs.fa",
+        #touch("data/omics/{sample_type}/{sample}/assembly/megahit/.done")
     params:
-        assembly_dir = "data/omics/metagenomes/jgi_coassembly/assembly/megahit_noNORM"
+        assembly_dir = "data/omics/{sample_type}/jgi_coassembly/assembly/megahit_noNORM"
     conda: "config/conda_yaml/main.yaml"
-    log: "logs/assembly/megahit/coassembly.log"
-    benchmark: "benchmarks/megahit/coassembly.txt"
+    log: "logs/assembly/megahit/{sample_type}_coassembly.log"
+    benchmark: "benchmarks/megahit/{sample_type}_coassembly.txt"
     #resources: cpus = 92, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 150000
     resources: cpus = 32, time_min=20000, mem_mb = lambda wildcards, attempt: attempt * 1200000, partition = "largemem"
     shell:
@@ -1150,12 +1201,12 @@ rule prodigal:
     input:
         assembly = rules.rename_contigs.output.contigs
     output:
-        proteins = "data/omics/metagenomes/{sample}/proteins/{sample}_PROTEINS.faa",
-        genes = "data/omics/metagenomes/{sample}/genes/{sample}_GENES.fna",
-        gbk = "data/omics/metagenomes/{sample}/genes/{sample}_GENES.gbk"
+        proteins = "data/omics/{sample_type}/{sample}/proteins/{sample}_PROTEINS.faa",
+        genes = "data/omics/{sample_type}/{sample}/genes/{sample}_GENES.fna",
+        gbk = "data/omics/{sample_type}/{sample}/genes/{sample}_GENES.gbk"
     conda: "config/conda_yaml/main.yaml"
-    log: "logs/prodigal/{sample}.log"
-    benchmark: "benchmarks/prodigal/{sample}.txt"
+    log: "logs/prodigal/{sample_type}-{sample}.log"
+    benchmark: "benchmarks/prodigal/{sample_type}-{sample}.txt"
     resources: cpus = 1, mem_mb = lambda wildcards, attempt: attempt * 16000, time_min = 2880
     shell:
         """
@@ -1172,21 +1223,22 @@ rule calc_gene_abundance:
     input:
         genes = rules.prodigal.output.genes,
         proteins = rules.prodigal.output.proteins,
+        assembly = rules.rename_contigs.output.contigs,
         fwd_reads = rules.remove_contaminants_fastp.output.decon_fwd,
         rev_reads = rules.remove_contaminants_fastp.output.decon_rev
     output:
-        reads_vs_genes_rpkm = "data/omics/metagenomes/{sample}/genes/{sample}_READSvsGENES.rpkm",
-        reads_vs_contigs_rpkm = "data/omics/metagenomes/{sample}/assembly/{sample}_READSvsCONTIGS.rpkm",
-        reads_vs_assembly_sam_gz = "data/omics/metagenomes/{sample}/assembly/{sample}_READSvsCONTIGS.sam.gz"
+        reads_vs_genes_rpkm = "data/omics/{sample_type}/{sample}/genes/{sample}_READSvsGENES.rpkm",
+        reads_vs_contigs_rpkm = "data/omics/{sample_type}/{sample}/assembly/{sample}_READSvsCONTIGS.rpkm",
+        reads_vs_assembly_sam_gz = "data/omics/{sample_type}/{sample}/assembly/{sample}_READSvsCONTIGS.sam.gz"
     params:
-        reads_vs_assembly_sam = "data/omics/metagenomes/{sample}/assembly/{sample}_READSvsCONTIGS.sam"
+        reads_vs_assembly_sam = "data/omics/{sample_type}/{sample}/assembly/{sample}_READSvsCONTIGS.sam"
     conda: "config/conda_yaml/main.yaml"
-    log: "logs/calc_gene_abundance/{sample}.log"
-    benchmark: "benchmarks/calc_gene_abundance/{sample}.txt"
+    log: "logs/calc_gene_abundance/{sample_type}-{sample}.log"
+    benchmark: "benchmarks/calc_gene_abundance/{sample_type}-{sample}.txt"
     resources: cpus = 24, mem_mb = lambda wildcards, attempt: attempt * 64000, time_min = 2880
     shell:
         """
-        bbmap.sh t={resources.cpus} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {output.genes}) ref={output.genes} rpkm={output.reads_vs_genes_rpkm} 2>&1 | tee -a {log}
+        bbmap.sh t={resources.cpus} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.genes}) ref={input.genes} rpkm={output.reads_vs_genes_rpkm} 2>&1 | tee -a {log}
         bbmap.sh t={resources.cpus} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.assembly}) ref={input.assembly} rpkm={output.reads_vs_contigs_rpkm} 32bit=t outm={params.reads_vs_assembly_sam} 2>&1 | tee -a {log}
         gzip {params.reads_vs_assembly_sam}
         """
@@ -1225,12 +1277,12 @@ rule align_to_uniref:
         diamond_db = rules.make_diamond_uniref_db.output.uniref100_diamond,
         genes = rules.prodigal.output.genes
     output:
-        gene_uniref_alignment = "data/omics/metagenomes/{sample}/{sample}_GENES.m8"
+        gene_uniref_alignment = "data/omics/{sample_type}/{sample}/{sample}_GENES.m8"
     params:
         "--top 0.5 --threads 10 --query-cover 50 --strand both -f 6 qseqid qlen sseqid slen qstart qend sstart send evalue pident mismatch qcovhsp scovhsp"
     conda: "config/conda_yaml/main.yaml"
-    log: "logs/align_to_uniref/{sample}_align_to_uniref.log"
-    benchmark: "benchmarks/align_to_uniref/{sample}_align_to_uniref.txt"
+    log: "logs/align_to_uniref/{sample_type}-{sample}_align_to_uniref.log"
+    benchmark: "benchmarks/align_to_uniref/{sample_type}-{sample}_align_to_uniref.txt"
     resources: cpus = 32, time_min = 2880, mem_mb = lambda wildcards, attempt: attempt * 100000
     shell:
         """
@@ -1242,7 +1294,9 @@ rule align_to_uniref:
         """
 
 rule make_uniref_alignments:
-    input: expand("data/omics/metagenomes/{sample}/{sample}_GENES.m8",sample = list(filter(lambda x: x.startswith('samp_'), assembled_samples)))
+    input: 
+        expand("data/omics/metagenomes/{sample}/{sample}_GENES.m8",sample = list(filter(lambda x: x.startswith('samp_'), qcd_samples))),
+        expand("data/omics/metagenomes/{sample}/genes/{sample}_READSvsGENES.rpkm",sample = list(filter(lambda x: x.startswith('samp_'), qcd_samples)))
 
 # Required input for the annotation script: 
 # print "\t1. The gene or protein sequences:                      [sample]_GENES.fna\n";
@@ -1342,25 +1396,25 @@ rule kraken2_gtdb_w_uniq:
     input:
         f_seq = rules.remove_contaminants.output.cleaned_fwd,
         r_seq = rules.remove_contaminants.output.cleaned_rev,
-        # f_seq = "data/omics/metagenomes/{sample}/reads/raw_fwd_reads.fastq.gz",
-        # r_seq = "data/omics/metagenomes/{sample}/reads/raw_rev_reads.fastq.gz",
+        # f_seq = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
+        # r_seq = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz",
         db = "/geomicro/data2/kiledal/references/kraken_databases/gtdb_r202",
         kreport2mpa = "code/kreport2mpa.py"
     output:
-        report = "data/omics/metagenomes/{sample}/kraken/gtdb_{sample}_report.txt",
-        out = temp("data/omics/metagenomes/{sample}/kraken/gtdb_{sample}_out.txt"),
-        bracken = "data/omics/metagenomes/{sample}/kraken/gtdb_{sample}_bracken.txt",
-        bracken_report = "data/omics/metagenomes/{sample}/kraken/gtdb_{sample}_brackenReport.txt",
-        bracken_mpa = "data/omics/metagenomes/{sample}/kraken/gtdb_{sample}_brackenMpa.txt",
-        unclass_f = temp("data/omics/metagenomes/{sample}/kraken/gtdb_{sample}_unclassified_1.fasta"),
-        unclass_r = temp("data/omics/metagenomes/{sample}/kraken/gtdb_{sample}_unclassified_2.fasta"),
-        bracken_input = "data/omics/metagenomes/{sample}/kraken/gtdb_{sample}_for_bracken.txt"
+        report = "data/omics/{sample_type}/{sample}/kraken/gtdb_{sample}_report.txt",
+        out = temp("data/omics/{sample_type}/{sample}/kraken/gtdb_{sample}_out.txt"),
+        bracken = "data/omics/{sample_type}/{sample}/kraken/gtdb_{sample}_bracken.txt",
+        bracken_report = "data/omics/{sample_type}/{sample}/kraken/gtdb_{sample}_brackenReport.txt",
+        bracken_mpa = "data/omics/{sample_type}/{sample}/kraken/gtdb_{sample}_brackenMpa.txt",
+        unclass_f = temp("data/omics/{sample_type}/{sample}/kraken/gtdb_{sample}_unclassified_1.fasta"),
+        unclass_r = temp("data/omics/{sample_type}/{sample}/kraken/gtdb_{sample}_unclassified_2.fasta"),
+        bracken_input = "data/omics/{sample_type}/{sample}/kraken/gtdb_{sample}_for_bracken.txt"
     params:
         uniq_minimizer_threshold = 150,
-        unclass_out = "data/omics/metagenomes/{sample}/kraken/gtdb_{sample}_unclassified#.fasta"
+        unclass_out = "data/omics/{sample_type}/{sample}/kraken/gtdb_{sample}_unclassified#.fasta"
     conda: "config/conda_yaml/kraken.yaml"
-    log: "logs/kraken2_gtdb_w_uniq/{sample}.log"
-    benchmark: "benchmarks/kraken2_gtdb_w_uniq/{sample}.txt"
+    log: "logs/kraken2_gtdb_w_uniq/{sample_type}-{sample}.log"
+    benchmark: "benchmarks/kraken2_gtdb_w_uniq/{sample_type}-{sample}.txt"
     resources: cpus=16, mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
     shell:
         """
@@ -1395,17 +1449,17 @@ rule kraken2_refseq_w_uniq: ##Run kraken2
         db = "/geomicro/data2/kiledal/references/kraken_databases/refseq",
         kreport2mpa = "code/kreport2mpa.py"
     output:
-        report = "data/omics/metagenomes/{sample}/kraken/refseq_{sample}_report.txt",
-        out = "data/omics/metagenomes/{sample}/kraken/refseq_{sample}_out.txt",
-        bracken = "data/omics/metagenomes/{sample}/kraken/refseq_{sample}_bracken.txt",
-        bracken_report = "data/omics/metagenomes/{sample}/kraken/refseq_{sample}_brackenReport.txt",
-        bracken_mpa = "data/omics/metagenomes/{sample}/kraken/refseq_{sample}_brackenMpa.txt",
-        bracken_input = "data/omics/metagenomes/{sample}/kraken/refseq_{sample}_for_bracken.txt"
+        report = "data/omics/{sample_type}/{sample}/kraken/refseq_{sample}_report.txt",
+        out = "data/omics/{sample_type}/{sample}/kraken/refseq_{sample}_out.txt",
+        bracken = "data/omics/{sample_type}/{sample}/kraken/refseq_{sample}_bracken.txt",
+        bracken_report = "data/omics/{sample_type}/{sample}/kraken/refseq_{sample}_brackenReport.txt",
+        bracken_mpa = "data/omics/{sample_type}/{sample}/kraken/refseq_{sample}_brackenMpa.txt",
+        bracken_input = "data/omics/{sample_type}/{sample}/kraken/refseq_{sample}_for_bracken.txt"
     params:
         uniq_minimizer_threshold = 150
     conda: "config/conda_yaml/kraken.yaml"
-    log: "logs/kraken2_refseq_w_uniq/{sample}.log"
-    benchmark: "benchmarks/kraken2_refseq_w_uniq/{sample}.txt"
+    log: "logs/kraken2_refseq_w_uniq/{sample_type}-{sample}.log"
+    benchmark: "benchmarks/kraken2_refseq_w_uniq/{sample_type}-{sample}.txt"
     resources: cpus=16, mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
     shell:
         """
@@ -1462,26 +1516,26 @@ rule kraken2_load_gtdb_DB:
 
 rule kraken2_gtdb_w_uniq_fastp:
     input:
-        f_seq = "data/omics/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
-        r_seq = "data/omics/metagenomes/{sample}/reads/decon_rev_reads_fastp.fastq.gz",
-        # f_seq = "data/omics/metagenomes/{sample}/reads/raw_fwd_reads.fastq.gz",
-        # r_seq = "data/omics/metagenomes/{sample}/reads/raw_rev_reads.fastq.gz",
+        f_seq = "data/omics/{sample_type}/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
+        r_seq = "data/omics/{sample_type}/{sample}/reads/decon_rev_reads_fastp.fastq.gz",
+        # f_seq = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
+        # r_seq = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz",
         db = rules.kraken2_load_gtdb_DB.output,
         kreport2mpa = "code/kreport2mpa.py"
     output:
-        report = "data/omics/metagenomes/{sample}/kraken_fastp/gtdb_{sample}_report.txt",
-        out = temp("data/omics/metagenomes/{sample}/kraken_fastp/gtdb_{sample}_out.txt"),
-        bracken = "data/omics/metagenomes/{sample}/kraken_fastp/gtdb_{sample}_bracken.txt",
-        bracken_report = "data/omics/metagenomes/{sample}/kraken_fastp/gtdb_{sample}_brackenReport.txt",
-        bracken_mpa = "data/omics/metagenomes/{sample}/kraken_fastp/gtdb_{sample}_brackenMpa.txt",
-        unclass_f = temp("data/omics/metagenomes/{sample}/kraken_fastp/gtdb_{sample}_unclassified_1.fasta"),
-        unclass_r = temp("data/omics/metagenomes/{sample}/kraken_fastp/gtdb_{sample}_unclassified_2.fasta"),
-        bracken_input = "data/omics/metagenomes/{sample}/kraken_fastp/gtdb_{sample}_for_bracken.txt"
+        report = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_report.txt",
+        out = temp("data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_out.txt"),
+        bracken = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_bracken.txt",
+        bracken_report = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_brackenReport.txt",
+        bracken_mpa = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_brackenMpa.txt",
+        unclass_f = temp("data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_unclassified_1.fasta"),
+        unclass_r = temp("data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_unclassified_2.fasta"),
+        bracken_input = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_for_bracken.txt"
     params:
         uniq_minimizer_threshold = 150,
-        unclass_out = "data/omics/metagenomes/{sample}/kraken_fastp/gtdb_{sample}_unclassified#.fasta"
+        unclass_out = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_unclassified#.fasta"
     conda: "config/conda_yaml/kraken.yaml"
-    benchmark: "benchmarks/kraken2_gtdb_w_uniq_fastp/{sample}.txt"
+    benchmark: "benchmarks/kraken2_gtdb_w_uniq_fastp/{sample_type}-{sample}.txt"
     resources: cpus=16, mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
     shell:
         """
@@ -1530,15 +1584,15 @@ rule kraken2_refseq_w_uniq_fastp: ##Run kraken2
         db = rules.kraken2_load_refseq_DB.output,
         kreport2mpa = "code/kreport2mpa.py"
     output:
-        report = "data/omics/metagenomes/{sample}/kraken_fastp/refseq_{sample}_report.txt",
-        out = "data/omics/metagenomes/{sample}/kraken_fastp/refseq_{sample}_out.txt",
-        bracken = "data/omics/metagenomes/{sample}/kraken_fastp/refseq_{sample}_bracken.txt",
-        bracken_report = "data/omics/metagenomes/{sample}/kraken_fastp/refseq_{sample}_brackenReport.txt",
-        bracken_mpa = "data/omics/metagenomes/{sample}/kraken_fastp/refseq_{sample}_brackenMpa.txt",
-        bracken_input = "data/omics/metagenomes/{sample}/kraken_fastp/refseq_{sample}_for_bracken.txt"
+        report = "data/omics/{sample_type}/{sample}/kraken_fastp/refseq_{sample}_report.txt",
+        out = "data/omics/{sample_type}/{sample}/kraken_fastp/refseq_{sample}_out.txt",
+        bracken = "data/omics/{sample_type}/{sample}/kraken_fastp/refseq_{sample}_bracken.txt",
+        bracken_report = "data/omics/{sample_type}/{sample}/kraken_fastp/refseq_{sample}_brackenReport.txt",
+        bracken_mpa = "data/omics/{sample_type}/{sample}/kraken_fastp/refseq_{sample}_brackenMpa.txt",
+        bracken_input = "data/omics/{sample_type}/{sample}/kraken_fastp/refseq_{sample}_for_bracken.txt"
     params:
         uniq_minimizer_threshold = 150
-    benchmark: "benchmarks/kraken2_refseq_w_uniq_fastp/{sample}.txt"
+    benchmark: "benchmarks/kraken2_refseq_w_uniq_fastp/{sample_type}-{sample}.txt"
     conda: "config/conda_yaml/kraken.yaml"
     resources: cpus=16, mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
     shell:
@@ -1564,7 +1618,7 @@ rule kraken2_refseq_w_uniq_fastp: ##Run kraken2
 rule kraken_summarize_fastp:
     input:
         script = "code/merge_bracken.R",
-        kraken_results = expand("data/omics/metagenomes/{sample}/kraken_fastp/{database}_{sample}_bracken.txt", database = ["refseq","gtdb"], sample = metaG_samples),
+        kraken_results = expand("data/omics/{sample_type}/{sample}/kraken_fastp/{database}_{sample}_bracken.txt", database = ["refseq","gtdb"], sample = metaG_samples, sample_type = "metagenomes"),
         combined_tax_info = rules.kraken_database_tax_merge.output.combined_tax_info
     output:
         counts = "data/sample_data/bracken_counts.tsv",
@@ -1589,7 +1643,7 @@ rule metacodeR:
         script = "code/plot_metacoder.R",
         abund = "data/sample_data/bracken_rel_abund.tsv"
         #metadata = "data/metadata.tsv"
-    output: "data/omics/metagenomes/{sample}/kraken/{sample}_kraken_metacodeR.pdf"
+    output: "data/omics/{sample_type}/{sample}/kraken/{sample}_kraken_metacodeR.pdf"
     resources: cpus=1, mem_mb=8000, time_min=60
     container: "docker://eandersk/r_microbiome"
     shell:
@@ -1599,29 +1653,34 @@ rule metacodeR:
 
 rule reads_unirefLCA_mmseqs:
     input:
-        fwd_reads = "data/omics/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
-        rev_reads = "data/omics/metagenomes/{sample}/reads/decon_rev_reads_fastp.fastq.gz"
+        fwd_reads = "data/omics/{sample_type}/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
+        rev_reads = "data/omics/{sample_type}/{sample}/reads/decon_rev_reads_fastp.fastq.gz"
     output:
-        report = "data/omics/metagenomes/{sample}/{sample}_report"
+        report = "data/omics/{sample_type}/{sample}/{sample}_report"
     conda:  "config/conda_yaml/mmseqs.yaml"
     params:
         unirefDB = "/home/kiledal/scratch_gdick1/mmseqs_unirefdb/mmseqs2/uniref100",
-        out_prefix = "data/omics/metagenomes/{sample}/{sample}",
-        tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
-        tmp_fwd_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__fwd.fastq.gz",
-        tmp_rev_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__rev.fastq.gz",
-    benchmark: "benchmarks/reads_unirefLCA_mmseqs/{sample}.txt"
-    log: "logs/reads_unirefLCA_mmseqs/{sample}.log"
+        out_prefix = "data/omics/{sample_type}/{sample}/{sample}",
+        # tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
+        # tmp_dir = "/dev/shm/akiledal/mmseqs2",
+        # tmp_fwd_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__fwd.fastq.gz",
+        # tmp_rev_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__rev.fastq.gz",
+        tmp_dir = "/tmp/kiledal/mmseqs2/{sample}",
+        tmp_fwd_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__fwd.fastq.gz",
+        tmp_rev_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__rev.fastq.gz"
+    benchmark: "benchmarks/reads_unirefLCA_mmseqs/{sample_type}-{sample}.txt"
+    log: "logs/reads_unirefLCA_mmseqs/{sample_type}-{sample}.log"
     resources:
-        mem_mb = 170000, cpus=32, time_min=20000 #partition = "largemem"
+        #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
+        mem_mb = 160000, cpus=32, time_min=20000
     shell:
         """
-        mkdir -p {params.tmp_dir}
+        mkdir -p $(dirname {params.tmp_fwd_reads})
 
         cp {input.fwd_reads} {params.tmp_fwd_reads}
         cp {input.rev_reads} {params.tmp_rev_reads}
 
-        # mmseqs touchdb {params.unirefDB} # loads  the database into memory, only use in large memory systems / nodes
+        #mmseqs touchdb {params.unirefDB} # loads  the database into memory, only use in large memory systems / nodes
         
         mmseqs \
             easy-taxonomy \
@@ -1640,17 +1699,19 @@ rule reads_unirefLCA_mmseqs:
             # --db-load-mode 2 # this loads the database into memory, was an attempt to speed up on Great Lakes but limited memory & scratch space were limiting factors
 
         rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} {params.tmp_dir}
+        printf "Done, and deleted temp dir"
         """
+
 
 rule add_lineage_to_unirefLCAtax:
     input:
-        db = ancient("../UMRAD/Universal-Taxonomy-Database"),
+        db = ancient("data/reference/ncbi_tax"),
         report = "data/omics/metagenomes/{sample}/{sample}_report"
     output: 
         inspect_w_lineage = "data/omics/metagenomes/{sample}/{sample}_report_w_full_lineage",
         inspect_w_7_lev_lineage = "data/omics/metagenomes/{sample}/{sample}_report_w_standardized_lineage"
     conda: "config/conda_yaml/taxonkit.yaml"
-    resources: cpus=1, mem_mb=250000, time_min=5440, mem_gb = 250
+    resources: cpus=1, mem_mb=10000, time_min=5440, mem_gb = 10
     shell:
         """
         taxonkit lineage \
@@ -1670,10 +1731,30 @@ rule add_lineage_to_unirefLCAtax:
 
 rule run_mmseqsLCA_GL:
     input: 
-        expand("data/omics/metagenomes/{sample}/{sample}_report", sample = qcd_samples)
+        expand("data/omics/metagenomes/{sample}/{sample}_report", sample = seagull_samples),
+        expand("data/omics/metagenomes/{sample}/{sample}_report_w_full_lineage", sample = seagull_samples),
+        # expand("data/omics/metagenomes/{sample}/{sample}_report", sample = qcd_samples),
+        # expand("data/omics/metagenomes/{sample}/{sample}_report_w_full_lineage", sample = qcd_samples)
     
+find_mmseq_reports = """
+for filepath in data/omics/metagenomes/*/; do
+  sample=$(basename $filepath)
+  if [ -f "$filepath/${sample}_report" ]; then
+        echo -n $sample" "
+  fi
+done
+"""
+
+# Run the Bash commands and capture the output
+output = subprocess.check_output(['bash', '-c', find_mmseq_reports]).decode('utf-8')
+mmseq_report_samples = [sample.strip() for sample in output.split()]
+
+
 rule fortify_unrefLCA:
-    input: expand("data/omics/metagenomes/{sample}/{sample}_report_w_full_lineage", sample = glob_wildcards("data/omics/metagenomes/{samp}/{samp2}_report").samp)
+    input: 
+        #expand("data/omics/metagenomes/{sample}/{sample}_report_w_full_lineage", sample = glob_wildcards("data/omics/metagenomes/{samp}/{samp2}_report").samp),
+        expand("data/omics/metagenomes/{sample}/{sample}_report_w_full_lineage", sample = mmseq_report_samples),
+        #expand("data/omics/metagenomes/{sample}/{sample}_report", sample = glob_wildcards("data/omics/metagenomes/{samp}/{samp2}_report").samp)
 
 # rule reads_unirefLCA_mmseqs_geomicro:
 #     input:
@@ -1726,11 +1807,11 @@ rule kofam_scan:
         profile = "data/reference/kegg/kofamscan/profiles",
         ko_list = "data/reference/kegg/kofamscan/ko_list"
     output:
-        ko_annot = "data/omics/metagenomes/{sample}/kofam_scan/{sample}_kofam_results.txt"
+        ko_annot = "data/omics/{sample_type}/{sample}/kofam_scan/{sample}_kofam_results.txt"
     conda: "config/conda_yaml/kofamscan.yaml"
     #shadow: "shallow"
-    benchmark: "benchmarks/kofamscan/{sample}.txt"
-    log: "logs/kofamscan/{sample}.log"
+    benchmark: "benchmarks/kofamscan/{sample_type}-{sample}.txt"
+    log: "logs/kofamscan/{sample_type}-{sample}.log"
     resources: cpus=24, time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 100000
     shell:
         """
@@ -1759,13 +1840,13 @@ rule annotate_contigs:
         script = "code/Strain-Level_Metagenome_Analysis/AnnotateContigs.pl",
         UMRAD = "data/reference/UMRAD"
     output:
-        done = touch("data/omics/metagenomes/{sample}/.annotation_done"),
+        done = touch("data/omics/{sample_type}/{sample}/.annotation_done"),
     params:
-        annotation_dir = directory("data/omics/metagenomes/{sample}/annotation")
+        annotation_dir = directory("data/omics/{sample_type}/{sample}/annotation")
     conda: "config/conda_yaml/main.yaml"
     resources: cpus=1, time_min = 2880, mem_mb = lambda wildcards, attempt: attempt * 170000
-    log: "logs/annotate_contigs/{sample}.log"
-    benchmark: "benchmarks/annotate_contigs/{sample}.log"
+    log: "logs/annotate_contigs/{sample_type}-{sample}.log"
+    benchmark: "benchmarks/annotate_contigs/{sample_type}-{sample}.log"
     shell:
         """
         rm -r {params.annotation_dir}
@@ -1823,24 +1904,24 @@ rule make_bins:
         fwd_reads = rules.remove_contaminants.output.decon_fwd,
         rev_reads = rules.remove_contaminants.output.decon_rev
     output:
-        directory("data/omics/metagenomes/{sample}/bins/concoct_bins"),
-        directory("data/omics/metagenomes/{sample}/bins/maxbin2_bins"),
-        directory("data/omics/metagenomes/{sample}/bins/metabat2_bins"),
-        directory("data/omics/metagenomes/{sample}/bins/work_files"),
-        "data/omics/metagenomes/{sample}/bins/work_files/assembly.fa",
-        fwd_reads = temp("data/omics/metagenomes/{sample}/reads/reads_1.fastq"),
-        rev_reads = temp("data/omics/metagenomes/{sample}/reads/reads_2.fastq"),
-        #out_dir = directory("data/omics/metagenomes/{sample}/bins")
+        directory("data/omics/{sample_type}/{sample}/bins/concoct_bins"),
+        directory("data/omics/{sample_type}/{sample}/bins/maxbin2_bins"),
+        directory("data/omics/{sample_type}/{sample}/bins/metabat2_bins"),
+        directory("data/omics/{sample_type}/{sample}/bins/work_files"),
+        "data/omics/{sample_type}/{sample}/bins/work_files/assembly.fa",
+        fwd_reads = temp("data/omics/{sample_type}/{sample}/reads/reads_1.fastq"),
+        rev_reads = temp("data/omics/{sample_type}/{sample}/reads/reads_2.fastq"),
+        #out_dir = directory("data/omics/{sample_type}/{sample}/bins")
     params:
-        out_dir = "data/omics/metagenomes/{sample}/bins"
+        out_dir = "data/omics/{sample_type}/{sample}/bins"
     conda: "config/conda_yaml/metawrap.yaml"
     resources: cpus=16, mem_mb=50000, time_min=2880, mem_gb = 50
     shell:
         """
         WORK_DIR=$PWD
 
-        #data/omics/metagenomes/{wildcards.sample}/bins
-        #mkdir -p data/omics/metagenomes/{wildcards.sample}/bins
+        #data/omics/{wildcards.sample_type}/{wildcards.sample}/bins
+        #mkdir -p data/omics/{wildcards.sample_type}/{wildcards.sample}/bins
         #cp data/qc_sequence_files/{wildcards.sample}[a-z]_R[12].fastq.gz data/bins/{wildcards.sample}/metaspades/
         gunzip -c {input.fwd_reads} > {output.fwd_reads}
         gunzip -c {input.rev_reads} > {output.rev_reads}
@@ -1869,15 +1950,15 @@ rule make_bins:
 
 rule dastool:
     input:
-        contigs = "data/omics/metagenomes/{sample}/bins/work_files/assembly.fa",
+        contigs = "data/omics/{sample_type}/{sample}/bins/work_files/assembly.fa",
         #bin_folder = rules.make_bins.params.out_dir
-        bins = "data/omics/metagenomes/{sample}/bins/metabat2_bins"
+        bins = "data/omics/{sample_type}/{sample}/bins/metabat2_bins"
     params:
         bin_folder = rules.make_bins.params.out_dir
     output: 
-        #summary = "data/omics/metagenomes/{sample}/bins/DASTool/_DASTool_summary.txt",
-        das_folder = directory("data/omics/metagenomes/{sample}/bins/DASTool"),
-        das_bins_folder = directory("data/omics/metagenomes/{sample}/bins/DASTool/_DASTool_bins")
+        #summary = "data/omics/{sample_type}/{sample}/bins/DASTool/_DASTool_summary.txt",
+        das_folder = directory("data/omics/{sample_type}/{sample}/bins/DASTool"),
+        das_bins_folder = directory("data/omics/{sample_type}/{sample}/bins/DASTool/_DASTool_bins")
     conda: "config/conda_yaml/das_tool.yaml"
     resources: cpus=8, mem_mb=50000, time_min=2880, mem_gb = 50
     shell:
@@ -1919,8 +2000,8 @@ rule dastool:
 rule checkm:
     input: rules.dastool.output.das_bins_folder
     output:
-        dir = temp(directory("data/omics/metagenomes/{sample}/bins/checkm")),
-        results = "data/omics/metagenomes/{sample}/bins/checkm.txt"
+        dir = temp(directory("data/omics/{sample_type}/{sample}/bins/checkm")),
+        results = "data/omics/{sample_type}/{sample}/bins/checkm.txt"
     conda: "config/conda_yaml/checkm.yaml"
     resources: cpus=8, mem_mb=80000, time_min=2880, mem_gb = 80
     shell:
@@ -1947,7 +2028,7 @@ rule gtdbtk:
     input:
         bins = rules.dastool.output.das_bins_folder,
         refs = "/geomicro/data2/kiledal/references/gtdbtk/release202"
-    output: directory("data/omics/metagenomes/{sample}/bins/gtdbtk")
+    output: directory("data/omics/{sample_type}/{sample}/bins/gtdbtk")
     conda: "config/conda_yaml/gtdbtk.yaml"
     resources: cpus=1, mem_mb=500000, time_min=2880, mem_gb = 500
     shell:
@@ -1962,7 +2043,7 @@ rule mag_coverage:
         fwd_reads = rules.remove_contaminants.output.cleaned_fwd,
         rev_reads = rules.remove_contaminants.output.cleaned_rev,
         bins = rules.dastool.output.das_bins_folder
-    output: "data/omics/metagenomes/{sample}/bins/coverage.tsv"
+    output: "data/omics/{sample_type}/{sample}/bins/coverage.tsv"
     conda: "config/conda_yaml/coverm_env.yaml"
     resources: cpus=16, mem_mb=250000, time_min=2880
     shell:
@@ -1982,14 +2063,14 @@ rule map_to_bins_for_reassembly:
         fwd_reads = rules.remove_contaminants.output.cleaned_fwd,
         rev_reads = rules.remove_contaminants.output.cleaned_rev,
         bins_folder = rules.dastool.output.das_bins_folder,
-        bin = "data/omics/metagenomes/{sample}/bins/DASTool/_DASTool_bins/{bin}.fa"
+        bin = "data/omics/{sample_type}/{sample}/bins/DASTool/_DASTool_bins/{bin}.fa"
     output:
-        #unfiltered_bam = "data/omics/metagenomes/{sample}/bins/reassembly/reads/{bin}_prefilt.bam",
-        unfiltered_bam_dir = temp(directory("data/omics/metagenomes/{sample}/bins/reassembly/mapped_reads/{bin}__bam_unfiltered")),
-        filtered_bam = temp("data/omics/metagenomes/{sample}/bins/reassembly/mapped_reads/{bin}.bam"),
-        #filtered_bam_dir = directory("data/omics/metagenomes/{sample}/bins/reassembly/reads/{bin}__bam_filtered"),
-        fwd_reads = temp("data/omics/metagenomes/{sample}/bins/reassembly/mapped_reads/{bin}_R1.fastq.gz"),
-        rev_reads = temp("data/omics/metagenomes/{sample}/bins/reassembly/mapped_reads/{bin}_R2.fastq.gz")
+        #unfiltered_bam = "data/omics/{sample_type}/{sample}/bins/reassembly/reads/{bin}_prefilt.bam",
+        unfiltered_bam_dir = temp(directory("data/omics/{sample_type}/{sample}/bins/reassembly/mapped_reads/{bin}__bam_unfiltered")),
+        filtered_bam = temp("data/omics/{sample_type}/{sample}/bins/reassembly/mapped_reads/{bin}.bam"),
+        #filtered_bam_dir = directory("data/omics/{sample_type}/{sample}/bins/reassembly/reads/{bin}__bam_filtered"),
+        fwd_reads = temp("data/omics/{sample_type}/{sample}/bins/reassembly/mapped_reads/{bin}_R1.fastq.gz"),
+        rev_reads = temp("data/omics/{sample_type}/{sample}/bins/reassembly/mapped_reads/{bin}_R2.fastq.gz")
     conda: "config/conda_yaml/coverm.yaml"
     resources: cpus=24, mem_mb=100000, time_min=2880
     shell:
@@ -2018,15 +2099,15 @@ rule reassemble_bin:
     input:
         fwd_reads = rules.map_to_bins_for_reassembly.output.fwd_reads,
         rev_reads = rules.map_to_bins_for_reassembly.output.rev_reads,
-        bin = "data/omics/metagenomes/{sample}/bins/DASTool/_DASTool_bins/{bin}.fa"
+        bin = "data/omics/{sample_type}/{sample}/bins/DASTool/_DASTool_bins/{bin}.fa"
     output:
-        #assembly_dir = directory("data/omics/metagenomes/{sample}/bins/reassembly/{bin}"),
-        contigs = "data/omics/metagenomes/{sample}/bins/reassembly/{bin}_reassembled_contigs.fasta"
+        #assembly_dir = directory("data/omics/{sample_type}/{sample}/bins/reassembly/{bin}"),
+        contigs = "data/omics/{sample_type}/{sample}/bins/reassembly/{bin}_reassembled_contigs.fasta"
     params: 
-        assembly_dir = directory("data/omics/metagenomes/{sample}/bins/reassembly/{bin}")
+        assembly_dir = directory("data/omics/{sample_type}/{sample}/bins/reassembly/{bin}")
     conda: "config/conda_yaml/main.yaml"
-    log: "logs/bin_reassembly/{sample}/{bin}.log"
-    benchmark: "logs/bin_reassembly/{sample}/{bin}.log"
+    log: "logs/bin_reassembly/{sample_type}-{sample}/{bin}.log"
+    benchmark: "logs/bin_reassembly/{sample_type}-{sample}/{bin}.log"
     resources: cpus = 16, time_min=20160, mem_mb = 16000
         #mem_mb = lambda wildcards, attempt: attempt * 100000
     shell:
@@ -2045,13 +2126,13 @@ rule reassemble_bin:
         """
 
 rule gather_bin:
-    input: expand("data/omics/metagenomes/{sample}/bins/ran_dastool.touch",sample=metaG_samples)
+    input: expand("data/omics/{sample_type}/{sample}/bins/ran_dastool.touch",sample=metaG_samples,sample_type ="metagenomes")
     output: directory("data/omics/metagenome_bins")
     shell:
         """
         mkdir -p {output}
         
-        ln data/omics/metagenomes/*/bins/DASTool/_DASTool_bins/*.fa {output}
+        ln data/omics/{wildcards.sample_type}/*/bins/DASTool/_DASTool_bins/*.fa {output}
         """
 
 rule binning:
@@ -2097,20 +2178,20 @@ rule humann:
         # Sample data #
         f_seq = rules.remove_contaminants.output.cleaned_fwd,
         r_seq = rules.remove_contaminants.output.cleaned_rev,
-        bracken_mpa = "data/omics/metagenomes/{sample}/kraken/gtdb_{sample}_brackenMpa.txt",
+        bracken_mpa = "data/omics/{sample_type}/{sample}/kraken/gtdb_{sample}_brackenMpa.txt",
         # Reference database #
         NUC_DB = "data/reference/humann/genome_reps_filt_annot.fna.gz",
         PROT_DB = "data/reference/humann/protein_database/uniref90_201901b.dmnd",
         NUC_fol = "data/reference/humann/",
         PROT_fol = "data/reference/humann/protein_database/"
     output:
-        humann_output = directory("data/omics/metagenomes/{sample}/humann"),
-        concat_unzipped_reads = temp("data/omics/metagenomes/{sample}/reads/for_humann.fastq")
+        humann_output = directory("data/omics/{sample_type}/{sample}/humann"),
+        concat_unzipped_reads = temp("data/omics/{sample_type}/{sample}/reads/for_humann.fastq")
     params:
         mem_use = "maximum"
     conda: "config/conda_yaml/humann.yaml"
-    log: "logs/humann/{sample}.log"
-    benchmark: "benchmarks/humann/{sample}.txt"
+    log: "logs/humann/{sample_type}-{sample}.log"
+    benchmark: "benchmarks/humann/{sample_type}-{sample}.txt"
     #resources: cpus=36, mem_mb=175000, time_min=20160
     resources: cpus=36, time_min=20160, partition = "largemem", mem_mb = lambda wildcards, attempt: attempt * 250000
     shell:
@@ -2141,22 +2222,22 @@ rule run_humann:
 rule humann_fastp:
     input:
         # Sample data #
-        f_seq = "data/omics/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
-        r_seq = "data/omics/metagenomes/{sample}/reads/decon_rev_reads_fastp.fastq.gz",
-        bracken_mpa = "data/omics/metagenomes/{sample}/kraken_fastp/gtdb_{sample}_brackenMpa.txt",
+        f_seq = "data/omics/{sample_type}/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
+        r_seq = "data/omics/{sample_type}/{sample}/reads/decon_rev_reads_fastp.fastq.gz",
+        bracken_mpa = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_brackenMpa.txt",
         # Reference database #
         NUC_DB = humann_ref_dir + "/genome_reps_filt_annot.fna.gz",
         PROT_DB = humann_ref_dir + "/protein_database/uniref90_201901b.dmnd",
         NUC_fol = humann_ref_dir + "/",
         PROT_fol = humann_ref_dir +"/protein_database/"
     output:
-        humann_output = directory("data/omics/metagenomes/{sample}/humann_fastp"),
-        concat_unzipped_reads = temp("data/omics/metagenomes/{sample}/reads/for_humann_fastp.fastq")
+        humann_output = directory("data/omics/{sample_type}/{sample}/humann_fastp"),
+        concat_unzipped_reads = temp("data/omics/{sample_type}/{sample}/reads/for_humann_fastp.fastq")
     params:
         mem_use = "maximum"
     conda: "config/conda_yaml/humann.yaml"
-    log: "logs/humann/{sample}_fastp.log"
-    benchmark: "benchmarks/humann/{sample}_fastp.txt"
+    log: "logs/humann/{sample_type}-{sample}_fastp.log"
+    benchmark: "benchmarks/humann/{sample_type}-{sample}_fastp.txt"
     #resources: cpus=36, mem_mb=175000, time_min=20160
     #resources: cpus=36, time_min=20160, partition = "largemem", mem_mb = lambda wildcards, attempt: attempt * 250000
     resources: cpus=36, time_min=4320, mem_mb = 175000
@@ -2189,13 +2270,13 @@ rule run_humann_fastp:
 
 rule sourmash_sketch:
     input:
-       f_seq = "data/omics/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
-       r_seq = "data/omics/metagenomes/{sample}/reads/decon_rev_reads_fastp.fastq.gz"
+       f_seq = "data/omics/{sample_type}/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
+       r_seq = "data/omics/{sample_type}/{sample}/reads/decon_rev_reads_fastp.fastq.gz"
     output:
-       sig = "data/omics/metagenomes/{sample}/sourmash/{sample}.sig"
+       sig = "data/omics/{sample_type}/{sample}/sourmash/{sample}.sig"
     conda: "config/conda_yaml/sourmash.yaml"
-    log: "logs/sourmash_sketch/{sample}.log"
-    benchmark: "benchmarks/sourmash_sketch/{sample}.txt"
+    log: "logs/sourmash_sketch/{sample_type}-{sample}.log"
+    benchmark: "benchmarks/sourmash_sketch/{sample_type}-{sample}.txt"
     resources: cpus=1, time_min=4320, mem_mb = 20000
     shell:
         """
@@ -2204,16 +2285,16 @@ rule sourmash_sketch:
 
 rule sourmash_gather:
     input:
-       sig = "data/omics/metagenomes/{sample}/sourmash/{sample}.sig",
+       sig = "data/omics/{sample_type}/{sample}/sourmash/{sample}.sig",
        gtdb_refDB = "data/reference/sourmash/gtdb-rs207.dna.k31.zip",
        microcystis_refDB = "data/reference/sourmash/Microcystis_sigs.sig",
        taxDB = "data/reference/sourmash/gtdb_and_Microcystis_tax.db"
     output:
-       reps = "data/omics/metagenomes/{sample}/sourmash/{sample}_gather_gtdbrs207_reps.csv",
-       tax = "data/omics/metagenomes/{sample}/sourmash/{sample}_gather_gtdbrs207_reps.with-lineages.csv"
+       reps = "data/omics/{sample_type}/{sample}/sourmash/{sample}_gather_gtdbrs207_reps.csv",
+       tax = "data/omics/{sample_type}/{sample}/sourmash/{sample}_gather_gtdbrs207_reps.with-lineages.csv"
     conda: "config/conda_yaml/sourmash.yaml"
-    log: "logs/sourmash/{sample}.log"
-    benchmark: "benchmarks/sourmash/{sample}.txt"
+    log: "logs/sourmash/{sample_type}-{sample}.log"
+    benchmark: "benchmarks/sourmash/{sample_type}-{sample}.txt"
     resources: cpus=1, time_min=4320, mem_mb = 20000
     shell:
         """
@@ -2221,12 +2302,15 @@ rule sourmash_gather:
 
         sourmash tax annotate -g {output.reps} -t {input.taxDB} 2>&1 | tee -a {log}
 
-        mv $(basename {output.tax}) data/omics/metagenomes/{wildcards.sample}/sourmash/
+        mv $(basename {output.tax}) data/omics/{wildcards.sample_type}/{wildcards.sample}/sourmash/
         """
 
 
 rule run_sourmash: 
     input: expand("data/omics/metagenomes/{sample}/sourmash/{sample}_gather_gtdbrs207_reps.csv", sample=metaG_samples)
+
+rule run_sourmash_jgi: 
+    input: expand("data/omics/metagenomes/{sample}/sourmash/{sample}_gather_gtdbrs207_reps.csv", sample=jgi_samples)
 
 rule run_sourmash_glerl: 
     input: expand("data/omics/metagenomes/{sample}/sourmash/{sample}_gather_gtdbrs207_reps.csv", sample=glerl_samples)
@@ -2236,20 +2320,20 @@ rule run_sourmash_transect:
 
 rule sourmash_gather_Microcystis:
     input:
-       sig = "data/omics/metagenomes/{sample}/sourmash/{sample}.sig",
+       sig = "data/omics/{sample_type}/{sample}/sourmash/{sample}.sig",
        refDB = "data/reference/sourmash/Microcystis_sigs.sig"
     output:
-       reps = "data/omics/metagenomes/{sample}/sourmash/{sample}_gather_Microcystis.csv",
-       #tax = "data/omics/metagenomes/{sample}/sourmash/{sample}_gather_gtdbrs207_reps.with-lineages.csv"
+       reps = "data/omics/{sample_type}/{sample}/sourmash/{sample}_gather_Microcystis.csv",
+       #tax = "data/omics/{sample_type}/{sample}/sourmash/{sample}_gather_gtdbrs207_reps.with-lineages.csv"
     conda: "config/conda_yaml/sourmash.yaml"
-    log: "logs/sourmash/{sample}.log"
-    benchmark: "benchmarks/sourmash/{sample}.txt"
+    log: "logs/sourmash/{sample_type}-{sample}.log"
+    benchmark: "benchmarks/sourmash/{sample_type}-{sample}.txt"
     resources: cpus=1, time_min=4320, mem_mb = 20000
     shell:
         """
         sourmash gather {input.sig} {input.refDB} -o {output.reps} 2>&1 | tee -a {log}
 
-        #mv $(basename {output.reps}) data/omics/metagenomes/{wildcards.sample}/sourmash/
+        #mv $(basename {output.reps}) data/omics/{wildcards.sample_type}/{wildcards.sample}/sourmash/
         """
 
 rule run_sourmash_Microcystis: 
@@ -2283,13 +2367,6 @@ rule sourmash_gather_JGI:
         """
 
 
-rule run_sourmash_jgi: 
-    input: expand("import/staging/jgi_2022/all_sample_filtered_reads/{sample}_gather_gtdbrs207_reps.csv", sample=glob_wildcards("import/staging/jgi_2022/all_sample_filtered_reads/{sample}.fastq.gz").sample)
-
-
-
-
-
 ## New binning
 
 
@@ -2316,7 +2393,7 @@ rule run_sourmash_jgi:
 #         expand("data/projects/{project}/metagenomes/{sample}/bins/.done_GTDB", sample = metaG_samples, project = "2022_geomicro_JGI_CSP"),
 #         expand("data/projects/{project}/metagenomes/{sample}/bins/.done_gunc", sample = metaG_samples, project = "2022_geomicro_JGI_CSP")
 
-current_project = "WLE_transects_2022" # Other projects used recetly-- 2021_ESP, 2022_geomicro_JGI_CSP, PRJNA702522, WLE_transects_2022, GLERL_USGS_2016_2020
+current_project = "set_36" # Other projects used recetly-- 2021_ESP, 2022_geomicro_JGI_CSP, PRJNA702522, WLE_transects_2022, GLERL_USGS_2016_2020
 metaG_samples = os.popen("ls data/projects/" + current_project + "/metagenomes/").read().splitlines()
 rule calc_contig_coverage_proj1:
     input: 
@@ -2352,6 +2429,54 @@ rule calc_contig_coverage_proj2:
         expand("data/projects/{project}/metagenomes/{sample}/bins/.done_GTDB", sample = metaG_samples, project = current_project),
         expand("data/projects/{project}/metagenomes/{sample}/bins/.done_gunc", sample = metaG_samples, project = current_project)
 
+current_project = "2022_geomicro_JGI_CSP" # Other projects used recetly-- 2021_ESP, 2022_geomicro_JGI_CSP, PRJNA702522, WLE_transects_2022, GLERL_USGS_2016_2020
+#metaG_samples = os.popen("ls data/projects/" + current_project + "/metagenomes/").read().splitlines()
+#metaG_samples = list(filter(lambda x: x.startswith('samp_'), metaG_samples))
+metaG_samples = ['samp_3935', 'samp_3936', 'samp_3937', 'samp_3938']
+rule calc_contig_coverage_proj3:
+    input: 
+        expand("data/omics/metagenomes/{sample}/reads/.linked_{dir}_w_sample_name", sample = metaG_samples, project = current_project, dir = ["fwd", "rev"]),
+        expand("data/projects/{project}/metagenomes/{sample}/bins/contig_coverage.tsv", sample = metaG_samples, project = current_project),
+        expand("data/projects/{project}/metagenomes/{sample}/bins/CONCOCT/cut_contigs_10K.fa", sample = metaG_samples, project = current_project),
+        expand("data/projects/{project}/metagenomes/{sample}/bins/semibin", sample = metaG_samples, project = current_project),
+        expand("data/projects/{project}/metagenomes/{sample}/bins/METABAT2/.done/", sample = metaG_samples, project = current_project),
+        expand("data/projects/{project}/metagenomes/{sample}/bins/maxbin/.done", sample = metaG_samples, project = current_project),
+        expand("data/projects/{project}/metagenomes/{sample}/bins/VAMB", sample = metaG_samples, project = current_project),
+        expand("data/projects/{project}/metagenomes/{sample}/bins/metadecoder/.done", sample = metaG_samples, project = current_project),
+        expand("data/projects/{project}/metagenomes/{sample}/bins/all_raw_bins/checkm.txt", sample = metaG_samples, project = current_project),
+        expand("data/projects/{project}/metagenomes/{sample}/bins/das_tool/.done", sample = metaG_samples, project = current_project),
+        expand("data/projects/{project}/metagenomes/{sample}/bins/.drep_done", sample = metaG_samples, project = current_project),
+        expand("data/projects/{project}/metagenomes/{sample}/bins/.done_GTDB", sample = metaG_samples, project = current_project),
+        expand("data/projects/{project}/metagenomes/{sample}/bins/.done_gunc", sample = metaG_samples, project = current_project)
+
+def get_project_inputs(projects):
+    inputs = []
+    if projects is not None:
+        for project in projects:
+            binning_samples = subprocess.Popen(f"ls -d data/projects/{project}/metagenomes/samp_* | grep -o 'samp_.*'", shell=True, stdout=subprocess.PIPE).stdout.read().decode().splitlines()
+            for sample in metaG_samples:
+                sample_inputs = [
+                    "data/omics/metagenomes/{sample}/reads/.linked_fwd_w_sample_name".format(sample=sample),
+                    "data/omics/metagenomes/{sample}/reads/.linked_rev_w_sample_name".format(sample=sample),
+                    "data/projects/{project}/metagenomes/{sample}/bins/contig_coverage.tsv".format(project=project, sample=sample),
+                    "data/projects/{project}/metagenomes/{sample}/bins/CONCOCT/cut_contigs_10K.fa".format(project=project, sample=sample),
+                    "data/projects/{project}/metagenomes/{sample}/bins/semibin".format(project=project, sample=sample),
+                    "data/projects/{project}/metagenomes/{sample}/bins/METABAT2/.done/".format(project=project, sample=sample),
+                    "data/projects/{project}/metagenomes/{sample}/bins/maxbin/.done".format(project=project, sample=sample),
+                    "data/projects/{project}/metagenomes/{sample}/bins/VAMB".format(project=project, sample=sample),
+                    "data/projects/{project}/metagenomes/{sample}/bins/metadecoder/.done".format(project=project, sample=sample),
+                    "data/projects/{project}/metagenomes/{sample}/bins/all_raw_bins/checkm.txt".format(project=project, sample=sample),
+                    "data/projects/{project}/metagenomes/{sample}/bins/das_tool/.done".format(project=project, sample=sample),
+                    "data/projects/{project}/metagenomes/{sample}/bins/.drep_done".format(project=project, sample=sample),
+                    "data/projects/{project}/metagenomes/{sample}/bins/.done_GTDB".format(project=project, sample=sample),
+                    "data/projects/{project}/metagenomes/{sample}/bins/.done_gunc".format(project=project, sample=sample),
+                ]
+                inputs.extend(sample_inputs)
+    return inputs
+
+rule bin_projects: 
+    input: get_project_inputs(config["projects"])
+
 
 rule run_checkm_new_per_sample:
     input: expand("data/projects/{project}/metagenomes/{sample}/bins/all_raw_bins/checkm.txt", sample =metaG_samples, project = "2022_geomicro_JGI_CSP")
@@ -2386,11 +2511,11 @@ rule bin_coassembly:
 
 rule link_reads_w_sample_names:
     input: 
-        reads = "data/omics/metagenomes/{sample}/reads/decon_{dir}_reads_fastp.fastq.gz"
-        #"data/projects/{project}/metagenomes/{sample}/reads/decon_{dir}_reads_fastp.fastq.gz"
+        reads = "data/omics/{sample_type}/{sample}/reads/decon_{dir}_reads_fastp.fastq.gz"
+        #"data/projects/{project}/{sample_type}/{sample}/reads/decon_{dir}_reads_fastp.fastq.gz"
     output: 
-        touch = touch("data/omics/metagenomes/{sample}/reads/.linked_{dir}_w_sample_name"),
-        linked_reads = "data/omics/metagenomes/{sample}/reads/fastp_decon/{sample}_{dir}.fastq.gz"
+        touch = touch("data/omics/{sample_type}/{sample}/reads/.linked_{dir}_w_sample_name"),
+        linked_reads = "data/omics/{sample_type}/{sample}/reads/fastp_decon/{sample}_{dir}.fastq.gz"
     resources: cpus=1, mem_mb = 500
     shell:
         """
@@ -2402,12 +2527,12 @@ rule link_reads_w_sample_names:
 
 rule map_to_contigs:
     input:
-        #expand("data/projects/{project}/metagenomes/{sample}/reads/fastp_decon/{sample}_{dir}.fastq.gz", sample = metaG_samples, dir = ["fwd", "rev"], project = "2022_geomicro_JGI_CSP"),
-        expand("data/projects/{project}/metagenomes/{sample}/reads/fastp_decon/{sample}_{dir}.fastq.gz", sample = metaG_samples, dir = ["fwd", "rev"], project = current_project),
-        #reads_linked = "data/omics/metagenomes/{sample}/reads/.linked_w_sample_name",
+        #expand("data/projects/{project}/{sample_type}/{sample}/reads/fastp_decon/{sample}_{dir}.fastq.gz", sample = metaG_samples, dir = ["fwd", "rev"], project = "2022_geomicro_JGI_CSP"),
+        expand("data/projects/{project}/{sample_type}/{sample}/reads/fastp_decon/{sample}_{dir}.fastq.gz", sample = metaG_samples, dir = ["fwd", "rev"], project = current_project, sample_type = "metagenomes"),
+        #reads_linked = "data/omics/{sample_type}/{sample}/reads/.linked_w_sample_name",
         contigs = rules.rename_contigs.output.contigs
     output: 
-        bam_dir = temp(directory("data/projects/{project}/metagenomes/{sample}/bins/bam"))
+        bam_dir = temp(directory("data/projects/{project}/{sample_type}/{sample}/bins/bam"))
     conda: "config/conda_yaml/coverm.yaml"
     resources: cpus=32, mem_mb=150000, time_min=7200
     shell:
@@ -2424,10 +2549,10 @@ rule run_contig_map:
 
 rule contig_coverage:
     input:
-        bam_dir = "data/projects/{project}/metagenomes/{sample}/bins/bam"
+        bam_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bam"
     output: 
-        coverage = "data/projects/{project}/metagenomes/{sample}/bins/contig_coverage.tsv",
-        coverage_metabat = "data/projects/{project}/metagenomes/{sample}/bins/metabat_style_contig_coverage.tsv"
+        coverage = "data/projects/{project}/{sample_type}/{sample}/bins/contig_coverage.tsv",
+        coverage_metabat = "data/projects/{project}/{sample_type}/{sample}/bins/metabat_style_contig_coverage.tsv"
     params:
         tmpdir = "tmp/coverm_contig_coverage/{sample}"
     conda: "config/conda_yaml/coverm.yaml"
@@ -2455,11 +2580,11 @@ rule contig_coverage:
 
 rule index_contig_coverage:
     input:
-        bam_dir = "data/projects/{project}/metagenomes/{sample}/bins/bam"
+        bam_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bam"
     output: 
-        index_done = touch("data/projects/{project}/metagenomes/{sample}/bins/.bam_indexed")
+        index_done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.bam_indexed")
     params:
-        bam = "data/projects/{project}/metagenomes/{sample}/bins/bam/final.contigs.renamed.fa.decon_fwd_reads_fastp.fastq.gz.bam"
+        bam = "data/projects/{project}/{sample_type}/{sample}/bins/bam/final.contigs.renamed.fa.decon_fwd_reads_fastp.fastq.gz.bam"
     conda: "config/conda_yaml/coverm.yaml"
     resources: cpus=4, mem_mb=60000, time_min=2880
     shell:
@@ -2471,17 +2596,17 @@ rule concoct:
     input:
         contigs = rules.rename_contigs.output.contigs,
         bam_index = rules.index_contig_coverage.output.index_done,
-        bam_dir = "data/projects/{project}/metagenomes/{sample}/bins/bam"
+        bam_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bam"
     output:
-        cut_contigs = "data/projects/{project}/metagenomes/{sample}/bins/CONCOCT/cut_contigs_10K.fa",
-        cut_contigs_bed = "data/projects/{project}/metagenomes/{sample}/bins/CONCOCT/contigs_10K.bed",
-        cut_coverage = "data/projects/{project}/metagenomes/{sample}/bins/CONCOCT/cut_coverage_table.tsv"
+        cut_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/cut_contigs_10K.fa",
+        cut_contigs_bed = "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/contigs_10K.bed",
+        cut_coverage = "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/cut_coverage_table.tsv"
     params:
-        outdir = "data/projects/{project}/metagenomes/{sample}/bins/CONCOCT/output",
-        bam = "data/projects/{project}/metagenomes/{sample}/bins/bam/*.bam"
-    benchmark: "benchmarks/concoct/{project}__{sample}.txt"
+        outdir = "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/output",
+        bam = "data/projects/{project}/{sample_type}/{sample}/bins/bam/*.bam"
+    benchmark: "benchmarks/concoct/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/concoct.yaml"
-    resources: cpus=16, mem_mb=100000, time_min=10080, mem_gb = 50 # standard samples
+    resources: cpus=16, mem_mb=150000, time_min=10080, mem_gb = 50 # standard samples
     #resources: cpus=24, mem_mb=170000, time_min=10080, mem_gb = 50 # coassembly
     shell:
         """
@@ -2502,14 +2627,14 @@ rule metabat2:
     input:
         contigs = rules.rename_contigs.output.contigs,
         bam_index = rules.index_contig_coverage.output.index_done,
-        bam_dir = "data/projects/{project}/metagenomes/{sample}/bins/bam",
-        coverm_depth = "data/projects/{project}/metagenomes/{sample}/bins/metabat_style_contig_coverage.tsv"
+        bam_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bam",
+        coverm_depth = "data/projects/{project}/{sample_type}/{sample}/bins/metabat_style_contig_coverage.tsv"
     output:
-        #depth = "data/omics/metagenomes/{sample}/bins/jgi_depth_summary.txt",
-        done = touch("data/projects/{project}/metagenomes/{sample}/bins/METABAT2/.done")
+        #depth = "data/omics/{sample_type}/{sample}/bins/jgi_depth_summary.txt",
+        done = touch("data/projects/{project}/{sample_type}/{sample}/bins/METABAT2/.done")
     params:
-        bin_name = directory("data/projects/{project}/metagenomes/{sample}/bins/METABAT2/metabat2")
-    benchmark: "benchmarks/metabat2/{project}__{sample}.txt"
+        bin_name = directory("data/projects/{project}/{sample_type}/{sample}/bins/METABAT2/metabat2")
+    benchmark: "benchmarks/metabat2/{sample_type}-{project}__{sample}.txt"
     singularity: "docker://metabat/metabat"
     resources: cpus=16, mem_mb=20000, time_min=2880 # standard samples
     #resources: cpus=36, mem_mb=150000, time_min=5880 # coassembly
@@ -2527,9 +2652,9 @@ rule metabat2:
 rule maxbin2_coverage:
     input:
         script = "code/create_maxbin_coverage.R",
-        coverm_depth = "data/projects/{project}/metagenomes/{sample}/bins/metabat_style_contig_coverage.tsv"
+        coverm_depth = "data/projects/{project}/{sample_type}/{sample}/bins/metabat_style_contig_coverage.tsv"
     output:
-        depths_file = "data/projects/{project}/metagenomes/{sample}/bins/maxbin/depths.txt"
+        depths_file = "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/depths.txt"
     singularity: "docker://eandersk/r_microbiome"
     #resources: cpus=1, mem_mb=50000, time_min=1000 #standard samples
     resources: cpus=1, mem_mb=120000, time_min=2000 #coassembly
@@ -2546,10 +2671,10 @@ rule maxbin2:
         contigs = rules.rename_contigs.output.contigs,
         depth = rules.maxbin2_coverage.output.depths_file
     output:
-        done = touch("data/projects/{project}/metagenomes/{sample}/bins/maxbin/.done")
+        done = touch("data/projects/{project}/{sample_type}/{sample}/bins/maxbin/.done")
     params:
-        bin_dir = "data/projects/{project}/metagenomes/{sample}/bins/maxbin/maxbin"
-    benchmark: "benchmarks/maxbin/{project}__{sample}.txt"
+        bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/maxbin"
+    benchmark: "benchmarks/maxbin/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/maxbin.yaml"
     resources: cpus=16, mem_mb=20000, time_min=10080 # standard samples
     #resources: cpus=16, mem_mb=80000, time_min=10080 # coassembly
@@ -2583,14 +2708,14 @@ rule semibin:
         #"data/reference/semibin/.gtdb_downloaded",
         ref_db = "data/reference/semibin/gtdb",
         contigs = rules.rename_contigs.output.contigs,
-        bam_dir = "data/projects/{project}/metagenomes/{sample}/bins/bam"
+        bam_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bam"
     output:
-        out_dir = directory("data/projects/{project}/metagenomes/{sample}/bins/semibin"),
-        done = touch("data/projects/{project}/metagenomes/{sample}/bins/semibin/.done")
+        out_dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/semibin"),
+        done = touch("data/projects/{project}/{sample_type}/{sample}/bins/semibin/.done")
     params:
     conda: "config/conda_yaml/semibin.yaml"
-    benchmark: "benchmarks/semibin/{project}__{sample}.txt"
-    log: "logs/semibin/{project}__{sample}.log"
+    benchmark: "benchmarks/semibin/{sample_type}-{project}__{sample}.txt"
+    log: "logs/semibin/{sample_type}-{project}__{sample}.log"
     resources: cpus=16, mem_mb=170000, time_min=2880, mem_gb = 50 # standard samples
     #resources: cpus=32, mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
     shell:
@@ -2606,6 +2731,9 @@ rule semibin:
             -o {output.out_dir} | tee {log}
 
             #  --environment mouse_gut ## can only be used for single sample binning
+
+        # Fix permissions on outputs (by default only readable by owner)
+        find {output.out_dir} -type f -exec chmod g+r,o+r {{}} \; -o -type d -exec chmod g+rx,o+rx {{}} \;
         """
 
 rule run_semibin:
@@ -2615,13 +2743,13 @@ rule run_semibin:
 rule VAMB:
     input:
         contigs = rules.rename_contigs.output.contigs,
-        coverm_depth = "data/projects/{project}/metagenomes/{sample}/bins/metabat_style_contig_coverage.tsv"
+        coverm_depth = "data/projects/{project}/{sample_type}/{sample}/bins/metabat_style_contig_coverage.tsv"
     output:
-        outdir = directory("data/projects/{project}/metagenomes/{sample}/bins/VAMB")
+        outdir = directory("data/projects/{project}/{sample_type}/{sample}/bins/VAMB")
     #conda: "config/conda_yaml/VAMB.yaml"
     conda: "VAMB"
-    benchmark: "benchmarks/VAMB/{project}__{sample}.txt"
-    log: "logs/VAMB/{project}__{sample}.log"
+    benchmark: "benchmarks/VAMB/{sample_type}-{project}__{sample}.txt"
+    log: "logs/VAMB/{sample_type}-{project}__{sample}.log"
     #resources: cpus=1, mem_mb=40000, time_min=1440, partition = "gpu", gpu = 1 #standard samples
     resources: cpus=1, mem_mb=120000, time_min=1440, partition = "gpu", gpu = 1 #coassembly
     shell:
@@ -2632,9 +2760,9 @@ rule VAMB:
 rule format_coverage_for_metadecoder:
     input:
         script = "code/make_metadecoder_coverage.R",
-        coverage = "data/projects/{project}/metagenomes/{sample}/bins/contig_coverage.tsv",
+        coverage = "data/projects/{project}/{sample_type}/{sample}/bins/contig_coverage.tsv",
         contigs = rules.rename_contigs.output.contigs
-    output: "data/projects/{project}/metagenomes/{sample}/bins/metadecoder/coverage.tsv"
+    output: "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/coverage.tsv"
     singularity: "docker://eandersk/r_microbiome"
     resources: cpus=1, mem_mb = 50000, time_min=360 # standard samples
     #resources: cpus=1, mem_mb = 140000, time_min=2000 # coassembly
@@ -2648,18 +2776,18 @@ rule format_coverage_for_metadecoder:
 rule metadecoder:
     input:
         contigs = rules.rename_contigs.output.contigs,
-        coverage = "data/projects/{project}/metagenomes/{sample}/bins/metadecoder/coverage.tsv"
+        coverage = "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/coverage.tsv"
     output:
-        touch("data/projects/{project}/metagenomes/{sample}/bins/metadecoder/.done"),
-        seed = "data/projects/{project}/metagenomes/{sample}/bins/metadecoder/seed.txt",
-        bins_dir = directory("data/projects/{project}/metagenomes/{sample}/bins/metadecoder/bins")
+        touch("data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/.done"),
+        seed = "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/seed.txt",
+        bins_dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/bins")
     params:
-        out_prefix = "data/projects/{project}/metagenomes/{sample}/bins/metadecoder/bins/{sample}"
+        out_prefix = "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/bins/{sample}"
     #conda: "config/conda_yaml/VAMB.yaml"
     conda: "metadecoder"
     shadow: "minimal"
-    benchmark: "benchmarks/metadecoder/{project}__{sample}.txt"
-    log: "logs/metadecoder/{project}__{sample}.log"
+    benchmark: "benchmarks/metadecoder/{sample_type}-{project}__{sample}.txt"
+    log: "logs/metadecoder/{sample_type}-{project}__{sample}.log"
     resources: cpus=1, mem_mb=150000, time_min=10080, partition = "gpu", gpu = 1 # standard samples
     #resources: cpus=1, mem_mb=160000, time_min=15080, partition = "gpu", gpu = 1 # coassembly
     shell:
@@ -2674,24 +2802,24 @@ rule metadecoder:
 
 rule standardize_bins:
     input:
-        "data/projects/{project}/metagenomes/{sample}/bins/CONCOCT/cut_contigs_10K.fa",
-        #"data/projects/{project}/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa",
-        "data/projects/{project}/metagenomes/{sample}/bins/semibin",
-        "data/projects/{project}/metagenomes/{sample}/bins/METABAT2/.done/",
-        "data/projects/{project}/metagenomes/{sample}/bins/maxbin/.done", 
-        "data/projects/{project}/metagenomes/{sample}/bins/VAMB",
-        "data/projects/{project}/metagenomes/{sample}/bins/metadecoder/.done",
+        "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/cut_contigs_10K.fa",
+        #"data/projects/{project}/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa",
+        "data/projects/{project}/{sample_type}/{sample}/bins/semibin",
+        "data/projects/{project}/{sample_type}/{sample}/bins/METABAT2/.done/",
+        "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/.done", 
+        "data/projects/{project}/{sample_type}/{sample}/bins/VAMB",
+        "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/.done",
         script = "code/standardize_bins.R",
-        #contig_info = "data/projects/{project}/metagenomes/{sample}/assembly/megahit_noNORM/contigs_info.tsv"
+        #contig_info = "data/projects/{project}/{sample_type}/{sample}/assembly/megahit_noNORM/contigs_info.tsv"
         assembly = rules.rename_contigs.output.contigs,
         contig_info = rules.rename_contigs.output.contig_info
     output: 
-        contig_bin_mapping = "data/projects/{project}/metagenomes/{sample}/bins/contig_bins.rds",
-        bin_info = "data/projects/{project}/metagenomes/{sample}/bins/bins_prelim_info.tsv",
-        bins_linked = "data/projects/{project}/metagenomes/{sample}/bins/all_raw_bins/.bins_linked"
+        contig_bin_mapping = "data/projects/{project}/{sample_type}/{sample}/bins/contig_bins.rds",
+        bin_info = "data/projects/{project}/{sample_type}/{sample}/bins/bins_prelim_info.tsv",
+        bins_linked = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/.bins_linked"
     params: 
         sample = "{sample}",
-        sample_dir = "data/projects/{project}/metagenomes/{sample}"
+        sample_dir = "data/projects/{project}/{sample_type}/{sample}"
     singularity: "docker://eandersk/r_microbiome"
     resources: cpus=1, mem_mb = 50000, time_min=360
     shell:
@@ -2702,12 +2830,12 @@ rule standardize_bins:
         """
 
 rule checkm_new_per_sample:
-    input: "data/projects/{project}/metagenomes/{sample}/bins/all_raw_bins/.bins_linked"
+    input: "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/.bins_linked"
     output:
-        results = "data/projects/{project}/metagenomes/{sample}/bins/all_raw_bins/checkm.txt"
+        results = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/checkm.txt"
     params:
-        in_dir = "data/projects/{project}/metagenomes/{sample}/bins/all_raw_bins",
-        out_dir = "data/projects/{project}/metagenomes/{sample}/bins/all_raw_bins/checkm"
+        in_dir = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins",
+        out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/checkm"
     conda: "config/conda_yaml/checkm.yaml"
     resources: cpus=16, mem_mb=80000, time_min=2880
     shell:
@@ -2718,21 +2846,21 @@ rule checkm_new_per_sample:
 
 rule make_das_and_drep_inputs:
     input:
-        "data/projects/{project}/metagenomes/{sample}/bins/all_raw_bins/.bins_linked",
-        "data/projects/{project}/metagenomes/{sample}/bins/all_raw_bins/checkm.txt",
-        contig_bin_mapping = "data/projects/{project}/metagenomes/{sample}/bins/contig_bins.rds",
+        "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/.bins_linked",
+        "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/checkm.txt",
+        contig_bin_mapping = "data/projects/{project}/{sample_type}/{sample}/bins/contig_bins.rds",
         script = "code/make_das_and_drep_inputs.R"
     output: 
-        metabat2_contigs = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/metabat2_contigs.tsv",
-        maxbin_contigs = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/maxbin_contigs.tsv",
-        concoct_contigs = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/concoct_contigs.tsv",
-        metadecoder_contigs = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/metadecoder_contigs.tsv",
-        semibin_contigs = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/semibin_contigs.tsv",
-        VAMB_contigs = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/VAMB_contigs.tsv",
-        drep_bin_info = "data/projects/{project}/metagenomes/{sample}/bins/bins_for_drep/genome_info.csv",
-        drep_bins_linked = "data/projects/{project}/metagenomes/{sample}/bins/bins_for_drep/.bins_linked"
+        drep_bin_info = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/genome_info.csv",
+        drep_bins_linked = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/.bins_linked"
     params: 
-        sample_dir = "data/projects/{project}/metagenomes/{sample}"
+        sample_dir = "data/projects/{project}/{sample_type}/{sample}",
+        metabat2_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/metabat2_contigs.tsv",
+        maxbin_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/maxbin_contigs.tsv",
+        concoct_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/concoct_contigs.tsv",
+        metadecoder_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/metadecoder_contigs.tsv",
+        semibin_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/semibin_contigs.tsv",
+        VAMB_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/VAMB_contigs.tsv"
     singularity: "docker://eandersk/r_microbiome"
     resources: cpus=1, mem_mb = 50000, time_min=360
     shell:
@@ -2743,13 +2871,13 @@ rule make_das_and_drep_inputs:
         """
 
 rule checkm_new:
-    #input: "data/omics/metagenomes/metagenome_bins/raw_combined_bins"
+    #input: "data/omics/{sample_type}/metagenome_bins/raw_combined_bins"
     output:
-        #dir = temp(directory("data/omics/metagenomes/metagenome_bins/raw_combined_bins")),
-        results = "data/projects/{project}/metagenomes/metagenome_bins/raw_combined_bins/checkm.txt"
+        #dir = temp(directory("data/omics/{sample_type}/metagenome_bins/raw_combined_bins")),
+        results = "data/projects/{project}/{sample_type}/metagenome_bins/raw_combined_bins/checkm.txt"
     params:
-        in_dir = "data/projects/{project}/metagenomes/metagenome_bins/raw_combined_bins",
-        out_dir = "data/projects/{project}/metagenomes/metagenome_bins/raw_combined_bins/checkm"
+        in_dir = "data/projects/{project}/{sample_type}/metagenome_bins/raw_combined_bins",
+        out_dir = "data/projects/{project}/{sample_type}/metagenome_bins/raw_combined_bins/checkm"
     conda: "config/conda_yaml/checkm.yaml"
     resources: cpus=24, mem_mb=120000, time_min=2880
     shell:
@@ -2761,30 +2889,30 @@ rule checkm_new:
 checkpoint dastool_new:
     input:
         contigs = rules.rename_contigs.output.contigs,
-        checkm_res = "data/projects/{project}/metagenomes/{sample}/bins/all_raw_bins/checkm.txt",
-        metabat2_contigs = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/metabat2_contigs.tsv",
-        maxbin_contigs = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/maxbin_contigs.tsv",
-        concoct_contigs = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/concoct_contigs.tsv",
-        metadecoder_contigs = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/metadecoder_contigs.tsv",
-        semibin_contigs = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/semibin_contigs.tsv",
-        VAMB_contigs = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/VAMB_contigs.tsv"
+        checkm_res = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/checkm.txt"
     params:
         bin_folder = rules.make_bins.params.out_dir,
-        das_prefix = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/output/{sample}"
+        das_prefix = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/output/{sample}",
+        metabat2_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/metabat2_contigs.tsv",
+        maxbin_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/maxbin_contigs.tsv",
+        concoct_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/concoct_contigs.tsv",
+        metadecoder_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/metadecoder_contigs.tsv",
+        semibin_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/semibin_contigs.tsv",
+        VAMB_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/VAMB_contigs.tsv"
     output: 
-        #summary = "data/projects/{project}/metagenomes/{sample}/bins/DASTool/_DASTool_summary.txt",
-        das_done = touch("data/projects/{project}/metagenomes/{sample}/bins/das_tool/.done"),
-        #das_bins_folder = directory("data/omics/metagenomes/{sample}/bins/das_tool/output/_DASTool_bins")
+        #summary = "data/projects/{project}/{sample_type}/{sample}/bins/DASTool/_DASTool_summary.txt",
+        das_done = touch("data/projects/{project}/{sample_type}/{sample}/bins/das_tool/.done"),
+        #das_bins_folder = directory("data/omics/{sample_type}/{sample}/bins/das_tool/output/_DASTool_bins")
     conda: "config/conda_yaml/das_tool.yaml"
-    benchmark: "benchmarks/dastool/{project}__{sample}.txt"
-    log: "logs/dastool/{project}__{sample}.log"
+    benchmark: "benchmarks/dastool/{sample_type}-{project}__{sample}.txt"
+    log: "logs/dastool/{sample_type}-{project}__{sample}.log"
     resources: cpus=8, mem_mb=50000, time_min=2880, mem_gb = 50
     shell:
         """
         mkdir -p $(dirname {params.das_prefix})
         
         DAS_Tool \
-            -i {input.metabat2_contigs},{input.maxbin_contigs},{input.concoct_contigs},{input.metadecoder_contigs},{input.semibin_contigs},{input.VAMB_contigs} \
+            -i {params.metabat2_contigs},{params.maxbin_contigs},{params.concoct_contigs},{params.metadecoder_contigs},{params.semibin_contigs},{params.VAMB_contigs} \
             -c {input.contigs} \
             -o {params.das_prefix} \
             -l metabat2,maxbin,concoct,metadecoder,semibin,VAMB \
@@ -2796,17 +2924,17 @@ checkpoint dastool_new:
 
 rule drep_new:
     input: 
-        "data/projects/{project}/metagenomes/{sample}/bins/bins_for_drep/.bins_linked"
+        "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/.bins_linked"
     output:
-        touch("data/projects/{project}/metagenomes/{sample}/bins/.drep_done")
+        touch("data/projects/{project}/{sample_type}/{sample}/bins/.drep_done")
     params:
-        bins_linked = "data/projects/{project}/metagenomes/{sample}/bins/bins_for_drep/.bins_linked",
-        input_bins = "data/projects/{project}/metagenomes/{sample}/bins/bins_for_drep/*.fa",
-        genome_info = "data/projects/{project}/metagenomes/{sample}/bins/bins_for_drep/genome_info.csv", # Will need to be moved to inputs 
-        main_dir = directory("data/projects/{project}/metagenomes/{sample}/bins/drep/"),
-        MAGs= directory("data/projects/{project}/metagenomes/metagenome_bins/derep/dereplicated_genomes")
+        bins_linked = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/.bins_linked",
+        input_bins = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/*.fa",
+        genome_info = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/genome_info.csv", # Will need to be moved to inputs 
+        main_dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/drep/"),
+        MAGs= directory("data/projects/{project}/{sample_type}/metagenome_bins/derep/dereplicated_genomes")
     conda: "config/conda_yaml/drep.yaml"
-    benchmark: "benchmarks/drep/{project}__{sample}.txt"
+    benchmark: "benchmarks/drep/{sample_type}-{project}__{sample}.txt"
     resources: cpus=8, mem_mb=150000, time_min=2880
     shell:
         """
@@ -2832,18 +2960,18 @@ rule run_drep_sep:
 
 rule GTDB:
     input:
-        "data/projects/{project}/metagenomes/{sample}/bins/bins_for_drep/.bins_linked",
+        "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/.bins_linked",
         #"/home/kiledal/geomicro_home/references/.done_gtdb_refs_downloaded"
     params:
-        input_bin_dir = "data/projects/{project}/metagenomes/{sample}/bins/bins_for_drep",
+        input_bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep",
         refs = "/home/kiledal/GVHD/data/reference/GTDBtk/release207_v2",
-        out_dir = "data/projects/{project}/metagenomes/{sample}/bins/GTDB",
+        out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/GTDB",
         pplacer_cpus = 1
     output:
-        done = touch("data/projects/{project}/metagenomes/{sample}/bins/.done_GTDB")
+        done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.done_GTDB")
     conda: "config/conda_yaml/gtdbtk.yaml"
-    benchmark: "benchmarks/GTDB/{project}__{sample}.txt"
-    log: "logs/GTDB/{project}__{sample}.log"
+    benchmark: "benchmarks/GTDB/{sample_type}-{project}__{sample}.txt"
+    log: "logs/GTDB/{sample_type}-{project}__{sample}.log"
     resources: cpus=24, mem_mb=120000, time_min=2880
     shell:
         """
@@ -2865,18 +2993,18 @@ rule gunc_GTDB_db_download:
 
 rule gunc:
     input:
-        "data/projects/{project}/metagenomes/{sample}/bins/bins_for_drep/.bins_linked",
+        "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/.bins_linked",
         ref_file = "data/reference/gunc_gtdb/gunc_db_gtdb95.dmnd",
         ref_dir = "data/reference/gunc_gtdb"
     output: 
-        done = touch("data/projects/{project}/metagenomes/{sample}/bins/.done_gunc")
+        done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.done_gunc")
     params: 
-        bin_dir = "data/projects/{project}/metagenomes/{sample}/bins/bins_for_drep",
-        out_dir = "data/projects/{project}/metagenomes/{sample}/bins/gunc"
+        bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep",
+        out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/gunc"
     resources: cpus = 24, mem_mb = 120000, time_min = 2880
     conda: "config/conda_yaml/gunc.yaml"
-    benchmark: "benchmarks/gunc/{project}__{sample}.txt"
-    log: "logs/gunc/{project}__{sample}.log"
+    benchmark: "benchmarks/gunc/{sample_type}-{project}__{sample}.txt"
+    log: "logs/gunc/{sample_type}-{project}__{sample}.log"
     shell:
         """
         mkdir -p {params.out_dir}
@@ -2891,15 +3019,15 @@ rule gunc:
 
 rule kofam_scan_bins:
     input:
-        genes = "data/omics/metagenomes/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/prodigal/{bin}.faa",
+        genes = "data/omics/{sample_type}/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/prodigal/{bin}.faa",
         profile = "data/reference/kegg/kofamscan/profiles",
         ko_list = "data/reference/kegg/kofamscan/ko_list"
     output:
-        ko_annot = "data/omics/metagenomes/coassembly/bins/kofamscan/{bin}_kofam_results.txt"
+        ko_annot = "data/omics/{sample_type}/coassembly/bins/kofamscan/{bin}_kofam_results.txt"
     conda: "config/conda_yaml/kofamscan.yaml"
     #shadow: "shallow"
-    benchmark: "benchmarks/kofamscan/{bin}.txt"
-    log: "logs/kofamscan/{bin}.log"
+    benchmark: "benchmarks/kofamscan/{sample_type}-{bin}.txt"
+    log: "logs/kofamscan/{sample_type}-{bin}.log"
     resources: cpus=12, time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 50000
     shell:
         """
@@ -2918,18 +3046,18 @@ rule run_kofam_scan_bins:
 
 rule traitar:
     input:
-        #bin_genes = expand("data/omics/metagenomes/metagenome_bins/prodigal/{bin}.faa", bin = glob_wildcards("data/omics/metagenomes/metagenome_bins/{BIN,[^/]+}.fa").BIN),
+        #bin_genes = expand("data/omics/{sample_type}/metagenome_bins/prodigal/{bin}.faa", bin = glob_wildcards("data/omics/{sample_type}/metagenome_bins/{BIN,[^/]+}.fa").BIN),
         pfam_db = "data/reference/traitar_pfamDB",
-        #bin_dir = "data/omics/metagenomes/metagenome_bins",
-        sample_file = "data/omics/metagenomes/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/traitar_sample_list.tsv"
+        #bin_dir = "data/omics/{sample_type}/metagenome_bins",
+        sample_file = "data/omics/{sample_type}/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/traitar_sample_list.tsv"
     params:
-        bin_dir = "data/omics/metagenomes/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes",
-        gene_dir = "data/omics/metagenomes/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/prodigal",
-        out_dir = "data/omics/metagenomes/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/traitar"
+        bin_dir = "data/omics/{sample_type}/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes",
+        gene_dir = "data/omics/{sample_type}/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/prodigal",
+        out_dir = "data/omics/{sample_type}/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/traitar"
     output: 
-        #directory("data/omics/metagenomes/metagenome_bins/traitar")
-        touch("data/omics/metagenomes/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/traitar/.done")
-    benchmark: "logs/traitar_coassembly/benchmark.txt"
+        #directory("data/omics/{sample_type}/metagenome_bins/traitar")
+        touch("data/omics/{sample_type}/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/traitar/.done")
+    benchmark: "logs/traitar_coassembly/{sample_type}-benchmark.txt"
     container: "library://a_gihawi/traitar3/traitar3"
     resources: cpus = 16, mem_mb = 170000, time_min=20000 #, partition = "largemem"
     shell:
@@ -2945,10 +3073,10 @@ rule traitar:
 
 rule prodigal_mags_DREP:
     input:
-        bin = "data/omics/metagenomes/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/{bin}.fa"
+        bin = "data/omics/{sample_type}/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/{bin}.fa"
     output: 
-        proteins = "data/omics/metagenomes/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/prodigal/{bin}.faa",
-        genes = "data/omics/metagenomes/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/prodigal/{bin}.gff"
+        proteins = "data/omics/{sample_type}/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/prodigal/{bin}.faa",
+        genes = "data/omics/{sample_type}/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/prodigal/{bin}.gff"
     conda: "config/conda_yaml/main.yaml"
     resources: cpus = 1, mem_mb = 10000
     shell:
@@ -2961,10 +3089,10 @@ rule run_prodigal_mags_DREP:
 
 rule prodigal_MAGs:
     input:
-        genome = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/output/{sample}_DASTool_bins/{genome}.fa"
+        genome = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/output/{sample}_DASTool_bins/{genome}.fa"
     output: 
-        proteins = "data/projects/{project}/metagenomes/{sample}/bins/prodigal/{genome}.faa",
-        genes = "data/projects/{project}/metagenomes/{sample}/bins/prodigal/{genome}.gff"
+        proteins = "data/projects/{project}/{sample_type}/{sample}/bins/prodigal/{genome}.faa",
+        genes = "data/projects/{project}/{sample_type}/{sample}/bins/prodigal/{genome}.gff"
     conda: "config/conda_yaml/main.yaml"
     resources: cpus = 1, mem_mb = 10000
     shell:
@@ -2974,14 +3102,14 @@ rule prodigal_MAGs:
 
 rule bakta:
     input:
-        genome = "data/projects/{project}/metagenomes/{sample}/bins/das_tool/output/{sample}_DASTool_bins/{genome}.fa"
+        genome = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/output/{sample}_DASTool_bins/{genome}.fa"
     output:
-        dir = directory("data/projects/{project}/metagenomes/{sample}/bins/bakta/{genome}")
+        dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}")
     params:
         db = "data/reference/bakta/db"
     conda: "config/conda_yaml/bakta.yaml"
-    log: "logs/bakta/{project}__{sample}__{genome}.tsv"
-    benchmark: "benchmarks/bakta/{project}__{sample}__{genome}.tsv"
+    log: "logs/bakta/{sample_type}-{project}__{sample}__{genome}.tsv"
+    benchmark: "benchmarks/bakta/{sample_type}-{project}__{sample}__{genome}.tsv"
     resources: cpus=8, mem_mb=32000, time_min=5000, 
     shell:
         """
@@ -2991,7 +3119,7 @@ rule bakta:
             {input.genome} | tee {log}
         """
 
-import pandas as pd
+
 bakta_df = pd.read_table('data/projects/2022_geomicro_JGI_CSP/metagenomes/bakta_dirs.tsv').set_index("bakta_dir", drop=False)
 bakta_genome_names = list(bakta_df['bakta_dir'])
 
@@ -3022,17 +3150,17 @@ rule run_bakta_dynamic:
 
 rule antismash:
     input:
-        #dir = "data/projects/{project}/metagenomes/{sample}/bins/bakta/{genome}",
-        gff = "data/projects/{project}/metagenomes/{sample}/bins/prodigal/{genome}.gff"
-        #genome = "data/projects/{project}/metagenomes/{sample}/bins/bakta/{genome}/{genome}.gbff"
+        #dir = "data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}",
+        gff = "data/projects/{project}/{sample_type}/{sample}/bins/prodigal/{genome}.gff"
+        #genome = "data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}/{genome}.gbff"
     output:
-        dir = directory("data/projects/{project}/metagenomes/{sample}/bins/antismash/{genome}")
+        dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/antismash/{genome}")
     params:
         db = "data/reference/antismash",
-        genome = "data/projects/{project}/metagenomes/{sample}/bins/bakta/{genome}/{genome}.gbff"
+        genome = "data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}/{genome}.gbff"
     conda: "config/conda_yaml/antismash.yaml"
-    log: "logs/antismash/{project}__{sample}__{genome}.tsv"
-    benchmark: "benchmarks/antismash/{project}__{sample}__{genome}.tsv"
+    log: "logs/antismash/{sample_type}-{project}__{sample}__{genome}.tsv"
+    benchmark: "benchmarks/antismash/{sample_type}-{project}__{sample}__{genome}.tsv"
     resources: cpus=8, mem_mb=10000, time_min=5000, 
     shell:
         """
@@ -3083,18 +3211,18 @@ rule setup_bigscape:
 
 rule bigscape:
     input: 
-        antismash_gbk_dir = "data/projects/{project}/metagenomes/coassembly/bins/bigscape/input_gbks",
+        antismash_gbk_dir = "data/projects/{project}/{sample_type}/coassembly/bins/bigscape/input_gbks",
         db = "data/reference/bigscape",
         bigscape_repo = "data/reference/BiG-SCAPE"
     output:
-        #dir = directory("data/projects/{project}/metagenomes/coassembly/bins/bigscape/output")
-        done = touch("data/projects/{project}/metagenomes/coassembly/bins/bigscape/.done")
+        #dir = directory("data/projects/{project}/{sample_type}/coassembly/bins/bigscape/output")
+        done = touch("data/projects/{project}/{sample_type}/coassembly/bins/bigscape/.done")
     params:
-        dir = "data/projects/{project}/metagenomes/coassembly/bins/bigscape/output"
+        dir = "data/projects/{project}/{sample_type}/coassembly/bins/bigscape/output"
     conda: "config/conda_yaml/bigscape.yaml"
     #singularity: "docker://eandersk/big-scape"
-    log: "logs/bigscape/{project}.log"
-    benchmark: "benchmarks/bigscape/{project}.tsv"
+    log: "logs/bigscape/{sample_type}-{project}.log"
+    benchmark: "benchmarks/bigscape/{sample_type}-{project}.tsv"
     resources: cpus=24, mem_mb=100000, time_min=20000
     shell:
         """
@@ -3117,15 +3245,15 @@ rule annotate_bins:
 
 rule bakta_assembly:
     input:
-        genome = "data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.fa",
+        genome = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.fa",
         proteins = rules.prodigal.output.proteins
     output:
-        dir = directory("data/omics/metagenomes/{sample}/bakta_assembly")
+        dir = directory("data/omics/{sample_type}/{sample}/bakta_assembly")
     params:
         db = "data/reference/bakta/db"
     conda: "config/conda_yaml/bakta.yaml"
-    log: "logs/bakta_assembly/{sample}.tsv"
-    benchmark: "benchmarks/bakta_assembly/{sample}.tsv"
+    log: "logs/bakta_assembly/{sample_type}-{sample}.tsv"
+    benchmark: "benchmarks/bakta_assembly/{sample_type}-{sample}.tsv"
     resources: cpus=16, mem_mb=120000, time_min=10000, 
     shell:
         """
@@ -3138,17 +3266,17 @@ rule bakta_assembly:
 
 rule antismash_assembly:
     input:
-        #"data/omics/metagenomes/{sample}/bakta_assembly",
-        genome = "data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.fa",
-        #gbk = "data/omics/metagenomes/{sample}/genes/{sample}_GENES.gbk"
+        #"data/omics/{sample_type}/{sample}/bakta_assembly",
+        genome = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.fa",
+        #gbk = "data/omics/{sample_type}/{sample}/genes/{sample}_GENES.gbk"
     output:
-        dir = directory("data/omics/metagenomes/{sample}/antismash_assembly")
+        dir = directory("data/omics/{sample_type}/{sample}/antismash_assembly")
     params:
         db = "data/reference/antismash",
-        #genome = "data/omics/metagenomes/{sample}/bakta_assembly/{sample}.gbff"
+        #genome = "data/omics/{sample_type}/{sample}/bakta_assembly/{sample}.gbff"
     conda: "config/conda_yaml/antismash.yaml"
-    log: "logs/antismash_assembly/{sample}.tsv"
-    benchmark: "benchmarks/antismash_assembly/{sample}.tsv"
+    log: "logs/antismash_assembly/{sample_type}-{sample}.tsv"
+    benchmark: "benchmarks/antismash_assembly/{sample_type}-{sample}.tsv"
     resources: cpus=8, mem_mb=90000, time_min=20000
     shell:
         """
