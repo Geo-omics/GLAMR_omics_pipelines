@@ -32,18 +32,24 @@ localrules: make_rulegraph, link_reads_w_sample_names
 # Get sample names
 start_time = time.time() # for testing how long it takes to parse out names
 
-metaG_samples = glob_wildcards("data/omics/metagenomes/{sample}/reads", followlinks=True).sample
-all_metaG_samples = glob_wildcards("data/omics/metagenomes/{sample}/reads", followlinks=True).sample
-assembled_samples = glob_wildcards("data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.fa", followlinks=True).sample
-qcd_samples = glob_wildcards("data/omics/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz", followlinks=True).sample
-qcd_samples = list(filter(lambda x: x.startswith('samp_'), qcd_samples))
-qcd_transcript_samples = glob_wildcards("data/omics/metatranscriptomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz", followlinks=True).sample
-qcd_transcript_samples = list(filter(lambda x: x.startswith('samp_'), qcd_transcript_samples))
-#metaG_samples = "jgi_coassembly"
-#jgi_samples = glob_wildcards("import/staging/jgi_2022/all_sample_filtered_reads/{sample}_interleaved.fastq.gz").sample
-jgi_samples = glob_wildcards("data/projects/2022_geomicro_JGI_CSP/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz", followlinks=True).sample
-glerl_samples = glob_wildcards("data/projects/GLERL_USGS_2016_2020/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz", followlinks=True).sample
-transect_samples = glob_wildcards("data/projects/WLE_transects_2022/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz", followlinks=True).sample
+metaG_samples = open("data/sample_metadata/sample_lists/metaG_samples").read().splitlines()
+all_metaG_samples = open("data/sample_metadata/sample_lists/all_metaG_samples").read().splitlines()
+assembled_samples = open("data/sample_metadata/sample_lists/assembled_samples").read().splitlines()
+qcd_samples = open("data/sample_metadata/sample_lists/qcd_samples").read().splitlines()
+qcd_transcript_samples = open("data/sample_metadata/sample_lists/qcd_transcript_samples").read().splitlines()
+jgi_samples = open("data/sample_metadata/sample_lists/jgi_samples").read().splitlines()
+glerl_samples = open("data/sample_metadata/sample_lists/glerl_samples").read().splitlines()
+transect_samples = open("data/sample_metadata/sample_lists/transect_samples").read().splitlines()
+quast_samples = open("data/sample_metadata/sample_lists/quast_samples").read().splitlines()
+read_download_samples = open("data/sample_metadata/sample_lists/read_download_samples").read().splitlines()
+read_download_transcript_samples = open("data/sample_metadata/sample_lists/read_download_transcript_samples").read().splitlines()
+read_download_amplicon_samples = open("data/sample_metadata/sample_lists/read_download_amplicon_samples").read().splitlines()
+metaT_samples = open("data/sample_metadata/sample_lists/metaT_samples").read().splitlines()
+metabolome_samples = open("data/sample_metadata/sample_lists/metabolome_samples").read().splitlines()
+amplicon_samples = open("data/sample_metadata/sample_lists/amplicon_samples").read().splitlines()
+seagull_samples = open("data/sample_metadata/size_sorted_HABs_samples_Seagull.tsv").read().splitlines()
+
+# Old items
 #metaG_samples = glob_wildcards("data/projects/2022_geomicro_JGI_CSP/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz", followlinks=True).sample
 #metaG_samples = os.popen("ls data/projects/PRJNA702522/metagenomes/").read().splitlines() #+ os.popen("ls data/projects/PRJNA679730/metagenomes/").read().splitlines() #ESP 2018 & 19
 #metaG_samples = os.popen("ls data/projects/PRJNA702522/metagenomes/").read().splitlines() #ESP1
@@ -52,15 +58,6 @@ transect_samples = glob_wildcards("data/projects/WLE_transects_2022/metagenomes/
 #metaG_samples = glob_wildcards("data/projects/2022_geomicro_JGI_CSP/metagenomes/{sample}/").sample
 #metaG_samples = glob_wildcards("data/projects/PRJNA464361/metagenomes/{sample}/").sample
 #metaG_samples = ["E20212019","E20212012","E20212013","E20212010"]
-quast_samples = glob_wildcards("data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.fa", followlinks=True).sample
-read_download_samples = glob_wildcards("data/omics/metagenomes/{sample}/reads/accession", followlinks=True).sample
-read_download_transcript_samples = glob_wildcards("data/omics/metatranscriptomes/{sample}/reads/accession", followlinks=True).sample
-read_download_amplicon_samples = glob_wildcards("data/omics/amplicons/{sample}/reads/accession", followlinks=True).sample
-metaT_samples = glob_wildcards("data/omics/metatranscriptomes/{sample}/", followlinks=True).sample
-metabolome_samples = glob_wildcards("data/omics/metabolomes/{sample}/", followlinks=True).sample
-amplicon_samples = glob_wildcards("data/omics/amplicons/{sample}/", followlinks=True).sample
-# seagull_samples = pd.read_table('data/sample_metadata/size_sorted_HABs_samples_Seagull.tsv',header=None, names=["SampleID"]).set_index("SampleID", drop=False)
-seagull_samples = open("data/sample_metadata/size_sorted_HABs_samples_Seagull.tsv").read().splitlines()
 
 end_time = time.time() # Record end of name parsing
 execution_time = end_time - start_time
@@ -104,7 +101,7 @@ rule lauren_assembly_and_BGC_test:
         expand("data/omics/metagenomes/{sample}/assembly/metaspades/contigs.fasta",sample = glerl_samples + jgi_samples + transect_samples),
         expand("data/omics/metagenomes/{sample}/assembly/megahit/final.contigs.fa",sample = glerl_samples + jgi_samples + transect_samples),
         expand("data/omics/metagenomes/{sample}/assembly/metaspades_noNORM/contigs.fasta",sample = glerl_samples + jgi_samples + transect_samples),
-        expand("data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.fa",sample = glerl_samples + jgi_samples + transect_samples),
+        #expand("data/omics/metagenomes/{sample}/assembly/megahit_noNORM/final.contigs.fa",sample = glerl_samples + jgi_samples + transect_samples),
         expand("data/omics/metagenomes/{sample}/assembly/biosyntheticSPAdes/scaffolds.fasta", sample = glerl_samples + jgi_samples + transect_samples),
         expand("data/omics/metagenomes/{sample}/assembly/biosyntheticSPAdes_100x/scaffolds.fasta", sample = glerl_samples + jgi_samples + transect_samples)
 
@@ -2743,18 +2740,27 @@ rule run_semibin:
 rule VAMB:
     input:
         contigs = rules.rename_contigs.output.contigs,
-        coverm_depth = "data/projects/{project}/{sample_type}/{sample}/bins/metabat_style_contig_coverage.tsv"
+        #coverm_depth = "data/projects/{project}/{sample_type}/{sample}/bins/metabat_style_contig_coverage.tsv"
+        bam_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bam"
     output:
         outdir = directory("data/projects/{project}/{sample_type}/{sample}/bins/VAMB")
     #conda: "config/conda_yaml/VAMB.yaml"
-    conda: "VAMB"
+    params:
+        bam_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bam" # Should be switched to input after fixing samples that need to be fixed
+    conda: "vamb"
     benchmark: "benchmarks/VAMB/{sample_type}-{project}__{sample}.txt"
     log: "logs/VAMB/{sample_type}-{project}__{sample}.log"
     #resources: cpus=1, mem_mb=40000, time_min=1440, partition = "gpu", gpu = 1 #standard samples
     resources: cpus=1, mem_mb=120000, time_min=1440, partition = "gpu", gpu = 1 #coassembly
     shell:
         """
-        vamb -o _ --outdir {output.outdir} --fasta {input.contigs} --jgi {input.coverm_depth} --minfasta 200000 --cuda
+        vamb -o _ \
+            --outdir {output.outdir} \
+            --fasta {input.contigs} \
+            --bamfiles {params.bam_dir} \
+            --minfasta 200000 \
+            --model vae-aae \
+            --cuda
         """
 
 rule format_coverage_for_metadecoder:
