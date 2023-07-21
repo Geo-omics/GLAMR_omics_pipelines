@@ -91,23 +91,25 @@ bin_dirs %>% map(., dir.create)
 
 
 # Link standardized bins to collection dir in sample folders
-suppressWarnings(file.link(bins_for_drep$per_sample_combined_path, bins_for_drep$drep_input_bin_path))
+tryCatch({
+  suppressWarnings(file.link(bins_for_drep$per_sample_combined_path, bins_for_drep$drep_input_bin_path))
+}, error = function(e) {
+  # Print the error message, but continue execution
+  cat("Error occurred (likely no good bins), but continuing...\n")
+  message(e)
+})
 
 # Write out .touch saying bins are linked for snakemake
 sample %>% paste0("data/omics/metagenomes/",.,"/bins/bins_for_drep/.bins_linked") %>% file.remove()
 sample %>% paste0("data/omics/metagenomes/",.,"/bins/bins_for_drep/.bins_linked") %>% file.create()
 
-#Crete genome info files to prevent rerunning checkM unncescesarily
+#Crete genome info files to prevent rerunning checkM unnecessarily
 
 all_genome_info <- bins_for_drep %>% 
   select(genome = "new_bin_name",
          completeness = "Completeness",
          contamination = "Contamination", sample) %>% 
-  mutate(genome = paste0(genome,".fa"))
-
-for (samp in unique(all_genome_info$sample)){
-  all_genome_info %>% 
-    filter(sample == samp) %>% 
-    select(-sample) %>% 
-    write_csv(glue::glue("{arguments$sample_dir}/bins/bins_for_drep/genome_info.csv"))
-}
+  mutate(genome = paste0(genome,".fa")) %>% 
+  filter(sample == sample) %>% 
+  select(-sample) %>% 
+  write_csv(glue::glue("{arguments$sample_dir}/bins/bins_for_drep/genome_info.csv"))
