@@ -1,8 +1,18 @@
 #!/usr/bin/env Rscript
 
+# This script creates a log of samples imported into GLAMR. Where possible, it sources information 
+# from logs created at the time samples are actually imported, but also attempts to discern this information
+# from sample directories for samples which were imported without expected logging.
+# 
+# This script is run daily via CRON on Alpena; a new log should only be produced when changes are identified.
+# Crontab entry: 30 0 * * * /bin/bash -c "singularity run docker://eandersk/r_microbiome /geomicro/data2/kiledal/GLAMR/code/check_import_status.R >> /geomicro/data2/kiledal/GLAMR/logs/check_import_status/$(date +\%Y\%m\%d).log 2>&1"
+
+message(str_glue("Started at {now()}"))
+
+# Requires tidyverse tools and unglue package. Typically run w/ Docker image with dependencies.
 suppressMessages(library(tidyverse))
 
-setwd("~/GLAMR")
+setwd("/geomicro/data2/kiledal/GLAMR")
 
 # Read in sample and study table downloaded from Google Drive
 samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples",guess_max = 3000)
@@ -41,8 +51,51 @@ suppressMessages(imported_samples <- Sys.glob("data/omics/*/*") %>% # list sampl
   left_join(samples %>% select(SampleID, StudyID, ProjectID)) %>% 
   relocate(SampleID, StudyID, ProjectID, sample_type, sample_dir, 
            imported_from, import_success, import_time, imported_reads_fp) %>% 
-  write_tsv(str_glue('data/import_logs/{format(now(), "%Y%m%d")}_sample_status.tsv'))
+    arrange(across(everything())) %>% 
+    write_tsv(str_glue('/tmp/{format(now(), "%Y%m%d")}_sample_status.tsv')) # write log to /tmp
 )
 
 message(str_glue("Found {length(unique(imported_samples$SampleID))} sample directories, of which {length(unique(imported_samples %>% filter(import_success == TRUE) %>% pull(SampleID)))} were succesfully imported"))
+
+# Find previous logs
+suppressMessages(
+  prev_logs <- Sys.glob("data/import_logs/*_sample_status.tsv") %>% 
+    data.frame(path = .) %>% 
+    unglue::unglue_unnest(path, "data/import_logs/{date}_sample_status.tsv",remove = FALSE) %>% 
+    mutate(date = lubridate::ymd(date))
+)
+  
+# Read in the most recent log
+suppressMessages(
+  most_recent_log <- prev_logs %>% 
+    slice_max(order_by = date, n=1, with_ties = FALSE) %>% 
+    pull(path) %>% 
+    read_tsv() %>% 
+    arrange(across(everything()))
+)
+
+# Read in current log to match processing w/ previous logs
+suppressMessages(
+  current_log <- read_tsv(str_glue('/tmp/{format(now(), "%Y%m%d")}_sample_status.tsv')) %>% 
+    arrange(across(everything()))
+)
+
+# Check if current log is the same as the last exported
+log_changed = all.equal(most_recent_log, current_log)
+
+# If new log is different, move it to import log directory, otherwise delete
+
+if (!log_changed) {
+  
+  fs::file_move(str_glue('/tmp/{format(now(), "%Y%m%d")}_sample_status.tsv'), 
+                str_glue('data/import_logs/{format(now(), "%Y%m%d")}_sample_status.tsv'))
+  
+  message(str_glue("New changes detected since {max(prev_logs$date)}, writing new import log."))
+
+  } else {
+  
+    fs::file_delete(str_glue('/tmp/{format(now(), "%Y%m%d")}_sample_status.tsv'))
+    message(str_glue("No new changes detected since {max(prev_logs$date)}, no new log written."))
+                  
+}
 
