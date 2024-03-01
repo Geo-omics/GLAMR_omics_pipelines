@@ -3,6 +3,5 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - drep=3.2.0
-  - checkm-genome=1.1.3
-  - pandas=1.5.1
+  - concoct=1.1.0
+  - scikit-learn=1.1

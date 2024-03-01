@@ -1,6 +1,6 @@
 channels:
+  - defaults
   - bioconda
   - conda-forge
-  - defaults
 dependencies:
-  - das_tool=1.1.4
+  - sourmash=4.8.4

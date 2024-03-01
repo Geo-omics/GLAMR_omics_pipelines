@@ -1,0 +1,9 @@
+channels:
+  - defaults
+  - bioconda
+  - conda-forge
+dependencies:
+  - bwa-mem2=2.2.1
+  - samtools=1.15
+  - augustus=3.5.0
+  - minimap2=2.24

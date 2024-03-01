@@ -1,0 +1,33 @@
+name: VAMB
+channels:
+  - defaults
+dependencies:
+  - _libgcc_mutex=0.1
+  - _openmp_mutex=5.1
+  - bzip2=1.0.8
+  - ca-certificates=2022.07.19
+  - certifi=2022.6.15
+  - ld_impl_linux-64=2.38
+  - libffi=3.3
+  - libgcc-ng=11.2.0
+  - libgomp=11.2.0
+  - libstdcxx-ng=11.2.0
+  - libuuid=1.0.3
+  - ncurses=6.3
+  - openssl=1.1.1q
+  - pip=22.1.2
+  - python=3.10.4
+  - readline=8.1.2
+  - setuptools=63.4.1
+  - sqlite=3.39.2
+  - tk=8.6.12
+  - tzdata=2022a
+  - wheel=0.37.1
+  - xz=5.2.5
+  - zlib=1.2.12
+  - pip:
+    - numpy==1.23.2
+    - pysam==0.19.1
+    - torch==1.12.1
+    - typing-extensions==4.3.0
+    - vamb==3.0.8

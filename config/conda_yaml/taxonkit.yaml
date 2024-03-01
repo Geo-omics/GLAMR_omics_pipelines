@@ -1,0 +1,9 @@
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+  - knights-lab
+  - biobakery
+dependencies:
+  - taxonkit=0.10.1
+  - csvtk=0.23.0

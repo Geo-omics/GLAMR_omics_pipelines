@@ -3,4 +3,4 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - checkm-genome=1.2.2
+  - multiqc=1.13a

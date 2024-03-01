@@ -1,6 +1,6 @@
 channels:
-  - conda-forge
   - bioconda
   - defaults
+  - conda-forge
 dependencies:
-  - checkm-genome=1.2.2
+  - gunc=1.0.5

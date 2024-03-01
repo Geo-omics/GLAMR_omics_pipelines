@@ -1,6 +1,7 @@
 channels:
+  - biobakery
   - conda-forge
   - bioconda
   - defaults
 dependencies:
-  - checkm-genome=1.2.2
+  - humann=3.0.0

@@ -1,6 +1,7 @@
 channels:
+  - defaults
   - bioconda
   - conda-forge
-  - defaults
 dependencies:
-  - das_tool=1.1.4
+  - kraken2=2.1.2
+  - bracken=2.6.1
