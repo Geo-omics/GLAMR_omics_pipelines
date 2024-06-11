@@ -1,0 +1,1163 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = here::here())
+library(tidyverse)
+library(googlesheets4)
+library(googledrive)
+library(DBI)
+
+conflicted::conflicts_prefer(dplyr::select(), dplyr::rename(), dplyr::filter(), dplyr::lag())
+
+# Open database connection
+pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "localhost", port = "5432", user = "glamr_admin", password = "glamr2023")
+```
+
+#### Load sample data
+
+Get the latest table from google drive
+```{r}
+as_id("https://docs.google.com/spreadsheets/d/1z2IajV0Ay1lRjH9d0ibNBuf8PY0IbtEz/edit#gid=349037648") %>% 
+  drive_download("import/Great_Lakes_Omics_Datasets.xlsx",overwrite = TRUE)
+```
+
+
+```{r}
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples",guess_max = 3000)
+studies <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "studiesdatasets",range = "A1:R1000")
+defined_sites <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "sampling_sites") %>% filter(!is.na(lat))
+units_and_notes <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "metadata_units_and_notes")
+```
+
+#### Write sample information to postgres database
+```{r}
+# Clean up sample table from excel 
+cleaned_up_sample_table <- samples %>% 
+  mutate(date = lubridate::ymd(collection_date),
+         date = if_else(is.na(date), lubridate::ymd_hms(collection_date), date),
+         date = if_else(is.na(date), lubridate::ymd_hm(collection_date), date),
+         date_same_year = lubridate::`year<-`(date,2000),
+         year = lubridate::year(date),
+         across(everything(), ~if_else(.x %in% c("NA", "NF"), NA, .x))) %>% 
+  type_convert() %>% 
+  mutate(across(c(part_microcyst,lon,nitrate,diss_microcyst, soluble_react_phosp, ammonia, urea, pH, tot_phos,wave_height, wind_speed, salinity, atmospheric_temp, particulate_cyl), ~as.numeric(.x))) %>% 
+  filter(!is.na(SampleID))
+
+# Write table to database
+dbWriteTable(pg,"glamr_samples", cleaned_up_sample_table,overwrite = TRUE)
+```
+
+#### Function for getting sample lists from tables quickly using existing index
+```{r}
+get_pg_table_samples <- function(db, table, sampleid_col){
+  # Makes use of the SQL index, *much* faster to run
+  query <- sql(str_glue("WITH RECURSIVE t AS (
+     SELECT min(\"{sampleid_col}\") AS sample FROM \"{table}\"
+     UNION ALL
+     SELECT (SELECT min(\"{sampleid_col}\") FROM \"{table}\" WHERE \"{sampleid_col}\" > t.sample)
+     FROM t WHERE t.sample IS NOT NULL
+     )
+  SELECT sample FROM t WHERE sample IS NOT NULL
+  UNION ALL
+  SELECT null WHERE EXISTS(SELECT 1 FROM \"{table}\" WHERE \"{sampleid_col}\" IS NULL);"))
+  
+  mapped_samples <- DBI::dbGetQuery(db, query)
+  return(mapped_samples)
+}
+```
+
+
+
+#### Load taxonomic information
+Output of: 
+  taxonkit list --ids 1 -n > references/taxonkit/taxon_names.txt
+  taxonkit list --ids 1 | taxonkit lineage | taxonkit reformat -a -i 2 -P > references/taxonkit/standardized_lineages.txt
+
+
+```{r}
+tax_cols <- c("tax_id", "full_lineage", "std_lineage")
+taxa_list_std <- read_tsv("~/references/taxonkit/standardized_lineages.txt",col_names = tax_cols)
+
+tax_info <- taxa_list_std %>% 
+  separate(std_lineage, into = c("kingdom", "phylum", "class", "order", "family", "genus", "species"),sep = ";[a-z]__" ,remove = FALSE) %>% 
+  mutate(tax_name = str_remove(full_lineage, ".*;"),
+         kingdom = str_remove(kingdom, "^k__")) %>% 
+  relocate(tax_id, tax_name, full_lineage, std_lineage)
+
+dbWriteTable(pg,"tax_info", tax_info, overwrite = TRUE)
+```
+
+
+#### Load UniRef db information from mmseqs db
+Read in file that maps rows in MMSeqs database to their UniRef100 ids
+```{r}
+uniref100_lookup <- data.table::fread("data/reference/mmseqs2/uniref100.lookup", col.names = c("id", "uniref100", "extra"),
+                                      nThread = 8,showProgress = TRUE)
+
+dbWriteTable(pg,"uniref100_ids_from_mmseqs_db", uniref100_lookup, overwrite = TRUE,field.types = c(id = "integer",uniref100 = "text", extra = "integer"))
+
+rm(uniref100_lookup)
+gc()
+```
+
+Read in MMseqs database index, which includes the sequence length (the actual length is two less than reported, because the length here also includes a the null byte seperator and the new line charachter)
+```{r}
+uniref100_index <- data.table::fread("data/reference/mmseqs2/uniref100.index", col.names = c("id", "offset", "length"),
+                                      nThread = 8,showProgress = TRUE) %>%
+  mutate(length = length - 2)
+
+dbWriteTable(pg,"uniref100_index_from_mmseqs_db", uniref100_index, overwrite = TRUE,field.types = c(id = "integer",offset = "bigint", length = "integer"))
+
+rm(uniref100_index)
+gc()
+```
+
+Read in MMSeqs database taxid mapping
+```{r}
+uniref100_taxid <- data.table::fread("data/reference/mmseqs2/uniref100_mapping", col.names = c("id", "taxid"),
+                                      nThread = 8,showProgress = TRUE)
+
+dbWriteTable(pg,"uniref100_taxid_from_mmseqs_db", uniref100_taxid, overwrite = TRUE,field.types = c(id = "integer",taxid = "integer"))
+
+rm(uniref100_taxid)
+gc()
+
+
+```
+
+
+
+
+## Read counts
+```{r}
+
+# Get read counts already loaded into the database
+existing_read_counts <- tbl(pg, "read_count") %>% collect()
+
+existing_read_count_samples <- get_pg_table_samples(pg, "read_count", "sample")
+
+# Find read count tsvs
+read_count_paths <- Sys.glob("data/omics/*/*/reads/*_read_count_fastp.tsv") %>% 
+  data.frame(path = .) %>% 
+  bind_cols(.,unglue::unglue_data(.$path,"data/omics/{sample_type}/{sample}/reads/{sample2}_read_count_fastp.tsv")) %>% 
+  bind_cols(file.info(.$path))
+
+# Filter read count tsvs to only those not already loaded in the database
+new_read_count_paths <- read_count_paths %>% 
+  filter(!sample %in% existing_read_count_samples$sample,
+         sample == sample2)
+```
+
+```{r}
+# Function to read count tsv and load into the database
+read_tsv_to_pg <- function(path, sample) {
+  states <- c("raw_reads", "deduped_reads", "filt_and_trimmed_reads", "decon_reads")
+
+  print(sample)
+
+  # Only used when creating the table for the first time, for all subsequent additions, append = TRUE should be added and the field types are already established
+  postgres_col_types = c(read_state = 'text',
+                         direction = 'text',
+                         count = 'bigint',
+                         sample = 'text',
+                         percent_retained = 'numeric',
+                         percent_removed = 'numeric',
+                         method = 'text')
+  
+  
+  tryCatch({
+    read_tsv(path, col_types = "cnn") %>%
+      pivot_longer(-read_state, names_to = "direction", values_to = "count") %>%
+      mutate(sample = sample,
+             direction = str_remove(direction, "_read_count"),
+             read_state = factor(read_state, levels = states, ordered = TRUE)) %>%
+      arrange(sample, direction, read_state) %>%
+      group_by(sample, direction) %>%
+      mutate(
+        percent_retained = count / lag(count) * 100,
+        percent_removed = (lag(count) - count) / lag(count) * 100,
+        method = "Fastp"
+      ) %>%
+      dbWriteTable(pg, "read_count", ., overwrite = FALSE,
+                   append = TRUE # Has to be false if table doesn't exit yet
+                   #,field.types = postgres_col_types
+                   )
+  }, error = function(e) {
+    cat("Error occurred while processing file:", path, "\n")
+    cat("Error message:", conditionMessage(e), "\n")
+  })
+}
+
+walk2(new_read_count_paths$path, new_read_count_paths$sample, read_tsv_to_pg)
+```
+
+
+# UniRef mapping to contigs with Diamond
+```{r}
+diamond_uniref_contig_mapping <- tbl(pg, "diamond_uniref_contig_mapping")
+
+diamond_mapped_samples <- get_pg_table_samples(pg, "diamond_uniref_contig_mapping", "sample")
+
+uniref_contig_mappings <- Sys.glob("data/omics/metagenomes/*/*_GENES.m8") %>% 
+  data.frame(path = .) %>% 
+  mutate(sample = basename(path) %>% str_remove("_GENES.m8"))
+
+new_uniref_contig_mappings <- uniref_contig_mappings %>% 
+  filter(!sample %in% diamond_mapped_samples$sample)
+
+read_uniref_contig_mapping <- function(path, sample_name){
+  cols <- c("qseqid", "qlen", "sseqid", "slen", "qstart", "qend", "sstart", "send", "evalue", "pident", "mismatch", "qcovhsp", "scovhsp")
+  
+  mapping_res <- read_tsv(path,col_names = cols,show_col_types = FALSE) %>% 
+    mutate(uniref100_id = str_remove(sseqid, "UniRef100_"),
+           sample = sample_name)
+  
+  # Only used when creating the table for the first time, for all subsequent additions, append = TRUE should be added and the field types are already established
+  postgres_col_types = c(qlen = 'integer',
+                            slen = 'integer',
+                            qstart = 'integer',
+                            qend = 'integer',
+                            sstart = 'integer',
+                            send = 'integer',
+                            pident = 'real',
+                            mismatch = 'integer',
+                            qcovhsp = 'real',
+                            scovhsp = 'real',
+                            evalue = 'numeric')
+  
+  # First run to create table
+  # dbWriteTable(pg,"diamond_uniref_contig_mapping",mapping_res,overwrite = FALSE, field.types = postgres_col_types)
+  
+  # For appending new samples
+  dbWriteTable(pg,"diamond_uniref_contig_mapping",mapping_res,overwrite = FALSE, append = TRUE)
+  
+  return(NULL)
+}
+
+walk2(new_uniref_contig_mappings$path, new_uniref_contig_mappings$sample, read_uniref_contig_mapping,.progress = TRUE)
+```
+
+
+
+
+```{r}
+sample <- "samp_447"
+sample_type <- "metagenomes"
+
+header_names <- c("qseqid", "qlen", "sseqid", "slen", "qstart", "qend", "sstart", "send", "evalue", "pident", "mismatch", "qcovhsp", "scovhsp")
+
+diamond_hits <- read_tsv(str_glue("data/omics/{sample_type}/{sample}/{sample}_GENES.m8"),col_names = header_names)
+
+filt_hits <- diamond_hits %>% 
+  group_by(qseqid) %>% 
+  slice_min(evalue)
+
+filt_hits_w_contig <- filt_hits %>% 
+  mutate(contig = str_remove(qseqid, "_[:digit:]$"))
+```
+
+
+
+#### Read mapping to UniRef results from mmseqs2
+
+```{r}
+mmseqs_uniref_mapping <- tbl(pg, "read_mapping_to_uniref")
+
+mapped_samples <- get_pg_table_samples(pg, "read_mapping_to_uniref", "sample")
+
+# mapped_samples <- mmseqs_uniref_mapping %>% 
+#   select("sample") %>% 
+#   distinct() %>% 
+#   collect() %>% 
+#   pull("sample")
+
+uniref_read_mappings <- Sys.glob("data/omics/metagenomes/*/*_tophit_report") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "data/omics/metagenomes/{sample}/{sample2}_tophit_report",remove = FALSE)
+  #mutate(sample = basename(path) %>% str_remove("_tophit_report"))
+
+new_uniref_read_mappings <- uniref_read_mappings %>% 
+  filter(!str_detect(path, "contig_tophit_report"),
+         !sample %in% mapped_samples$sample,
+         str_detect(sample, "^samp_*")) %>% 
+  mutate(fs::file_info(path))
+
+read_uniref_read_tophit_report <- function(path, sample_name){
+  cols <- c("target", "num_seqs_aligned", "unique_coverage_of_target", "target_coverage", "average_seq_identity", "taxonomy", "rank","tax_name", "lineage")
+  
+  report <- read_tsv(path,col_names = cols,show_col_types = FALSE) %>% 
+    mutate(uniref100_id = str_remove(target, "UniRef100_"),
+           sample = sample_name) %>% 
+    select(-c("rank","tax_name", "lineage"))
+  
+  
+  # # Only used when creating the table for the first time, for all subsequent additions, 
+  # # append = TRUE should be added as the field types are already established
+  # postgres_col_types = c(target = 'text',
+  #                           num_seqs_aligned = 'integer',
+  #                           unique_coverage_of_target = 'numeric',
+  #                           target_coverage = 'numeric',
+  #                           average_seq_identity = 'numeric',
+  #                           taxonomy = 'integer',
+  #                           uniref100_id = 'real',
+  #                           sample = 'integer')
+  
+  # First run to create table
+  # dbWriteTable(pg,"diamond_uniref_contig_mapping",mapping_res,overwrite = FALSE, field.types = postgres_col_types)
+  
+  
+  dbWriteTable(pg,"read_mapping_to_uniref",report,overwrite = FALSE, append = TRUE)
+  
+  return(NULL)
+}
+
+message("Dropping indices") # Much faster to drop indices and rebuild than to insert new rows leaving existing indices on
+
+# # For the indices created in DBeaver
+# sql('DROP INDEX public.read_mapping_to_uniref_sample_idx') %>%  DBI::dbSendQuery(pg, .)
+# sql('DROP INDEX public.read_mapping_to_uniref_uniref100_id_idx') %>% DBI::dbSendQuery(pg, .)
+# sql('DROP INDEX public.read_mapping_to_uniref_taxonomy_idx') %>% DBI::dbSendQuery(pg, .)
+
+# For the indexes created by this script
+sql('DROP INDEX public.read_mapping_to_uniref_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.read_mapping_to_uniref_uniref100_id') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.read_mapping_to_uniref_taxonomy') %>% DBI::dbSendQuery(pg, .)
+
+message("Loading new mapping results")
+walk2(new_uniref_read_mappings$path, new_uniref_read_mappings$sample, read_uniref_read_tophit_report,.progress = TRUE)
+
+message("Re-creating indices")
+sql('CREATE INDEX read_mapping_to_uniref_sample ON public.read_mapping_to_uniref (sample)') %>%  DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX read_mapping_to_uniref_uniref100_id ON public.read_mapping_to_uniref (uniref100_id)') %>%  DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX read_mapping_to_uniref_taxonomy ON public.read_mapping_to_uniref (taxonomy)') %>%  DBI::dbSendQuery(pg, .)
+```
+
+#### Contig LCAs from mmseqs LCA on UniRef
+
+```{r}
+
+contig_lca_uniref <- tbl(pg, "contig_lca_uniref")
+
+lca_samples <- get_pg_table_samples(pg, "contig_lca_uniref", "sample")
+
+# mapped_samples <- mmseqs_uniref_mapping %>% 
+#   select("sample") %>% 
+#   distinct() %>% 
+#   collect() %>% 
+#   pull("sample")
+
+contig_lca_annotation_files <- Sys.glob("data/omics/*/*/*_contig_lca.tsv") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "data/omics/{sample_type}/{sample}/{sample2}_contig_lca.tsv",remove = FALSE)
+
+new_contig_lca_annotation_files <- contig_lca_annotation_files %>% 
+  filter(!sample %in% lca_samples$sample,
+         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_")) %>% 
+  mutate(fs::file_info(path))
+
+read_contig_lca <- function(path, sample_name){
+  cols <- c("contig", "taxonomy", "rank", "tax_name", "num_frags_retained", "num_frags_tax_assigned", "num_frags_agree","support", "lineage")
+  
+  report <- read_tsv(path,col_names = cols,show_col_types = FALSE) %>% 
+    mutate(sample = sample_name) %>% 
+    dplyr::select(-c("rank","tax_name", "lineage"))
+  
+  
+  # # Only used when creating the table for the first time, for all subsequent additions, 
+  # # append = TRUE should be added as the field types are already established
+  # postgres_col_types = c(contig = 'text',
+  #                           taxonomy = 'integer',
+  #                           num_frags_retained = 'integer',
+  #                           num_frags_tax_assigned = 'integer',
+  #                           num_frags_agree = 'integer',
+  #                           support = 'numeric')
+  # 
+  # First run to create table
+  #dbWriteTable(pg,"contig_lca_uniref",report,overwrite = FALSE, field.types = postgres_col_types)
+  
+  
+  dbWriteTable(pg,"contig_lca_uniref",report,overwrite = FALSE, append = TRUE)
+  
+  return(NULL)
+}
+
+# For the indexes created by this script
+sql('DROP INDEX public.contig_lca_uniref_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.contig_lca_uniref_contig') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.contig_lca_uniref_taxonomy') %>% DBI::dbSendQuery(pg, .)
+
+walk2(new_contig_lca_annotation_files$path, new_contig_lca_annotation_files$sample, read_contig_lca,.progress = TRUE)
+
+sql('CREATE INDEX "contig_lca_uniref_sample" ON "contig_lca_uniref" ("sample")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "contig_lca_uniref_contig" ON "contig_lca_uniref" ("contig")') %>%  DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "contig_lca_uniref_taxonomy" ON "contig_lca_uniref" ("taxonomy")') %>% DBI::dbSendQuery(pg, .)
+```
+
+
+## Community summaries from read mapping to UniRef
+
+```{r}
+read_mapping_LCA_summary <- tbl(pg, "read_mapping_LCA_summary")
+
+mapped_samples <- get_pg_table_samples(pg, "read_mapping_LCA_summary", "SampleID")
+
+# mapped_samples <- mmseqs_uniref_mapping %>% 
+#   select("sample") %>% 
+#   distinct() %>% 
+#   collect() %>% 
+#   pull("sample")
+
+uniref_LCA_reports <- Sys.glob("data/omics/metagenomes/*/*_report_w_standardized_lineage") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "data/omics/metagenomes/{sample}/{sample2}_report_w_standardized_lineage",remove = FALSE)
+
+new_uniref_LCA_reports <- uniref_LCA_reports %>% 
+  filter(!sample %in% mapped_samples$sample,
+         str_detect(sample, "^samp_*")) %>% 
+  mutate(fs::file_info(path))
+
+#tax_of_interest <- googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/1izMOKyA6ecy2lZsXLoXGnftcyFDdlQI39ncUXnfDw_Y/edit#gid=0")
+
+read_report <- function(path, samp_name){
+  cols <- c("percent_and_below", "count_and_below", "count_directly", "rank", "tax_id", "tax_name", "lineage_full", "lineage_std")
+  levels <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+  
+  report <- data.table::fread(path, col.names = cols) %>% 
+    select(-count_directly, -count_and_below) %>% 
+    dplyr::rename(percent_abundance = "percent_and_below") %>% 
+    mutate(SampleID = samp_name) %>% 
+    separate(lineage_std, into = levels, sep = ";[A-z]__", remove = FALSE) %>% 
+    mutate(Kingdom = str_remove(Kingdom,"k__"))
+  
+  dbWriteTable(pg,"read_mapping_LCA_summary",report,overwrite = FALSE, append = TRUE)
+  
+  return(NULL)
+}
+
+
+# For the indexes created by this script
+#sql('DROP INDEX public.read_mapping_LCA_summary') %>% DBI::dbSendQuery(pg, .)
+#sql('DROP INDEX public.read_mapping_LCA_summary') %>% DBI::dbSendQuery(pg, .)
+
+community_comp <- walk2(uniref_LCA_reports$path, uniref_LCA_reports$sample, read_report)
+
+sql('CREATE INDEX "read_mapping_LCA_summary_sample" ON "read_mapping_LCA_summary" ("SampleID")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "read_mapping_LCA_summary_taxonomy" ON "read_mapping_LCA_summary" ("tax_id")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "read_mapping_LCA_summary_genus" ON "read_mapping_LCA_summary" ("Genus")') %>% DBI::dbSendQuery(pg, .)
+```
+
+
+
+## GTDB
+```{r}
+# Get GTDB annotations that are already loaded into the database
+existing_gtdb_annotations <- tbl(pg, "GTDB") %>% 
+  collect() %>% 
+  mutate(sample = str_extract(bin, "samp_\\d+")) %>% 
+  relocate(bin, sample)
+
+# Find all GTDB summary tsvs
+GTDB_paths <- Sys.glob("data/omics/metagenomes/*/bins/GTDB/*.summary.tsv") %>% 
+  data.frame(path = .) %>% 
+  bind_cols(.,unglue::unglue_data(.$path,"data/omics/{sample_type}/{sample}/bins/GTDB/{bac_or_arc}.summary.tsv")) %>% 
+  bind_cols(file.info(.$path))
+
+# Filter list of summary tsvs to only those not already loaded into the database
+new_GTDB <- GTDB_paths %>% 
+  filter(!sample %in% existing_gtdb_annotations$sample,
+         str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_"))
+
+# Load an example summary tsv to get the column types
+gtdb_test <- read_tsv("data/omics/metagenomes/samp_2015/bins/GTDB/gtdbtk.bac120.summary.tsv",na = "N/A")
+column_types <- as.col_spec(gtdb_test)
+
+# Function for reading the summary tsv and saving it to the database
+read_gtdb_to_pg <- function(path, sample) {
+
+  print(sample)
+
+  tryCatch({
+    read_tsv(path, na = "N/A",col_types = column_types) %>%
+      separate(classification, into = c("domain","phylum", "class", "order", "family","genus","species"),sep = ";[a-z]__",remove = FALSE) %>% 
+      mutate(domain = str_remove(domain,"d__")) %>% 
+      dplyr::rename(bin ="user_genome") %>% 
+      dbWriteTable(pg, "GTDB", ., overwrite = FALSE, append = TRUE)
+  }, error = function(e) {
+    cat("Error occurred while processing file:", path, "\n")
+    cat("Error message:", conditionMessage(e), "\n")
+  })
+}
+
+sql('DROP INDEX public.gtdb_bin') %>% DBI::dbSendQuery(pg, .)
+
+# Load new summaries into the database
+walk2(new_GTDB$path, new_GTDB$sample, read_gtdb_to_pg)
+
+sql('CREATE INDEX "gtdb_bin" ON "GTDB" ("bin")') %>% DBI::dbSendQuery(pg, .)
+
+```
+
+## CheckM
+```{r}
+
+existing_checkM_summaries <- tbl(pg, "checkm") %>% 
+  collect() %>% 
+  mutate(sample = str_extract(bin, "samp_\\d+")) %>% 
+  relocate(bin, sample)
+
+checkm_paths <- Sys.glob("data/omics/metagenomes/*/bins/all_raw_bins/checkm.txt") %>% 
+  data.frame(path = .) %>% 
+  bind_cols(.,unglue::unglue_data(.$path,"data/omics/metagenomes/{sample}/bins/all_raw_bins/checkm.txt")) %>% 
+  bind_cols(file.info(.$path))
+
+new_checkM <- checkm_paths %>% 
+  filter(!sample %in% existing_checkM_summaries$sample,
+         str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_"))
+
+checkm_test <- read_tsv("data/omics/metagenomes/samp_2037/bins/all_raw_bins/checkm.txt")
+checkm_column_types <- as.col_spec(checkm_test)
+
+read_checkm_to_pg <- function(path, sample) {
+
+  print(sample)
+
+  tryCatch({
+    read_tsv(path,col_types = checkm_column_types) %>%
+      dplyr::rename(bin = "Bin Id") %>% 
+      dbWriteTable(pg, "checkm", ., overwrite = FALSE, append = TRUE)
+  }, error = function(e) {
+    cat("Error occurred while processing file:", path, "\n")
+    cat("Error message:", conditionMessage(e), "\n")
+  })
+}
+
+sql('DROP INDEX public.checkm_bin') %>% DBI::dbSendQuery(pg, .)
+
+walk2(new_checkM$path, new_checkM$sample, read_checkm_to_pg)
+
+sql('CREATE INDEX "checkm_bin" ON "checkm" ("bin")') %>% DBI::dbSendQuery(pg, .)
+
+```
+
+
+## DREP
+```{r}
+# Get GTDB annotations that are already loaded into the database
+existing_drep_annotations <- tbl(pg, "drep") %>% 
+  collect() %>% 
+  mutate(sample = str_extract(bin, "samp_\\d+")) %>% 
+  relocate(bin, sample)
+
+# Find all GTDB summary tsvs
+drep_paths <- Sys.glob("data/omics/metagenomes/*/bins/drep/data_tables/Cdb.csv") %>% 
+  data.frame(path = .) %>% 
+  bind_cols(.,unglue::unglue_data(.$path,"data/omics/{sample_type}/{sample}/bins/drep/data_tables/Cdb.csv")) %>% 
+  bind_cols(file.info(.$path))
+
+# Filter list of summary tsvs to only those not already loaded into the database
+new_drep <- drep_paths %>% 
+  filter(
+      !sample %in% existing_drep_annotations$sample & (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_")))
+
+# Load an example summary tsv to get the column types
+drep_test <- read_csv("data/omics/metagenomes/samp_447/bins/drep/data_tables/Cdb.csv") %>% 
+  mutate(is_cluster_rep = fs::file_exists(str_glue("data/omics/metagenomes/samp_447/bins/drep/dereplicated_genomes/{genome}")))
+column_types <- as.col_spec(drep_test)
+
+# Function for reading the summary tsv and saving it to the database
+read_drep_to_pg <- function(path, sample) {
+  print(sample)
+  tryCatch({
+    read_csv(path) %>%
+      mutate(drep_folder = str_remove(path, '/data_tables/Cdb.csv'),
+             is_cluster_rep = fs::file_exists(str_glue("{drep_folder}/dereplicated_genomes/{genome}")),
+             genome = str_remove(genome,".fa")) %>% 
+      dplyr::rename(bin = "genome") %>% 
+      select(-drep_folder) %>% 
+      dbWriteTable(pg, "drep", ., overwrite = FALSE, append = TRUE)
+  }, error = function(e) {
+    cat("Error occurred while processing file:", path, "\n")
+    cat("Error message:", conditionMessage(e), "\n")
+  })
+}
+
+#test <- read_drep_to_pg(drep_paths$path[1],sample = drep_paths$sample[1])
+
+
+# Load new summaries into the database
+# Drop existing indices [speeds up loading of new data]
+sql('DROP INDEX public.drep_bin') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.drep_rep') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.drep_cluster') %>% DBI::dbSendQuery(pg, .)
+
+# Append new data
+walk2(new_drep$path, new_drep$sample, read_drep_to_pg)
+
+# Recreate indices
+sql('CREATE INDEX "drep_bin" ON "drep" ("bin")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "drep_rep" ON "drep" ("is_cluster_rep")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "drep_cluster" ON "drep" ("secondary_cluster")') %>% DBI::dbSendQuery(pg, .)
+```
+
+
+# Contig bin membership
+
+```{r}
+contig_bins <- read_rds("data/omics/metagenomes/samp_447/bins/contig_bins.rds")
+```
+
+```{r}
+contig_bin_membership <- tbl(pg, "contig_bin_membership")
+
+bin_membership_samples <- get_pg_table_samples(pg, "contig_bin_membership", "sample")
+
+# mapped_samples <- contig_bin_membership %>% 
+#   select("sample") %>% 
+#   distinct() %>% 
+#   collect() %>% 
+#   pull("sample")
+
+bin_membership_files <- Sys.glob("data/omics/metagenomes/*/bins/contig_bins.rds") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "data/omics/metagenomes/{sample}/bins/contig_bins.rds",remove = FALSE) %>% 
+  mutate(file_size = fs::file_size(path))
+
+new_bin_membership_files <- bin_membership_files %>% 
+  filter(!sample %in% bin_membership_samples$sample,
+         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_*")) %>% 
+  mutate(fs::file_info(path))
+
+read_contig_bin_membership <- function(path){
+  
+  contig_mem_df <- read_rds(path) %>% 
+    dplyr::select(contig, sample, bin = "new_bin_name", length) %>% 
+    distinct()
+  
+  # Only used when creating the table for the first time, for all subsequent additions,
+  # append = TRUE should be added as the field types are already established
+  # postgres_col_types = c(contig = 'text',
+  #                           sample = 'text',
+  #                           bin = 'text',
+  #                           length = 'integer')
+  # 
+  # # First run to create table
+  #  dbWriteTable(conn = pg,
+  #               name = "contig_bin_membership",
+  #               contig_mem_df,
+  #               overwrite = FALSE, 
+  #               field.types = postgres_col_types)
+
+  dbWriteTable(conn = pg,
+               name = "contig_bin_membership",
+               value = contig_mem_df,
+               overwrite = FALSE, append = TRUE)
+  
+  return(NULL)
+}
+
+# Drop indices to load faster
+# For the indexes created by this script
+sql('DROP INDEX contig_bin_membership_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX contig_bin_membership_bin') %>%  DBI::dbSendQuery(pg, .)
+sql('DROP INDEX contig_bin_membership_contig') %>% DBI::dbSendQuery(pg, .)
+
+walk(new_bin_membership_files$path, read_contig_bin_membership,.progress = TRUE)
+
+# Create new indices
+sql('CREATE INDEX "contig_bin_membership_sample" ON "contig_bin_membership" ("sample")') %>%  DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "contig_bin_membership_bin" ON "contig_bin_membership" ("bin")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "contig_bin_membership_contig" ON "contig_bin_membership" ("contig")') %>% DBI::dbSendQuery(pg, .)
+
+```
+
+# Gene abundance results
+
+```{r}
+gene_abundance <- tbl(pg, "gene_abundance")
+
+gene_abundance_samples <- get_pg_table_samples(pg, "gene_abundance", "sample")
+
+gene_abundance_files <- Sys.glob("data/omics/metagenomes/*/genes/*_READSvsGENES.rpkm") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "data/omics/metagenomes/{sample}/genes/{sample2}_READSvsGENES.rpkm",remove = FALSE) %>% 
+  mutate(file_size = fs::file_size(path))
+
+new_gene_abundance_files <- gene_abundance_files %>% 
+  filter(!sample %in% gene_abundance_samples$sample,
+         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_*")) %>% 
+  mutate(fs::file_info(path))
+
+#path <- "data/omics/metagenomes/samp_447/genes/samp_447_READSvsGENES.rpkm"
+#sample_name = "samp_447"
+
+read_gene_abundance <- function(path, sample_name){
+  
+  gene_abund_df <- read_tsv(path,skip = 4) %>% 
+    dplyr::rename(gene_header = "#Name") %>% 
+    mutate(tpm = (FPKM / sum(FPKM))*10^6) %>% 
+    separate(gene_header, into = c("gene", "left_edge","right_edge", "strand", "id"),sep = " # ") %>% 
+    separate(id, into = c("id", "partial","start_type", "rbs_motif", "rbs_spacer","gc_content"), sep = ";") %>% 
+    mutate(across(c("id", "partial","start_type", "rbs_motif", "rbs_spacer","gc_content"), ~str_remove(.x, "^.*="))) %>% 
+    separate(id, into = c("contig_num", "gene_num"), sep = "_",remove = FALSE) %>% 
+    mutate(sample = sample_name,
+           contig = str_glue("{sample}_{contig_num}")) %>% 
+    type_convert() %>% 
+    dplyr::rename(length = "Length", bases = "Bases", coverage = "Coverage", reads = "Reads", rpkm = "RPKM", frags = "Frags", fpkm = "FPKM") %>% 
+    relocate(gene, contig, sample) %>% 
+    dplyr::select(-id)
+
+  
+  
+  
+  # Only used when creating the table for the first time, for all subsequent additions,
+  # append = TRUE should be added as the field types are already established
+  postgres_col_types = c(gene = 'text',
+                         sample = "text",
+                         contig = "text",
+                         contig_num = "bigint",
+                         gene_num = "int",
+                         left_edge = 'bigint',
+                         right_edge = 'bigint',
+                         strand = "integer",
+                         partial = "text",
+                         start_type = "text",
+                         rbs_motif = "text",
+                         rbs_spacer = "text",
+                         gc_content = "numeric",
+                         length = "integer",
+                         bases = "bigint",
+                         coverage = "numeric",
+                         reads = "bigint",
+                         rpkm = "numeric",
+                         frags = "bigint",
+                         fpkm = "numeric",
+                         tpm = "numeric")
+
+  # # First run to create table
+   # dbWriteTable(conn = pg,
+   #              name = "gene_abundance",
+   #              gene_abund_df,
+   #              overwrite = FALSE,
+   #              field.types = postgres_col_types)
+
+  dbWriteTable(conn = pg,
+               name = "gene_abundance",
+               value = gene_abund_df,
+               overwrite = FALSE, append = TRUE)
+  
+  return(NULL)
+}
+
+# Drop indices to load faster
+# For the indexes created by this script
+sql('DROP INDEX contig_bin_membership_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX contig_bin_membership_bin') %>%  DBI::dbSendQuery(pg, .)
+sql('DROP INDEX contig_bin_membership_contig') %>% DBI::dbSendQuery(pg, .)
+
+walk2(new_gene_abundance_files$path, new_gene_abundance_files$sample, read_gene_abundance,.progress = TRUE)
+
+# Create new indices
+sql('CREATE INDEX "gene_abundance_sample" ON "gene_abundance" ("sample")') %>%  DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "gene_abundance_gene" ON "gene_abundance" ("gene")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "gene_abundance_contig" ON "gene_abundance" ("contig")') %>% DBI::dbSendQuery(pg, .)
+
+```
+
+
+# KOFam Scan
+```{r}
+kofam_scan <- tbl(pg, "kofam_scan")
+
+kofam_scan_samples <- get_pg_table_samples(pg, "kofam_scan", "sample")
+
+kofam_scan_files <- Sys.glob("data/omics/metagenomes/*/kofam_scan/*_kofam_results.txt") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "data/omics/metagenomes/{sample}/kofam_scan/{sample2}_kofam_results.txt",remove = FALSE) %>% 
+  mutate(file_size = fs::file_size(path))
+
+new_kofam_scan_files <- kofam_scan_files %>% 
+  filter(!sample %in% kofam_scan_samples$sample,
+         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_*")) %>% 
+  mutate(fs::file_info(path))
+
+read_kofam_scan <- function(path, sample_name){
+  
+  col_name <- c("sig", "gene", "ko", "thrshld", "score","e_value", "ko_def")
+  
+  kofam_scan_df <- read_tsv(path,col_names = col_name,skip = 2) %>% 
+    select(-ko_def) %>% 
+    mutate(sig = if_else(sig == "*", TRUE, FALSE),
+           sample = sample_name) %>% 
+    relocate(gene, sample)
+    
+  # Only used when creating the table for the first time, for all subsequent additions,
+  # append = TRUE should be added as the field types are already established
+  postgres_col_types = c(sig = "boolean",
+                         gene = "text",
+                         ko = "text",
+                         thrshld = "numeric",
+                         score = "numeric",
+                         e_value = "numeric"
+                         )
+
+  # # First run to create table
+   # dbWriteTable(conn = pg,
+   #              name = "kofam_scan",
+   #              kofam_scan_df,
+   #              overwrite = FALSE,
+   #              field.types = postgres_col_types)
+
+  dbWriteTable(conn = pg,
+               name = "kofam_scan",
+               value = kofam_scan_df,
+               overwrite = FALSE, append = TRUE)
+  
+  return(NULL)
+}
+
+# Drop indices to load faster
+# For the indexes created by this script
+sql('DROP INDEX contig_bin_membership_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX contig_bin_membership_bin') %>%  DBI::dbSendQuery(pg, .)
+sql('DROP INDEX contig_bin_membership_contig') %>% DBI::dbSendQuery(pg, .)
+
+walk2(new_kofam_scan_files$path, new_kofam_scan_files$sample, read_kofam_scan,.progress = TRUE)
+
+# Create new indices
+sql('CREATE INDEX "kofam_scan_sample" ON "kofam_scan" ("sample")') %>%  DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "kofam_scan_gene" ON "kofam_scan" ("gene")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "kofam_scan_ko" ON "kofam_scan" ("ko")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "kofam_scan_sig" ON "kofam_scan" ("sig")') %>% DBI::dbSendQuery(pg, .)
+
+```
+
+
+## dRep bin abundance (within sample)
+```{r}
+# Get GTDB annotations that are already loaded into the database
+existing_bin_abund_samples <- get_pg_table_samples(pg, "bin_abund_within_sample", "sample")
+
+# Find all GTDB summary tsvs
+drep_bin_abunds <- Sys.glob("data/omics/metagenomes/*/bins/coverage_drep_bins.tsv") %>% 
+  data.frame(path = .) %>% 
+  bind_cols(.,unglue::unglue_data(.$path,"data/omics/{sample_type}/{sample}/bins/coverage_drep_bins.tsv")) %>% 
+  bind_cols(file.info(.$path))
+
+# Filter list of summary tsvs to only those not already loaded into the database
+new_drep_bin_abunds <- drep_bin_abunds %>% 
+  filter(
+      !sample %in% existing_bin_abund_samples$sample & (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_")))
+
+# Load an example summary tsv to get the column types
+abund_test <- read_tsv("data/omics/metagenomes/samp_447/bins/coverage_drep_bins.tsv") #%>% 
+column_types <- as.col_spec(drep_test)
+
+# First upload to establish the table
+    # postgres_col_types = c(sample = "text",
+    #                        bin = "text",
+    #                        percent_abund = "numeric",
+    #                        mean_depth = "numeric",
+    #                        trimmed_mean_depth = "numeric",
+    #                        covered_bases = "bigint",
+    #                        variance = "numeric",
+    #                        length = "bigint",
+    #                        read_count = "bigint",
+    #                        reads_per_base = "numeric",
+    #                        rpkm = "numeric",
+    #                        tpm = "numeric"
+    #                        )
+    # 
+    # read_tsv("data/omics/metagenomes/samp_447/bins/coverage_drep_bins.tsv") %>%
+    #       mutate(sample = "samp_447") %>% 
+    #       rename(bin = "Genome",
+    #              percent_abund = "Relative Abundance (%)",
+    #              mean_depth = "Mean",
+    #              trimmed_mean_depth = "Trimmed Mean",
+    #              covered_bases = "Covered Bases",
+    #              variance = "Variance",
+    #              length = "Length",
+    #              read_count = "Read Count",
+    #              reads_per_base = "Reads per base",
+    #              rpkm = "RPKM",
+    #              tpm = "TPM") %>% 
+    #       select(-Sample) %>% 
+    #       relocate(sample) %>% 
+    #       dbWriteTable(pg, "bin_abund_within_sample", ., overwrite = FALSE, field.types = postgres_col_types)
+
+# Function for reading the summary tsv and saving it to the database
+read_drep_bin_abunds_to_pg <- function(path, sample) {
+  print(sample)
+  tryCatch({
+    read_tsv(path) %>%
+      mutate(sample = sample) %>% 
+      rename(bin = "Genome",
+             percent_abund = "Relative Abundance (%)",
+             mean_depth = "Mean",
+             trimmed_mean_depth = "Trimmed Mean",
+             covered_bases = "Covered Bases",
+             variance = "Variance",
+             length = "Length",
+             read_count = "Read Count",
+             reads_per_base = "Reads per base",
+             rpkm = "RPKM",
+             tpm = "TPM") %>% 
+      select(-Sample) %>% 
+      relocate(sample) %>% 
+      dbWriteTable(pg, "bin_abund_within_sample", ., overwrite = FALSE, append = TRUE)
+  }, error = function(e) {
+    cat("Error occurred while processing file:", path, "\n")
+    cat("Error message:", conditionMessage(e), "\n")
+  })
+}
+
+#test <- read_drep_to_pg(drep_paths$path[1],sample = drep_paths$sample[1])
+
+
+# Load new summaries into the database
+# Drop existing indices [speeds up loading of new data]
+sql('DROP INDEX public.bin_abund_within_sample_bin') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.bin_abund_within_sample_sample') %>% DBI::dbSendQuery(pg, .)
+
+# Append new data
+walk2(new_drep_bin_abunds$path, new_drep_bin_abunds$sample, read_drep_bin_abunds_to_pg)
+
+# Recreate indices
+sql('CREATE INDEX "bin_abund_within_sample_bin" ON "bin_abund_within_sample" ("bin")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "bin_abund_within_sample_sample" ON "bin_abund_within_sample" ("sample")') %>% DBI::dbSendQuery(pg, .)
+```
+
+
+
+
+# Something with reads
+
+```{r}
+decon_reads <- system("ls data/omics/metagenomes/*/reads/decon_*_reads_fastp.fastq.gz", intern = TRUE) %>% 
+  data.frame(path = .) %>% 
+  bind_cols(., unglue::unglue_data(.$path, "data/omics/metagenomes/{sample}/reads/decon_{dir}_reads_fastp.fastq.gz")) %>% 
+  pivot_wider(names_from = "dir", values_from = "path") #%>% 
+  # mutate(fwd_md5 = rlang::hash_file(fwd), 
+  #        rev_md5 = rlang::hash_file(rev),
+  #        dir_hash_match = fwd_md5 == rev_md5)
+```
+
+
+```{r}
+library(future)
+library(future.apply)
+library(tidyverse)
+
+decon_reads <- system("ls data/omics/metagenomes/*/reads/decon_*_reads_fastp.fastq.gz", intern = TRUE) %>% 
+  data.frame(path = .) %>% 
+  bind_cols(., unglue::unglue_data(.$path, "data/omics/metagenomes/{sample}/reads/decon_{dir}_reads_fastp.fastq.gz")) %>% 
+  pivot_wider(names_from = "dir", values_from = "path") #%>% 
+  # mutate(fwd_md5 = rlang::hash_file(fwd), 
+  #        rev_md5 = rlang::hash_file(rev),
+  #        dir_hash_match = fwd_md5 == rev_md5)
+
+plan(multisession, workers = 4)
+
+fwd_md5 <- furrr::future_map2_dfr(decon_reads$fwd, decon_reads$sample, ~data.frame(fwd_md5 = rlang::hash_file(.x), sample = .y))
+rev_md5 <- furrr::future_map2_dfr(decon_reads$rev, decon_reads$sample, ~data.frame(rev_md5 = rlang::hash_file(.x), sample = .y))
+
+md5_decon_reads_table <- left_join(fwd_md5, rev_md5) %>% 
+  relocate(sample) %>% 
+  mutate(fwd_and_rev_same_hash = fwd_md5 == rev_md5) %>% 
+  write_tsv("~/projects/202308_check_sxta_mapping/decon_read_md5sum_table.tsv")
+  
+future:::ClusterRegistry("stop")
+```
+
+```{r}
+same_fwd_and_rev_decon_reads <- read_tsv("~/projects/202308_check_sxta_mapping/decon_read_md5sum_table.tsv")
+```
+
+# Pull info for N-Affinity work w/ Jenan & LLNL
+```{r}
+pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "localhost", port = "5432", user = "glamr_admin", password = "glamr2023")
+
+samples_being_considered <- c("samp_506", "samp_500", "samp_501", "samp505", "samp499", "samp503")
+
+sample_data_pg <- tbl(pg, "glamr_samples") %>% 
+  filter(SampleID %in% local(samples_being_considered)) %>% 
+  collect()
+
+
+
+nitrogen_genes_ec <- c(nitrogenase ="1.18.6.1", 
+                       urease = "3.5.1.5")
+nitrogen_genes_ko <- c(urtE = "11963",
+                       urtC = "11961",
+                       urtA = "11959",
+                       ureC = "01428",
+                       URE = "01427",
+                       anfG = "00531",
+                       nifD = "02586",
+                       nifK = "02591",
+                       dur3 = "20989")
+
+nitrogen_genes_uniref90 <- c(dur3 = "B0JKK9")
+
+nitrogen_genes <- tbl(pg, "uniref90_info") %>% 
+    filter(ec_ids %in% local(nitrogen_genes_ec) | 
+             kegg_orthology_id %in% local(nitrogen_genes_ko) | uniref90_id %in% nitrogen_genes_uniref90) %>% 
+  collect()
+
+nitrogen_genes_abund <- tbl(pg, "tpm") %>% 
+    dplyr::filter(sample %in% local(samples_being_considered),
+           uniref90_id %in% local(nitrogen_genes$uniref90_id)) %>% 
+    dplyr::group_by(uniref90_id, sample, taxonomy) %>% 
+    dplyr::summarise(tpm = sum(tpm)) %>% 
+    collect() 
+
+taxonomy_info <- tbl(pg, "read_mapping_LCA_summary") %>% 
+  filter(tax_id %in% local(nitrogen_genes_abund$taxonomy),
+         SampleID %in% local(samples_being_considered)) %>% 
+  collect()
+
+all_abund <- tbl(pg, "read_mapping_LCA_summary") %>% 
+  filter(SampleID %in% local(samples_being_considered)) %>% 
+  collect() %>% 
+  left_join(sample_data_pg)
+
+all_abund %>% 
+  filter(Phylum == "Cyanobacteriota",
+         !is.na(collection_date) & !is.na(NOAA_Site),
+         Genus != "") %>% 
+  group_by(Genus,SampleID) %>% 
+  mutate(percent_abundance = sum(percent_abundance)) %>% 
+  filter(percent_abundance > 0.1) %>% 
+  ggplot(aes(Genus, percent_abundance)) +
+  geom_boxplot() +
+  facet_grid(~str_glue("{collection_date}--{NOAA_Site}")) +
+  scale_x_discrete(guide = guide_axis(angle = -35)) +
+  scale_y_log10() +
+  labs(x = NULL,
+       subtitle = "Cyanobacterial abundance")
+
+nitrogen_gene_abund_w_info <- nitrogen_genes_abund %>% 
+  left_join(nitrogen_genes) %>% 
+  left_join(taxonomy_info %>% rename(taxonomy = "tax_id") %>% select(-row.names)) %>% 
+  left_join(sample_data_pg)
+
+summarized_n_gene_info <- nitrogen_gene_abund_w_info %>% 
+  select(SampleID, collection_date, NOAA_Site, product, gene, ec_ids, kegg_orthology_id, organism_abundance = "percent_abundance", tpm, taxonomy, Kingdom, Phylum, Class, Order, Family, Genus)
+
+nitrogenase_genes <- summarized_n_gene_info %>% 
+  filter(str_detect(product, "nitrogenase"))
+
+summarized_n_gene_info %>% 
+  filter(str_detect(product, "nitrogenase"),
+         !is.na(collection_date) & !is.na(NOAA_Site),
+         Phylum != "") %>% 
+  ggplot(aes(Phylum, tpm)) +
+  geom_boxplot() +
+  facet_grid(~str_glue("{collection_date}--{NOAA_Site}")) +
+  scale_x_discrete(guide = guide_axis(angle = -35)) +
+  labs(x = NULL,
+       subtitle = "Nitrogenase")
+
+summarized_n_gene_info %>% 
+  filter(str_detect(product, "urease"),
+         !is.na(collection_date) & !is.na(NOAA_Site),
+         Phylum != "") %>% 
+  ggplot(aes(Phylum, tpm)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  facet_grid(~str_glue("{collection_date}--{NOAA_Site}")) +
+  scale_x_discrete(guide = guide_axis(angle = -35)) +
+  labs(x = NULL,
+       subtitle = "urease")
+
+summarized_n_gene_info %>% 
+  filter(str_detect(product, "transporter"),
+         !is.na(collection_date) & !is.na(NOAA_Site),
+         Phylum != "") %>% 
+  ggplot(aes(Phylum, tpm)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  facet_grid(~str_glue("{collection_date}--{NOAA_Site}")) +
+  scale_x_discrete(guide = guide_axis(angle = -35)) +
+  labs(x = NULL,
+       subtitle = "urea transporter")
+
+
+org_abund <- glos_abund %>% 
+    filter(SampleID == samp) %>% 
+    ungroup() %>% 
+    mutate(field_name = str_glue("{org}_organism_abundance"),
+           field_value = percent_abundance %>% as.character()) %>% 
+    select(field_name, field_value) %>% 
+    arrange(desc(field_value))
+  
+
+
+```
+
+```{r}
+summarized_n_gene_info %>% 
+  filter(str_detect(product, "urease"),
+         !is.na(collection_date) & !is.na(NOAA_Site),
+         Phylum != "",
+         #Genus == "Microcystis"
+         ) %>% 
+  group_by(Phylum, Class, Order, Family, Genus, collection_date, NOAA_Site) %>% 
+  summarise(tpm = sum(tpm)) %>% 
+  filter(tpm > 1e-07) %>% 
+  ggplot(aes(Genus, tpm)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  facet_grid(str_glue("{collection_date}--{NOAA_Site}")~.) +
+  scale_x_discrete(guide = guide_axis(angle = -35)) +
+  labs(x = NULL,
+       subtitle = "urease")
+```
+
+```{r}
+summarized_n_gene_info %>% 
+  filter(str_detect(product, "transporter|symporter"),
+         !is.na(collection_date) & !is.na(NOAA_Site),
+         Phylum != "") %>% 
+   group_by(Phylum, Class, Order, Family, collection_date, NOAA_Site) %>% 
+  summarise(tpm = sum(tpm)) %>% 
+  filter(tpm > 5e-08,
+         #Genus == "Microcystis"
+         ) %>% 
+  ggplot(aes(Family, tpm)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  facet_grid(str_glue("{collection_date}--{NOAA_Site}")~.) +
+  scale_x_discrete(guide = guide_axis(angle = -35)) +
+  labs(x = NULL,
+       subtitle = "urea transporter")
+```
+
+```{r}
+summarized_n_gene_info %>% 
+  filter(str_detect(product, "nitrogenase"),
+         !is.na(collection_date) & !is.na(NOAA_Site),
+         Phylum != "",
+         #Genus == "Microcystis"
+         ) %>% 
+  group_by(Phylum, Class, Order, Family, Genus, collection_date, NOAA_Site) %>% 
+  summarise(tpm = sum(tpm)) %>% 
+  #filter(tpm > 1e-07) %>% 
+  ggplot(aes(Genus, tpm)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  facet_grid(str_glue("{collection_date}--{NOAA_Site}")~.) +
+  scale_x_discrete(guide = guide_axis(angle = -35)) +
+  labs(x = NULL,
+       subtitle = "Nitrogenase")
+```
+
+
+
+
+
+
+
+
