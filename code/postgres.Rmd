@@ -930,6 +930,98 @@ sql('CREATE INDEX "bin_abund_within_sample_sample" ON "bin_abund_within_sample" 
 ```
 
 
+## contig abundance (within sample)
+```{r}
+# Get GTDB annotations that are already loaded into the database
+existing_contig_abund_samples <- get_pg_table_samples(pg, "contig_abund", "sample")
+
+# Find all GTDB summary tsvs
+contig_abunds <- Sys.glob("data/omics/metagenomes/*/*_contig_abund.tsv") %>% 
+  data.frame(path = .) %>% 
+  bind_cols(.,unglue::unglue_data(.$path,"data/omics/{sample_type}/{sample}/{sample2}_contig_abund.tsv")) %>% 
+  bind_cols(file.info(.$path))
+
+# Filter list of summary tsvs to only those not already loaded into the database
+new_contig_abunds <- contig_abunds %>% 
+  filter(
+      !sample %in% existing_contig_abund_samples$sample & (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_")))
+
+# Load an example summary tsv to get the column types
+abund_test <- read_tsv("data/omics/metagenomes/samp_447/samp_447_contig_abund.tsv") #%>% 
+column_types <- as.col_spec(drep_test)
+
+# First upload to establish the table
+    # postgres_col_types = c(sample = "text",
+    #                        contig = "text",
+    #                        mean_depth = "numeric",
+    #                        trimmed_mean_depth = "numeric",
+    #                        covered_bases = "bigint",
+    #                        variance = "numeric",
+    #                        length = "bigint",
+    #                        read_count = "bigint",
+    #                        reads_per_base = "numeric",
+    #                        rpkm = "numeric",
+    #                        tpm = "numeric"
+    #                        )
+    # 
+    # read_tsv("data/omics/metagenomes/samp_447/samp_447_contig_abund.tsv") %>%
+    #       mutate(sample = "samp_447") %>%
+    #       rename(contig = "Contig",
+    #              mean_depth = "Mean",
+    #              trimmed_mean_depth = "Trimmed Mean",
+    #              covered_bases = "Covered Bases",
+    #              variance = "Variance",
+    #              length = "Length",
+    #              read_count = "Read Count",
+    #              reads_per_base = "Reads per base",
+    #              rpkm = "RPKM",
+    #              tpm = "TPM") %>%
+    #       select(-Sample) %>%
+    #       relocate(sample) %>%
+    #       dbWriteTable(pg, "contig_abund", ., overwrite = FALSE, field.types = postgres_col_types)
+
+# Function for reading the summary tsv and saving it to the database
+read_contig_abunds_to_pg <- function(path, sample) {
+  print(sample)
+  tryCatch({
+    read_tsv(path) %>%
+      mutate(sample = sample) %>% 
+      rename(contig = "Contig",
+             mean_depth = "Mean",
+             trimmed_mean_depth = "Trimmed Mean",
+             covered_bases = "Covered Bases",
+             variance = "Variance",
+             length = "Length",
+             read_count = "Read Count",
+             reads_per_base = "Reads per base",
+             rpkm = "RPKM",
+             tpm = "TPM") %>%
+      select(-Sample) %>% 
+      relocate(sample) %>% 
+      dbWriteTable(pg, "contig_abund", ., overwrite = FALSE, append = TRUE)
+  }, error = function(e) {
+    cat("Error occurred while processing file:", path, "\n")
+    cat("Error message:", conditionMessage(e), "\n")
+  })
+}
+
+#test <- read_drep_to_pg(drep_paths$path[1],sample = drep_paths$sample[1])
+
+
+# Load new summaries into the database
+# Drop existing indices [speeds up loading of new data]
+sql('DROP INDEX public.contig_abund_contig') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.contig_abund_sample') %>% DBI::dbSendQuery(pg, .)
+
+# Append new data
+walk2(new_contig_abunds$path, new_contig_abunds$sample, read_contig_abunds_to_pg)
+
+# Recreate indices
+sql('CREATE INDEX "contig_abund_contig" ON "contig_abund" ("contig")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "contig_abund_sample" ON "contig_abund" ("sample")') %>% DBI::dbSendQuery(pg, .)
+```
+
+
 
 
 # Something with reads
