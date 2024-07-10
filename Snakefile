@@ -727,17 +727,17 @@ rule blast_Didymosphenia_geminata_chloroplast_16S:
 
 rule fastqc_decontam:
     input:
-        fwd_reads = "data/omics/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
-        rev_reads = "data/omics/metagenomes/{sample}/reads/decon_rev_reads_fastp.fastq.gz"
+        fwd_reads = "data/omics/{sample_type}/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
+        rev_reads = "data/omics/{sample_type}/{sample}/reads/decon_rev_reads_fastp.fastq.gz"
     output:
-        touch("data/omics/metagenomes/{sample}/reads/fastqc_decontam/.done")
+        touch("data/omics/{sample_type}/{sample}/reads/fastqc_decontam/.done")
     conda:
           "config/conda_yaml/fastqc.yaml"
     shell:
         """
-        mkdir -p data/omics/metagenomes/{wildcards.sample}/reads/fastqc_decontam
-        fastqc -o data/omics/metagenomes/{wildcards.sample}/reads/fastqc_decontam -t {resources.cpus} {input.fwd_reads}
-        fastqc -o data/omics/metagenomes/{wildcards.sample}/reads/fastqc_decontam -t {resources.cpus} {input.rev_reads}
+        mkdir -p data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_decontam
+        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_decontam -t {resources.cpus} {input.fwd_reads}
+        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_decontam -t {resources.cpus} {input.rev_reads}
         """
 
 rule run_fastqc_decontam:
@@ -870,8 +870,8 @@ rule assemble_biosyntheticSPAdes:
         assembly_dir = directory("data/omics/{sample_type}/{sample}/assembly/biosyntheticSPAdes"),
         contigs = "data/omics/{sample_type}/{sample}/assembly/biosyntheticSPAdes/scaffolds.fasta"
     conda: "config/conda_yaml/main.yaml"
-    log: "logs/assembly/metaspades_noNORM/{sample_type}_{sample}.log"
-    benchmark: "benchmarks/metaspades_noNORM/{sample_type}_{sample}.txt"
+    log: "logs/assembly/biosyntheticSPAdes/{sample_type}_{sample}.log"
+    benchmark: "benchmarks/biosyntheticSPAdes/{sample_type}_{sample}.txt"
     #resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
     resources: cpus = 24, time_min=20000, mem_mb = 500000, partition = "largemem"
     #resources: cpus = 36, time_min=20000, mem_mb = 170000
@@ -883,6 +883,32 @@ rule assemble_biosyntheticSPAdes:
         metaspades.py \
             -t {resources.cpus} \
             --bio \
+            --memory $(({resources.mem_mb}/1024)) \
+            -1 {input.fwd_reads} \
+            -2 {input.rev_reads} \
+            -o {output.assembly_dir} 2>&1 | tee {log}
+        """
+
+rule assemble_RNAspades:
+    input:
+        fwd_reads = rules.remove_contaminants_fastp.output.decon_fwd,
+        rev_reads = rules.remove_contaminants_fastp.output.decon_rev
+    output:
+        assembly_dir = directory("data/omics/{sample_type}/{sample}/assembly/RNAspades"),
+        contigs = "data/omics/{sample_type}/{sample}/assembly/RNAspades/transcripts.fasta"
+    conda: "config/conda_yaml/main.yaml"
+    log: "logs/assembly/RNAspades/{sample_type}_{sample}.log"
+    benchmark: "benchmarks/RNAspades/{sample_type}_{sample}.txt"
+    #resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
+    #resources: cpus = 24, time_min=20000, mem_mb = 500000, partition = "largemem"
+    #resources: cpus = 36, time_min=20000, mem_mb = 170000
+    resources: cpus = 64, time_min=20000, mem_mb = 500000
+    shell:
+        """
+        export OMP_NUM_THREADS={resources.cpus}
+
+        rnaspades.py \
+            -t {resources.cpus} \
             --memory $(({resources.mem_mb}/1024)) \
             -1 {input.fwd_reads} \
             -2 {input.rev_reads} \
@@ -1014,7 +1040,7 @@ rule assemble_megahit_noNORM:
 
 rule rename_contigs:
     input: 
-        script = "code/rename_contigs.R",
+        script = ancient("code/rename_contigs.R"),
         #assembly_dir = "data/omics/{sample_type}/{sample}/assembly/megahit",
         contigs = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.fa",
         #assembly_done = "data/omics/{sample_type}/{sample}/assembly/megahit/.done"
@@ -1322,6 +1348,36 @@ rule align_to_uniref:
             {params} 2>&1 | tee {log}
         """
 
+rule align_to_uniref_mmseqs2:
+    input:
+        genes = rules.prodigal.output.genes
+    output:
+        gene_uniref_alignment = "data/omics/{sample_type}/{sample}/{sample}_GENES_mmseqs.m8"
+    params:
+        unirefDB = "data/reference/mmseqs2/uniref100",
+        out_prefix = "data/omics/{sample_type}/{sample}/gene_map_to_uniref/{sample}",
+        tmp_dir = "/tmp/kiledal/mmseqs2_genes/{sample}",
+        sensitivity="--sensitivity 6",  # Sensitivity setting for MMseqs2
+        filter="--min-seq-id 0.5 -c 0.5 --cov-mode 0", # Adjust sequence identity and coverage mode
+        format="--format-output 'query,qlen,target,tlen,qstart,qend,tstart,tend,evalue,pident,mismatch,alnlen,gapopen,qcov,tcov'"
+    conda:  "config/conda_yaml/mmseqs.yaml"
+    log: "logs/align_to_uniref_mmseqs2/{sample_type}-{sample}_align_to_uniref.log"
+    benchmark: "benchmarks/align_to_uniref_mmseqs2/{sample_type}-{sample}_align_to_uniref.txt"
+    resources: cpus = 32, time_min = 2880, mem_mb = lambda wildcards, attempt: attempt * 100000
+    shell:
+        """
+        mmseqs easy-search \
+            {input.genes} \
+            {params.unirefDB} \
+            ./{params.out_prefix} \
+            {params.sensitivity} \
+            {params.filter} \
+            {params.format} \
+            --threads {resources.cpus} \
+            --split-memory-limit 100G \
+            2>&1 | tee {log}
+        """
+        
 rule contig_abund:
     input:
         contigs = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa",
@@ -1334,12 +1390,13 @@ rule contig_abund:
     conda: "config/conda_yaml/coverm.yaml"
     log: "logs/contig_abund/{sample}-{sample_type}.log"
     benchmark: "benchmarks/contig_abund/{sample}-{sample_type}.txt"
-    resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
-    #resources: cpus=24, mem_mb=1000000, time_min=2880, partition = "largemem" # coassembly
+    #resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
+    resources: cpus=24, mem_mb=1000000, time_min=2880, partition = "largemem" # coassembly
     shell:
         """
-        mkdir -p {params.tmpdir}
-        TMPDIR={params.tmpdir}
+        export TMPDIR={params.tmpdir}
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/ssd/$USER
+        mkdir -p $TMPDIR
 
         # Link reads w/ naming convention prefered by coverM
         fwd_reads=$(dirname {input.f_seq})/{wildcards.sample}_R1.fq.gz
@@ -1391,9 +1448,9 @@ rule calc_kraken_uniq_gtdb:
 # Inspect Kraken2 databases, nescessary to produce nicely formatted taxonomy files for downstream analysis
 rule kraken_inspect:
     input:
-        db = ancient("/geomicro/data2/kiledal/references/kraken_databases/{database}")
+        db = ancient("data/reference/kraken_databases/{database}")
     output: 
-        inspect_file = "/geomicro/data2/kiledal/references/kraken_databases/{database}/inspect.txt"
+        inspect_file = "data/reference/kraken_databases/{database}/inspect.txt"
     conda: "config/conda_yaml/kraken.yaml"
     resources: cpus=1, mem_mb=250000, time_min=5440, mem_gb = 250
     shell:
@@ -1403,10 +1460,10 @@ rule kraken_inspect:
 
 rule add_lineage_to_inspect_gtdb:
     input:
-        db = ancient("/geomicro/data2/kiledal/references/kraken_databases/gtdb_r202"),
-        inspect_file = "/geomicro/data2/kiledal/references/kraken_databases/gtdb_r202/inspect.txt"
+        db = ancient("data/reference/kraken_databases/gtdb_r202"),
+        inspect_file = "data/reference/kraken_databases/gtdb_r202/inspect.txt"
     output: 
-        inspect_w_lineage = "/geomicro/data2/kiledal/references/kraken_databases/gtdb_r202/inspect_w_lineage.txt"
+        inspect_w_lineage = "data/reference/kraken_databases/gtdb_r202/inspect_w_lineage.txt"
     conda: "config/conda_yaml/taxonkit.yaml"
     resources: cpus=1, mem_mb=250000, time_min=5440, mem_gb = 250
     shell:
@@ -1420,11 +1477,11 @@ rule add_lineage_to_inspect_gtdb:
 
 rule add_lineage_to_inspect_refseq:
     input:
-        db = ancient("/geomicro/data2/kiledal/references/kraken_databases/refseq"),
-        inspect_file = "/geomicro/data2/kiledal/references/kraken_databases/refseq/inspect.txt"
+        db = ancient("data/reference/kraken_databases/refseq"),
+        inspect_file = "data/reference/kraken_databases/refseq/inspect.txt"
     output: 
-        inspect_w_lineage_unformatted = temp("/geomicro/data2/kiledal/references/kraken_databases/refseq/unformatted_inspect_w_lineage.txt"),
-        inspect_w_lineage = "/geomicro/data2/kiledal/references/kraken_databases/refseq/inspect_w_lineage.txt"
+        inspect_w_lineage_unformatted = temp("data/reference/kraken_databases/refseq/unformatted_inspect_w_lineage.txt"),
+        inspect_w_lineage = "data/reference/kraken_databases/refseq/inspect_w_lineage.txt"
     conda: "config/conda_yaml/taxonkit.yaml"
     resources: cpus=1, mem_mb=250000, time_min=5440, mem_gb = 250
     shell:
@@ -1467,7 +1524,7 @@ rule kraken2_gtdb_w_uniq:
         r_seq = rules.remove_contaminants.output.cleaned_rev,
         # f_seq = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
         # r_seq = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz",
-        db = "/geomicro/data2/kiledal/references/kraken_databases/gtdb_r202",
+        db = "data/reference/kraken_databases/gtdb_r202",
         kreport2mpa = "code/kreport2mpa.py"
     output:
         report = "data/omics/{sample_type}/{sample}/kraken/gtdb_{sample}_report.txt",
@@ -1515,7 +1572,7 @@ rule kraken2_refseq_w_uniq: ##Run kraken2
     input:
         f_seq = rules.kraken2_gtdb_w_uniq.output.unclass_f,
         r_seq = rules.kraken2_gtdb_w_uniq.output.unclass_r,
-        db = "/geomicro/data2/kiledal/references/kraken_databases/refseq",
+        db = "data/reference/kraken_databases/refseq",
         kreport2mpa = "code/kreport2mpa.py"
     output:
         report = "data/omics/{sample_type}/{sample}/kraken/refseq_{sample}_report.txt",
@@ -1572,15 +1629,18 @@ rule kraken2_refseq_w_uniq: ##Run kraken2
 
 rule kraken2_load_gtdb_DB:
     input:
-        db = "/geomicro/data2/kiledal/references/kraken_databases/gtdb_r202"
+        db = "data/reference/kraken_databases/gtdb_r202"
     output:
-        #temp(service("/dev/shm/gtdb_r202"))
-        temp(directory("/dev/shm/gtdb_r202"))
+        #db = service("/dev/shm/gtdb_r202"),
+        db = temp(directory("/dev/shm/gtdb_r202")),
+        #loaded = service("/tmp/gtdb_copied")
+        #temp(directory("/dev/shm/gtdb_r202"))
     resources: cpus=1, mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
     shell:
         """
-        mkdir {output}
+        mkdir {output.db}
         cp -r {input.db} /dev/shm/
+        touch /tmp/gtdb_copied
         """
 
 rule kraken2_gtdb_w_uniq_fastp:
@@ -1589,7 +1649,8 @@ rule kraken2_gtdb_w_uniq_fastp:
         r_seq = "data/omics/{sample_type}/{sample}/reads/decon_rev_reads_fastp.fastq.gz",
         # f_seq = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
         # r_seq = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz",
-        db = rules.kraken2_load_gtdb_DB.output,
+        db = rules.kraken2_load_gtdb_DB.output.db,
+        #db_loaded = rules.kraken2_load_gtdb_DB.output.loaded,
         kreport2mpa = "code/kreport2mpa.py"
     output:
         report = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_report.txt",
@@ -1605,7 +1666,7 @@ rule kraken2_gtdb_w_uniq_fastp:
         unclass_out = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_unclassified#.fasta"
     conda: "config/conda_yaml/kraken.yaml"
     benchmark: "benchmarks/kraken2_gtdb_w_uniq_fastp/{sample_type}-{sample}.txt"
-    resources: cpus=16, mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
+    resources: cpus=16, mem_mb=25000, time_min=1440, mem_gb = 250, partition = "largemem"
     shell:
         """
         kraken2 \
@@ -1634,15 +1695,18 @@ rule kraken2_gtdb_w_uniq_fastp:
 
 rule kraken2_load_refseq_DB:
     input:
-        db = "/geomicro/data2/kiledal/references/kraken_databases/refseq"
+        db = "data/reference/kraken_databases/refseq"
     output:
-        #temp(service("/dev/shm/refseq"))
-        temp(directory("/dev/shm/refseq"))
+        #db = service("/dev/shm/refseq"),
+        db = temp(directory("/dev/shm/refseq")),
+        #loaded = service("/tmp/refseq_copied")
+        #temp(directory("/dev/shm/refseq"))
     resources: cpus=1, mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
     shell:
         """
-        mkdir {output}
+        mkdir {output.db}
         cp -r {input.db} /dev/shm/
+        touch /tmp/refseq_copied
         """
 
 # Any reads not annotated with the GTDB database are then annotated with a RefSeq database
@@ -1650,7 +1714,8 @@ rule kraken2_refseq_w_uniq_fastp: ##Run kraken2
     input:
         f_seq = rules.kraken2_gtdb_w_uniq_fastp.output.unclass_f,
         r_seq = rules.kraken2_gtdb_w_uniq_fastp.output.unclass_r,
-        db = rules.kraken2_load_refseq_DB.output,
+        db = rules.kraken2_load_refseq_DB.output.db,
+        #db_loaded = rules.kraken2_load_refseq_DB.output.loaded,
         kreport2mpa = "code/kreport2mpa.py"
     output:
         report = "data/omics/{sample_type}/{sample}/kraken_fastp/refseq_{sample}_report.txt",
@@ -1663,7 +1728,7 @@ rule kraken2_refseq_w_uniq_fastp: ##Run kraken2
         uniq_minimizer_threshold = 150
     benchmark: "benchmarks/kraken2_refseq_w_uniq_fastp/{sample_type}-{sample}.txt"
     conda: "config/conda_yaml/kraken.yaml"
-    resources: cpus=16, mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
+    resources: cpus=16, mem_mb=25000, time_min=1440, mem_gb = 250, partition = "largemem"
     shell:
         """
         kraken2 \
@@ -1684,20 +1749,20 @@ rule kraken2_refseq_w_uniq_fastp: ##Run kraken2
         """
 
 # Combine the kraken annotations and produce count table
-rule kraken_summarize_fastp:
-    input:
-        script = "code/merge_bracken.R",
-        kraken_results = expand("data/omics/{sample_type}/{sample}/kraken_fastp/{database}_{sample}_bracken.txt", database = ["refseq","gtdb"], sample = metaG_samples, sample_type = "metagenomes"),
-        combined_tax_info = rules.kraken_database_tax_merge.output.combined_tax_info
-    output:
-        counts = "data/sample_data/bracken_counts.tsv",
-        rel_abund = "data/sample_data/bracken_rel_abund.tsv"
-    resources: cpus=1, mem_mb=5000, time_min=60
-    container: "docker://eandersk/r_microbiome"
-    shell:
-        """
-        ./{input.script} --taxonomy={input.combined_tax_info} --counts-out={output.counts} --rel-out={output.rel_abund}
-        """
+# rule kraken_summarize_fastp:
+#     input:
+#         script = "code/merge_bracken.R",
+#         kraken_results = expand("data/omics/{sample_type}/{sample}/kraken_fastp/{database}_{sample}_bracken.txt", database = ["refseq","gtdb"], sample = metaG_samples, sample_type = "metagenomes"),
+#         combined_tax_info = rules.kraken_database_tax_merge.output.combined_tax_info
+#     output:
+#         counts = "data/sample_data/bracken_counts.tsv",
+#         rel_abund = "data/sample_data/bracken_rel_abund.tsv"
+#     resources: cpus=1, mem_mb=5000, time_min=60
+#     container: "docker://eandersk/r_microbiome"
+#     shell:
+#         """
+#         ./{input.script} --taxonomy={input.combined_tax_info} --counts-out={output.counts} --rel-out={output.rel_abund}
+#         """
 
 ################
 
@@ -1706,19 +1771,54 @@ rule kraken_summarize_fastp:
 rule plot_metacoders:
     input: expand("data/omics/metagenomes/{sample}/kraken/{sample}_kraken_metacodeR.pdf", sample=metaG_samples)
 
+# Depricated, remove
+# rule metacodeR:
+#     input:
+#         script = "code/plot_metacoder.R",
+#         abund = "data/sample_data/bracken_rel_abund.tsv"
+#         #metadata = "data/metadata.tsv"
+#     output: "data/omics/{sample_type}/{sample}/kraken/{sample}_kraken_metacodeR.pdf"
+#     resources: cpus=1, mem_mb=8000, time_min=60
+#     container: "docker://eandersk/r_microbiome"
+#     shell:
+#         """
+#         {input.script} --abund={input.abund} --sample={wildcards.sample} --output={output}
+#         """
 
-rule metacodeR:
-    input:
-        script = "code/plot_metacoder.R",
-        abund = "data/sample_data/bracken_rel_abund.tsv"
-        #metadata = "data/metadata.tsv"
-    output: "data/omics/{sample_type}/{sample}/kraken/{sample}_kraken_metacodeR.pdf"
-    resources: cpus=1, mem_mb=8000, time_min=60
-    container: "docker://eandersk/r_microbiome"
-    shell:
-        """
-        {input.script} --abund={input.abund} --sample={wildcards.sample} --output={output}
-        """
+rule bracken_metacodeR:
+        input:
+            script = "code/plot_metacoder_single_sample.R",
+            bracken_refseq = "data/omics/{sample_type}/{sample}/kraken_fastp/refseq_{sample}_bracken.txt",
+            bracken_gtdb = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_bracken.txt",
+            tax_ref = "data/reference/kraken_tax_info_merged.tsv"
+        output: "data/omics/{sample_type}/{sample}/kraken_fastp/{sample}_braken_metacodeR.pdf"
+        resources: cpus=1, mem_mb=8000, time_min=60
+        container: "docker://eandersk/r_microbiome"
+        shell:
+            """
+            {input.script} \
+                --abund-refseq={input.bracken_refseq} \
+                --abund-gtdb={input.bracken_gtdb} \
+                --sample={wildcards.sample} \
+                --tax-ref={input.tax_ref} \
+                --output={output}
+            """
+
+
+rule contig_abund_metacodeR:
+        input:
+            script = "code/plot_contig_abund_uniref_LCA_single_sample.R",
+            contig_abund = "data/omics/{sample_type}/{sample}/{sample}_lca_abund_summarized.tsv"
+        output: "data/omics/{sample_type}/{sample}/{sample}_lca_abund_metacoder.pdf"
+        resources: cpus=1, mem_mb=8000, time_min=60
+        container: "docker://eandersk/r_microbiome"
+        shell:
+            """
+            {input.script} \
+                --abund={input.contig_abund} \
+                --sample={wildcards.sample} \
+                --output={output}
+            """
 
 rule reads_unirefLCA_mmseqs:
     input:
@@ -1850,7 +1950,7 @@ rule contig_unirefLCA_mmseqs:
     log: "logs/contig_unirefLCA_mmseqs/{sample_type}-{sample}.log"
     resources:
         #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
-        mem_mb = 160000, cpus=32, time_min=1440
+        mem_mb = 160000, cpus=32, time_min=7200
     shell:
         """
         mkdir -p {params.tmp_dir}
@@ -1900,11 +2000,11 @@ rule tax_abund_summary_from_contigs:
         abund_summary = "data/omics/{sample_type}/{sample}/{sample}_lca_abund_summarized.tsv"
     params:
         lca = "data/omics/{sample_type}/{sample}/{sample}_contig_lca.tsv",
-        taxonkit_path = "~/miniconda3/envs/taxonkit/bin/taxonkit",
+        taxonkit_path = "code/dependencies/taxonkit",
         taxdump = "data/reference/ncbi_tax"
     benchmark: "benchmarks/tax_abund_summary_from_contigs/{sample_type}-{sample}.txt"
     container: "docker://eandersk/r_microbiome"
-    resources: cpus = 24, time_min=1000, mem_mb = 100000
+    resources: cpus = 24, time_min=1000, mem_mb = 150000
     priority: 2
     shell:
         """
@@ -1993,7 +2093,7 @@ rule fortify_unrefLCA:
 
 rule kofam_scan:
     input:
-        genes = rules.prodigal.output.genes,
+        genes = rules.prodigal.output.proteins,
         profile = "data/reference/kegg/kofamscan/profiles",
         ko_list = "data/reference/kegg/kofamscan/ko_list"
     output:
@@ -2007,10 +2107,11 @@ rule kofam_scan:
         """
         exec_annotation \
             -o {output.ko_annot} \
+            --format=detail-tsv \
             --cpu={resources.cpus}  \
             --profile {input.profile} \
             --tmp-dir=/tmp/{wildcards.sample}_kofamscan \
-            --ko-list {input.ko_list} {input.genes} 2>&1 | tee {log}
+            --ko-list {input.ko_list} {input.genes} | tee {log}
         """
         
 
@@ -2228,20 +2329,48 @@ rule gtdbtk:
         gtdbtk classify_wf --extension fa --genome_dir {input.bins} --out_dir {output} --cpus {resources.cpus}
         """
 
-rule mag_coverage:
+rule drep_mag_coverage:
     input:
-        fwd_reads = rules.remove_contaminants.output.cleaned_fwd,
-        rev_reads = rules.remove_contaminants.output.cleaned_rev,
-        bins = rules.dastool.output.das_bins_folder
-    output: "data/omics/{sample_type}/{sample}/bins/coverage.tsv"
-    conda: "config/conda_yaml/coverm_env.yaml"
-    resources: cpus=16, mem_mb=250000, time_min=2880
+        fwd_reads = rules.remove_contaminants_fastp.output.decon_fwd,
+        rev_reads = rules.remove_contaminants_fastp.output.decon_rev,
+        drep_done = "data/projects/{project}/{sample_type}/{sample}/bins/.drep_done"
+    output: "data/projects/{project}/{sample_type}/{sample}/bins/coverage_drep_bins.tsv"
+    params:
+        drep_bins = "data/projects/{project}/{sample_type}/{sample}/bins/drep/dereplicated_genomes"
+    conda: "config/conda_yaml/coverm.yaml"
+    resources: cpus=24, mem_mb=150000, time_min=2880
     shell:
         """
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/ssd/$USER/
+        
         coverm genome \
             -t {resources.cpus} \
-            -m relative_abundance mean covered_bases variance length \
+            -m relative_abundance mean trimmed_mean covered_bases variance length count reads_per_base rpkm tpm \
+            --output-format sparse \
             --min-covered-fraction 0 \
+            -1 {input.fwd_reads} \
+            -2 {input.rev_reads} \
+            --genome-fasta-files {params.drep_bins}/*.fa \
+            -o {output}
+        """
+
+rule das_mag_coverage:
+    input:
+        fwd_reads = rules.remove_contaminants_fastp.output.decon_fwd,
+        rev_reads = rules.remove_contaminants_fastp.output.decon_rev,
+        bins = rules.dastool.output.das_bins_folder
+    output: "data/omics/{sample_type}/{sample}/bins/coverage_das_bins.tsv"
+    conda: "config/conda_yaml/coverm_env.yaml"
+    resources: cpus=24, mem_mb=150000, time_min=2880
+    shell:
+        """
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/ssd/$USER/
+        
+        coverm genome \
+            -t {resources.cpus} \
+            -m relative_abundance mean trimmed_mean covered_bases variance length count reads_per_base rpkm tpm \
+            --min-covered-fraction 0 \
+            --output-format sparse \
             -1 {input.fwd_reads} \
             -2 {input.rev_reads} \
             --genome-fasta-files {input.bins}/*.fa \
@@ -2476,7 +2605,8 @@ rule sourmash_sketch:
 rule sourmash_gather:
     input:
        sig = "data/omics/{sample_type}/{sample}/sourmash/{sample}.sig",
-       gtdb_refDB = "data/reference/sourmash/gtdb-rs214-k31.zip",
+       #gtdb_refDB = "data/reference/sourmash/gtdb-rs214-k31.zip",
+       gtdb_refDB = "data/reference/sourmash/gtdb-rs207.dna.k31.zip",
        #genbank_fungi = "data/reference/sourmash/genbank-2022.03-fungi-k31.zip",
        #genbank_protozoa = "data/reference/sourmash/genbank-2022.03-protozoa-k31.zip",
        #genbank_viral = "data/reference/sourmash/genbank-2022.03-viral-k31.zip",
@@ -2488,7 +2618,7 @@ rule sourmash_gather:
     conda: "config/conda_yaml/sourmash.yaml"
     log: "logs/sourmash/{sample_type}-{sample}.log"
     benchmark: "benchmarks/sourmash/{sample_type}-{sample}.txt"
-    resources: cpus=1, time_min=4320, mem_mb = 20000
+    resources: cpus=1, time_min=4320, mem_mb = 80000
     shell:
         """
         sourmash gather {input.sig} {input.gtdb_refDB} {input.microcystis_refDB} -o {output.reps} 2>&1 | tee -a {log}
@@ -2777,6 +2907,8 @@ rule map_to_contigs:
     resources: cpus=32, mem_mb=150000, time_min=7200, disk_mb=500000
     shell:
         """
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/ssd/$USER/
+        
         coverm make -c data/projects/{wildcards.project}/metagenomes/*/reads/fastp_decon/*.fastq.gz \
             -r {input.contigs} \
             --discard-unmapped \
@@ -2800,13 +2932,14 @@ rule contig_coverage:
     params:
         tmpdir = "tmp/coverm_contig_coverage/{sample}"
     conda: "config/conda_yaml/coverm.yaml"
-    resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
-    #resources: cpus=24, mem_mb=1000000, time_min=2880, partition = "largemem" # coassembly
+    #resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
+    resources: cpus=24, mem_mb=1000000, time_min=2880, partition = "largemem" # coassembly
     priority: 2
     shell:
         """
-        mkdir -p {params.tmpdir}
-        TMPDIR={params.tmpdir}
+        export TMPDIR={params.tmpdir}
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/ssd/$USER
+        mkdir -p $TMPDIR
 
         coverm contig \
             -b {input.bam_dir}/*.bam \
@@ -2851,7 +2984,7 @@ rule concoct:
         contigs = rules.rename_contigs.output.contigs,
         bam_index = rules.index_contig_coverage.output.index_done,
         #bam_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bam"
-        bam_dir = config["binning_bam_dir"]
+        bam_dir = config["binning_bam_dir"] # This is the default
     output:
         cut_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/cut_contigs_10K.fa",
         cut_contigs_bed = "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/contigs_10K.bed",
@@ -2859,11 +2992,13 @@ rule concoct:
     params:
         outdir = "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/output",
         #bam = "data/projects/{project}/{sample_type}/{sample}/bins/bam/*.bam"
-        bam = config["binning_bam_dir"] + "/*.bam"
+        bam = config["binning_bam_dir"] + "/*.bam" # This is the default
+        #bam = "/ssd/GLAMR/binning/bams/bams/{project}/{sample_type}/{sample}/*.bam" #changed just for Paul's coassembly
     benchmark: "benchmarks/concoct/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/concoct.yaml"
-    resources: cpus=16, mem_mb=150000, time_min=10080, mem_gb = 50 # standard samples
+    #resources: cpus=16, mem_mb=150000, time_min=10080, mem_gb = 50 # standard samples
     #resources: cpus=24, mem_mb=170000, time_min=10080, mem_gb = 50 # coassembly
+    resources: cpus=16, mem_mb=500000, time_min=10080, partition = "largemem" # XLcoassembly
     priority: 3
     shell:
         """
@@ -2894,8 +3029,8 @@ rule metabat2:
         bin_name = directory("data/projects/{project}/{sample_type}/{sample}/bins/METABAT2/metabat2")
     benchmark: "benchmarks/metabat2/{sample_type}-{project}__{sample}.txt"
     singularity: "docker://metabat/metabat"
-    resources: cpus=16, mem_mb=20000, time_min=2880 # standard samples
-    #resources: cpus=36, mem_mb=150000, time_min=5880 # coassembly
+    #resources: cpus=16, mem_mb=20000, time_min=2880 # standard samples
+    resources: cpus=36, mem_mb=150000, time_min=5880 # coassembly
     priority: 3
     shell:
         """
@@ -2915,8 +3050,8 @@ rule maxbin2_coverage:
     output:
         depths_file = "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/depths.txt"
     singularity: "docker://eandersk/r_microbiome"
-    #resources: cpus=1, mem_mb=50000, time_min=1000 #standard samples
-    resources: cpus=1, mem_mb=120000, time_min=2000 #coassembly
+    #resources: cpus=1, mem_mb=50000, time_min=1000 # standard samples
+    resources: cpus=1, mem_mb=120000, time_min=2000 # coassembly
     priority: 3
     shell:
         """
@@ -2936,8 +3071,8 @@ rule maxbin2:
         bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/maxbin"
     benchmark: "benchmarks/maxbin/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/maxbin.yaml"
-    resources: cpus=16, mem_mb=20000, time_min=10080 # standard samples
-    #resources: cpus=16, mem_mb=80000, time_min=10080 # coassembly
+    #resources: cpus=16, mem_mb=20000, time_min=10080 # standard samples
+    resources: cpus=16, mem_mb=80000, time_min=20130 # coassembly
     priority: 3
     shell:
         """
@@ -2978,8 +3113,8 @@ rule semibin:
     conda: "config/conda_yaml/semibin.yaml"
     benchmark: "benchmarks/semibin/{sample_type}-{project}__{sample}.txt"
     log: "logs/semibin/{sample_type}-{project}__{sample}.log"
-    resources: cpus=16, mem_mb=170000, time_min=2880, mem_gb = 50 # standard samples
-    #resources: cpus=32, mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
+    #resources: cpus=16, mem_mb=170000, time_min=2880, mem_gb = 50 # standard samples
+    resources: cpus=32, mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
     priority: 3
     shell:
         """
@@ -3019,8 +3154,8 @@ rule VAMB:
     #conda: "/home/kiledal/miniconda3/envs/vamb"
     benchmark: "benchmarks/VAMB/{sample_type}-{project}__{sample}.txt"
     log: "logs/VAMB/{sample_type}-{project}__{sample}.log"
-    #resources: cpus=1, mem_mb=40000, time_min=1440, partition = "gpu", gpu = 1 #standard samples
-    resources: cpus=1, mem_mb=120000, time_min=1440, partition = "gpu", gpu = 1 #coassembly
+    #resources: cpus=1, mem_mb=40000, time_min=1440, partition = "gpu", gpu = 1 # standard samples
+    resources: cpus=1, mem_mb=120000, time_min=14400, partition = "gpu", gpu = 1 # coassembly
     priority: 3
     shell:
         """
@@ -3040,8 +3175,8 @@ rule format_coverage_for_metadecoder:
         contigs = rules.rename_contigs.output.contigs
     output: "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/coverage.tsv"
     singularity: "docker://eandersk/r_microbiome"
-    resources: cpus=1, mem_mb = 50000, time_min=360 # standard samples
-    #resources: cpus=1, mem_mb = 140000, time_min=2000 # coassembly
+    #resources: cpus=1, mem_mb = 50000, time_min=360 # standard samples
+    resources: cpus=1, mem_mb = 140000, time_min=2000 # coassembly
     priority: 3
     shell:
         """
@@ -3065,8 +3200,8 @@ rule metadecoder:
     shadow: "minimal"
     benchmark: "benchmarks/metadecoder/{sample_type}-{project}__{sample}.txt"
     log: "logs/metadecoder/{sample_type}-{project}__{sample}.log"
-    resources: cpus=1, mem_mb=150000, time_min=10080, partition = "gpu", gpu = 1 # standard samples
-    #resources: cpus=1, mem_mb=160000, time_min=15080, partition = "gpu", gpu = 1 # coassembly
+    #resources: cpus=1, mem_mb=150000, time_min=10080, partition = "gpu", gpu = 1 # standard samples
+    resources: cpus=1, mem_mb=160000, time_min=15080, partition = "gpu", gpu = 1 # coassembly
     priority: 3
     shell:
         """
@@ -3142,7 +3277,7 @@ rule make_das_and_drep_inputs:
         semibin_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/semibin_contigs.tsv",
         VAMB_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/VAMB_contigs.tsv"
     singularity: "docker://eandersk/r_microbiome"
-    resources: cpus=1, mem_mb = 50000, time_min=360
+    resources: cpus=1, mem_mb = 50000, time_min=1440
     priority: 4
     shell:
         """
@@ -3229,6 +3364,8 @@ rule drep_new:
             -p {resources.cpus} \
             --contamination 50 \
             --completeness 30 \
+            -pa 0.9 \
+            -sa 0.99 \
             --length 10000 \
             --genomeInfo {params.genome_info} \
             -g {params.input_bins}
@@ -3273,6 +3410,29 @@ rule GTDB:
             --pplacer_cpus {params.pplacer_cpus}
         """
 
+rule GTDB_to_NCBI:
+    input:
+        "data/projects/{project}/{sample_type}/{sample}/bins/.done_GTDB"
+        #"/home/kiledal/geomicro_home/references/.done_gtdb_refs_downloaded"
+    params:
+        refs = "/nfs/turbo/lsa-Erie/GVHD/data/reference/GTDBtk/release207_v2",
+        out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/GTDB",
+    output: "data/projects/{project}/{sample_type}/{sample}/bins/GTDB/gtdb_to_ncbi_taxonmy.tsv"
+    conda: "config/conda_yaml/gtdbtk.yaml"
+    benchmark: "benchmarks/GTDB_to_NCBI/{sample_type}-{project}__{sample}.txt"
+    log: "logs/GTDB_to_NCBI/{sample_type}-{project}__{sample}.log"
+    resources: cpus=1, mem_mb=4000, time_min=240
+    priority: 4
+    shell:
+        """
+        export GTDBTK_DATA_PATH={params.refs}
+
+        python code/GTDBtk_scripts/gtdb_to_ncbi_majority_vote.py \
+            --gtdbtk_output_dir {params.out_dir} \
+            --output_file {params.out_dir}/gtdb_to_ncbi_taxonmy.tsv \
+            --bac120_metadata_file {params.refs}/bac120_metadata_r207.tar.gz \
+            --ar53_metadata_file {params.refs}/ar53_metadata_r207.tar.gz
+        """
 
 rule gunc_GTDB_db_download:
     output: directory("data/reference/gunc_gtdb")
@@ -3693,3 +3853,69 @@ kofamscan_df = open('../projects/2023_glerl_usgs_metagenomes/data/kofamscan_bin_
 rule run_kofam_glerl:
     input:
         kofamscan_df
+
+
+rule map_reads_to_microcystis_markers:
+    input:
+        f_reads = "data/omics/{sample_type}/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
+        r_reads = "data/omics/{sample_type}/{sample}/reads/decon_rev_reads_fastp.fastq.gz",
+        ref = "data/reference/microcystis_markers/{marker}.fasta"
+    output:
+        temp_bam = temp("data/omics/{sample_type}/{sample}/microcystis_markers/{sample}--{marker}_mapped_temp.bam"),
+        sam = temp("data/omics/{sample_type}/{sample}/microcystis_markers/{sample}--{marker}_mapped.sam"),
+        bam = "data/omics/{sample_type}/{sample}/microcystis_markers/{sample}--{marker}_mapped.bam",
+        unsorted_bam = temp("data/omics/{sample_type}/{sample}/microcystis_markers/{sample}--{marker}_mapped_unsorted.bam")
+    params:
+        min_cover = 25,
+        min_id = 95
+    conda: "config/conda_yaml/bwa.yaml"
+    benchmark: "benchmarks/map_reads_to_microcystis_markers/{sample_type}_{sample}--{marker}.txt"
+    log: "logs/map_reads_to_microcystis_markers/{sample_type}_{sample}--{marker}.log"
+    resources: cpus=16
+    shell:
+        """
+        mkdir -p $(dirname {output.bam})
+
+        minimap2 \
+            -ax sr \
+            -t {resources.cpus} \
+            --secondary=no \
+            --sam-hit-only \
+            {input.ref} \
+            {input.f_reads} {input.r_reads} > {output.sam}
+
+        samtools view -bS {output.sam} > {output.temp_bam}
+        
+        filterBam \
+            --in {output.temp_bam} \
+            --out {output.unsorted_bam} \
+            --minCover {params.min_cover} \
+            --minId {params.min_id}
+        
+        samtools sort -o {output.bam} -@ {resources.cpus} {output.unsorted_bam}
+        samtools index -@ {resources.cpus} {output.bam}
+        """
+
+rule summarize_marker_mapping:
+    input:
+        bam = "data/omics/{sample_type}/{sample}/microcystis_markers/{sample}--{marker}_mapped.bam",
+        read_counts = "data/omics/{sample_type}/{sample}/reads/{sample}_read_count_fastp.tsv",
+        marker_info = "data/reference/microcystis_markers/info/20240709_groupings.tsv"
+    output:
+        marker_summary = "data/omics/{sample_type}/{sample}/microcystis_markers/{sample}--{marker}_summary.tsv",
+        clade_summary = "data/omics/{sample_type}/{sample}/microcystis_markers/{sample}--{marker}_clade-summary.tsv"
+    params:
+    resources: cpus=1, mem_mb=5000, time_min=60
+    benchmark: "benchmarks/summarize_marker_mapping/{sample_type}_{sample}--{marker}.txt"
+    log: "logs/summarize_marker_mapping/{sample_type}_{sample}--{marker}.log"
+    container: "docker://eandersk/r_microbiome"
+    shell:
+        """
+        code/summarize_marker_gene_read_mapping.R \
+            -i {input.bam} \
+            --clade-summary {output.clade_summary} \
+            --marker-summary {output.marker_summary} \
+            --prefix {wildcards.sample} \
+            --info {input.marker_info} \
+            --read-counts {input.read_counts}
+        """
