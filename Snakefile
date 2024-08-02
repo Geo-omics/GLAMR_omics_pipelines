@@ -269,10 +269,10 @@ rule clumpify:
             groups=24 \
             zl=9 pigz \
             t={resources.cpus} \
-            2>&1 | tee {log}
+            2>&1 | tee {log} &&
 
-        rm {input.fwd_reads} {input.rev_reads}
-        mv {params.clumped_fwd_reads} {input.fwd_reads}
+        rm {input.fwd_reads} {input.rev_reads} &&
+        mv {params.clumped_fwd_reads} {input.fwd_reads} &&
         mv {params.clumped_rev_reads} {input.rev_reads}
         """
 
@@ -386,7 +386,6 @@ rule fastp:
         time_min=2880
     shell:
         """
-        
         # First deduplicate
         fastp \
             -i {input.fwd_reads} -I {input.rev_reads} \
@@ -791,10 +790,10 @@ rule count_reads_fastp:
     resources: cpus=4
     shell:
         """
-        printf "read_state\tfwd_read_count\trev_read_count\n" > {output}
-        printf "raw_reads\t$(($(pigz -dc -p {resources.cpus} {input.raw_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.raw_reads_rev} | wc -l) / 4 ))\n" >> {output}
-        printf "deduped_reads\t$(($(pigz -dc -p {resources.cpus} {input.deduped_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.deduped_reads_rev} | wc -l) / 4 ))\n" >> {output}
-        printf "filt_and_trimmed_reads\t$(($(pigz -dc -p {resources.cpus} {input.qual_filt_and_trimmed_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.qual_filt_and_trimmed_rev} | wc -l) / 4 ))\n" >> {output}
+        printf "read_state\tfwd_read_count\trev_read_count\n" > {output} &&
+        printf "raw_reads\t$(($(pigz -dc -p {resources.cpus} {input.raw_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.raw_reads_rev} | wc -l) / 4 ))\n" >> {output} &&
+        printf "deduped_reads\t$(($(pigz -dc -p {resources.cpus} {input.deduped_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.deduped_reads_rev} | wc -l) / 4 ))\n" >> {output} &&
+        printf "filt_and_trimmed_reads\t$(($(pigz -dc -p {resources.cpus} {input.qual_filt_and_trimmed_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.qual_filt_and_trimmed_rev} | wc -l) / 4 ))\n" >> {output} &&
         printf "decon_reads\t$(($(pigz -dc -p {resources.cpus} {input.decon_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.decon_reads_rev} | wc -l) / 4 ))\n" >> {output}
         """
         #printf "bbnorm_reads\t$(($(pigz -dc -p {resources.cpus} {input.bbnorm_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.bbnorm_reads_rev} | wc -l) / 4 ))\n" >> {output}
@@ -1295,7 +1294,7 @@ rule calc_gene_abundance:
         """
         bbmap.sh t={resources.cpus} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.genes}) ref={input.genes} rpkm={output.reads_vs_genes_rpkm} 2>&1 | tee -a {log}
         bbmap.sh t={resources.cpus} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.assembly}) ref={input.assembly} rpkm={output.reads_vs_contigs_rpkm} 32bit=t outm={params.reads_vs_assembly_sam} 2>&1 | tee -a {log}
-        gzip {params.reads_vs_assembly_sam}
+        pigz -9 -p {resources.cpus} {params.reads_vs_assembly_sam}
         """
 
 # rule download_uniref:
@@ -1390,8 +1389,8 @@ rule contig_abund:
     conda: "config/conda_yaml/coverm.yaml"
     log: "logs/contig_abund/{sample}-{sample_type}.log"
     benchmark: "benchmarks/contig_abund/{sample}-{sample_type}.txt"
-    #resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
-    resources: cpus=24, mem_mb=1000000, time_min=2880, partition = "largemem" # coassembly
+    resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
+    #resources: cpus=24, mem_mb=1000000, time_min=2880, partition = "largemem" # coassembly
     shell:
         """
         export TMPDIR={params.tmpdir}
@@ -2932,8 +2931,8 @@ rule contig_coverage:
     params:
         tmpdir = "tmp/coverm_contig_coverage/{sample}"
     conda: "config/conda_yaml/coverm.yaml"
-    #resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
-    resources: cpus=24, mem_mb=1000000, time_min=2880, partition = "largemem" # coassembly
+    resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
+    #resources: cpus=24, mem_mb=1000000, time_min=2880, partition = "largemem" # coassembly
     priority: 2
     shell:
         """
@@ -2996,9 +2995,9 @@ rule concoct:
         #bam = "/ssd/GLAMR/binning/bams/bams/{project}/{sample_type}/{sample}/*.bam" #changed just for Paul's coassembly
     benchmark: "benchmarks/concoct/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/concoct.yaml"
-    #resources: cpus=16, mem_mb=150000, time_min=10080, mem_gb = 50 # standard samples
+    resources: cpus=16, mem_mb=150000, time_min=10080, mem_gb = 50 # standard samples
     #resources: cpus=24, mem_mb=170000, time_min=10080, mem_gb = 50 # coassembly
-    resources: cpus=16, mem_mb=500000, time_min=10080, partition = "largemem" # XLcoassembly
+    #resources: cpus=16, mem_mb=500000, time_min=10080, partition = "largemem" # XLcoassembly
     priority: 3
     shell:
         """
@@ -3029,8 +3028,8 @@ rule metabat2:
         bin_name = directory("data/projects/{project}/{sample_type}/{sample}/bins/METABAT2/metabat2")
     benchmark: "benchmarks/metabat2/{sample_type}-{project}__{sample}.txt"
     singularity: "docker://metabat/metabat"
-    #resources: cpus=16, mem_mb=20000, time_min=2880 # standard samples
-    resources: cpus=36, mem_mb=150000, time_min=5880 # coassembly
+    resources: cpus=16, mem_mb=20000, time_min=2880 # standard samples
+    #resources: cpus=36, mem_mb=150000, time_min=5880 # coassembly
     priority: 3
     shell:
         """
@@ -3050,8 +3049,8 @@ rule maxbin2_coverage:
     output:
         depths_file = "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/depths.txt"
     singularity: "docker://eandersk/r_microbiome"
-    #resources: cpus=1, mem_mb=50000, time_min=1000 # standard samples
-    resources: cpus=1, mem_mb=120000, time_min=2000 # coassembly
+    resources: cpus=1, mem_mb=50000, time_min=1000 # standard samples
+    #resources: cpus=1, mem_mb=120000, time_min=2000 # coassembly
     priority: 3
     shell:
         """
@@ -3071,8 +3070,8 @@ rule maxbin2:
         bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/maxbin"
     benchmark: "benchmarks/maxbin/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/maxbin.yaml"
-    #resources: cpus=16, mem_mb=20000, time_min=10080 # standard samples
-    resources: cpus=16, mem_mb=80000, time_min=20130 # coassembly
+    resources: cpus=16, mem_mb=20000, time_min=10080 # standard samples
+    #resources: cpus=16, mem_mb=80000, time_min=20130 # coassembly
     priority: 3
     shell:
         """
@@ -3113,8 +3112,8 @@ rule semibin:
     conda: "config/conda_yaml/semibin.yaml"
     benchmark: "benchmarks/semibin/{sample_type}-{project}__{sample}.txt"
     log: "logs/semibin/{sample_type}-{project}__{sample}.log"
-    #resources: cpus=16, mem_mb=170000, time_min=2880, mem_gb = 50 # standard samples
-    resources: cpus=32, mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
+    resources: cpus=16, mem_mb=170000, time_min=2880, mem_gb = 50 # standard samples
+    #resources: cpus=32, mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
     priority: 3
     shell:
         """
@@ -3154,8 +3153,8 @@ rule VAMB:
     #conda: "/home/kiledal/miniconda3/envs/vamb"
     benchmark: "benchmarks/VAMB/{sample_type}-{project}__{sample}.txt"
     log: "logs/VAMB/{sample_type}-{project}__{sample}.log"
-    #resources: cpus=1, mem_mb=40000, time_min=1440, partition = "gpu", gpu = 1 # standard samples
-    resources: cpus=1, mem_mb=120000, time_min=14400, partition = "gpu", gpu = 1 # coassembly
+    resources: cpus=1, mem_mb=40000, time_min=1440, partition = "gpu", gpu = 1 # standard samples
+    #resources: cpus=1, mem_mb=120000, time_min=14400, partition = "gpu", gpu = 1 # coassembly
     priority: 3
     shell:
         """
@@ -3175,8 +3174,8 @@ rule format_coverage_for_metadecoder:
         contigs = rules.rename_contigs.output.contigs
     output: "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/coverage.tsv"
     singularity: "docker://eandersk/r_microbiome"
-    #resources: cpus=1, mem_mb = 50000, time_min=360 # standard samples
-    resources: cpus=1, mem_mb = 140000, time_min=2000 # coassembly
+    resources: cpus=1, mem_mb = 50000, time_min=360 # standard samples
+    #resources: cpus=1, mem_mb = 140000, time_min=2000 # coassembly
     priority: 3
     shell:
         """
@@ -3200,8 +3199,8 @@ rule metadecoder:
     shadow: "minimal"
     benchmark: "benchmarks/metadecoder/{sample_type}-{project}__{sample}.txt"
     log: "logs/metadecoder/{sample_type}-{project}__{sample}.log"
-    #resources: cpus=1, mem_mb=150000, time_min=10080, partition = "gpu", gpu = 1 # standard samples
-    resources: cpus=1, mem_mb=160000, time_min=15080, partition = "gpu", gpu = 1 # coassembly
+    resources: cpus=1, mem_mb=150000, time_min=10080, partition = "gpu", gpu = 1 # standard samples
+    #resources: cpus=1, mem_mb=160000, time_min=15080, partition = "gpu", gpu = 1 # coassembly
     priority: 3
     shell:
         """
