@@ -488,7 +488,7 @@ rule get_contaminants:
 
 rule bb_index:
     input:
-        human_genome = rules.get_contaminants.output.human_genome
+        human_genome = ancient(rules.get_contaminants.output.human_genome)
     output:
         "data/reference/contaminants/ref/genome/1/summary.txt",
         index = directory("data/reference/contaminants/ref/")
@@ -1394,7 +1394,7 @@ rule contig_abund:
     shell:
         """
         export TMPDIR={params.tmpdir}
-        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/ssd/$USER
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/coverm_contig_abund/{wildcards.sample}
         mkdir -p $TMPDIR
 
         # Link reads w/ naming convention prefered by coverM
@@ -1411,7 +1411,7 @@ rule contig_abund:
             --output-format sparse \
             --output-file {output.coverage_full} 2>&1 | tee {log}
 
-        rm -r {params.tmpdir} $fwd_reads $rev_reads 
+        rm -r $TMPDIR $fwd_reads $rev_reads 
         """
 
 rule calc_contig_abund:
@@ -2340,7 +2340,7 @@ rule drep_mag_coverage:
     resources: cpus=24, mem_mb=150000, time_min=2880
     shell:
         """
-        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/ssd/$USER/
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/
         
         coverm genome \
             -t {resources.cpus} \
@@ -2363,7 +2363,7 @@ rule das_mag_coverage:
     resources: cpus=24, mem_mb=150000, time_min=2880
     shell:
         """
-        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/ssd/$USER/
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/
         
         coverm genome \
             -t {resources.cpus} \
@@ -2902,16 +2902,27 @@ rule map_to_contigs:
     output: 
         #bam_dir = temp(directory("data/projects/{project}/{sample_type}/{sample}/bins/bam"))
         bam_dir = temp(directory(config["binning_bam_dir"]))
+    params:
+        #mapper = "minimap2-sr",
+        mapper = "strobealign"
     conda: "config/conda_yaml/coverm.yaml"
-    resources: cpus=32, mem_mb=150000, time_min=7200, disk_mb=500000
+    resources: cpus=32, mem_mb=150000, time_min=7200, disk_mb=500000, scratch_disk_mb = 1000000
     shell:
         """
-        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/ssd/$USER/
+        # Was running out of space on GL when using the local /tmp drives on each node, so use the /scratch space instead
+        export TMPDIR={output.bam_dir}/coverm_tmp
         
+        # Different tmp dir if running on lab servers
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/
+        
+        # Ensure directory exists
+        mkdir -p $TMPDIR
+
         coverm make -c data/projects/{wildcards.project}/metagenomes/*/reads/fastp_decon/*.fastq.gz \
             -r {input.contigs} \
             --discard-unmapped \
             -t {resources.cpus} \
+            --mapper {params.mapper} \
             -o {output.bam_dir} 
         """
 
@@ -2937,7 +2948,7 @@ rule contig_coverage:
     shell:
         """
         export TMPDIR={params.tmpdir}
-        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/ssd/$USER
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER
         mkdir -p $TMPDIR
 
         coverm contig \
@@ -3918,3 +3929,35 @@ rule summarize_marker_mapping:
             --info {input.marker_info} \
             --read-counts {input.read_counts}
         """
+
+
+rule amplicon_hmm:
+    input:
+        fastq_fwd = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
+        fastq_rev = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz"
+    output:
+        hmm_tbl_fwd = "data/omics/{sample_type}/{sample}/detect_region/fwd.txt",
+        hmm_tbl_rev ="data/omics/{sample_type}/{sample}/detect_region/rev.txt",
+        full_out_fwd = "data/omics/{sample_type}/{sample}/detect_region/full_fwd.txt",
+        full_out_rev = "data/omics/{sample_type}/{sample}/detect_region/full_rev.txt"
+    params:
+        amplicon_hmm_db ="data/reference/hmm_amplicons/combined.hmm"
+    resources: cpus=1, mem_mb=20000, time_min=500
+    benchmark: "benchmarks/amplicon_hmm/{sample_type}_{sample}.txt"
+    log: "logs/amplicon_hmm/{sample_type}_{sample}.log"
+    conda: "config/conda_yaml/hmmer.yaml"
+    shell:
+        """
+        mkdir -p $(dirname {output.hmm_tbl_fwd})
+
+        seqkit head -n 1000 {input.fastq_fwd} | 
+            seqkit fq2fa | 
+            nhmmscan --cpu {resources.cpus} --tblout {output.hmm_tbl_fwd} {params.amplicon_hmm_db} - > {output.full_out_fwd} &&
+        
+        seqkit head -n 1000 {input.fastq_rev} | 
+            seqkit fq2fa | 
+            nhmmscan --cpu {resources.cpus} --tblout {output.hmm_tbl_rev} {params.amplicon_hmm_db} - > {output.full_out_rev}
+        """
+
+
+

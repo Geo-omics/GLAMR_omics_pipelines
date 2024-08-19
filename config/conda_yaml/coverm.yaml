@@ -3,6 +3,5 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - coverm=0.6.1
-  - samtools=1.15.1
-  - parallel=20220722
+  - coverm=0.7.0
+  - parallel=20240722
