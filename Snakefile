@@ -533,8 +533,13 @@ rule remove_contaminants:
         "benchmarks/remove_contaminants/{sample_type}-{sample}.txt"
     resources: cpus = 24, mem_mb = lambda wildcards, attempt: attempt * 120000, time_min = 2880
     shell:
-        """        
-        bbduk.sh -Xmx{resources.mem_mb}m \
+        """       
+        bbmap_mem=$(echo "scale=-1; ({resources.mem_mb}*0.8)/1" | bc)
+       
+        echo "Job memory= {resources.mem_mb}, bbmap allocated memory=$bbmap_mem because it is greedy"
+
+        bbduk.sh \
+            -Xmx${{bbmap_mem}}m -eoom \
             in1={input.dedup_reads_fwd} \
             in2={input.dedup_reads_rev} \
             out1={output.trimmed_fwd} \
@@ -550,7 +555,8 @@ rule remove_contaminants:
         
         echo "\n\n***doing spike-in removal***\n\n" >> {log}
         
-        bbduk.sh -Xmx{resources.mem_mb}m \
+        bbduk.sh \
+            -Xmx${{bbmap_mem}}m -eoom \
             in1={output.trimmed_fwd} \
             in2={output.trimmed_rev} \
             outu1={output.phix_rm_fwd} \
@@ -562,6 +568,7 @@ rule remove_contaminants:
         
         echo "\n\n***doing remove contaminants***\n\n" >> {log}
         bbmap.sh \
+            -Xmx${{bbmap_mem}}m -eoom \
             in1={output.phix_rm_fwd} \
             in2={output.phix_rm_rev} \
             outu1={output.decon_fwd} \
@@ -651,10 +658,15 @@ rule remove_contaminants_fastp:
     log: "logs/remove_contaminants_fastp/{sample_type}-{sample}.log"
     benchmark:
         "benchmarks/remove_contaminants_fastp/{sample_type}-{sample}.txt"
-    resources: cpus = 24, mem_mb = lambda wildcards, attempt: attempt * 100000, time_min = 2880
+    resources: cpus = 24, mem_mb = lambda wildcards, attempt: attempt * 120000, time_min = 2880
     shell:
-        """        
-        bbduk.sh -Xmx{resources.mem_mb}m \
+        """
+        bbmap_mem=$(echo "scale=-1; ({resources.mem_mb}*0.8)/1" | bc)
+       
+        echo "Job memory= {resources.mem_mb}, bbmap allocated memory=$bbmap_mem because it is greedy"
+
+        bbduk.sh \
+            -Xmx${{bbmap_mem}}m -eoom \
             in1={input.dedup_reads_fwd} \
             in2={input.dedup_reads_rev} \
             outu1={output.phix_rm_fwd} \
@@ -666,6 +678,7 @@ rule remove_contaminants_fastp:
         
         echo "\n\n***doing remove contaminants***\n\n" >> {log}
         bbmap.sh \
+            -Xmx${{bbmap_mem}}m -eoom \
             in1={output.phix_rm_fwd} \
             in2={output.phix_rm_rev} \
             outu1={output.decon_fwd} \
@@ -673,7 +686,6 @@ rule remove_contaminants_fastp:
             t={resources.cpus} fast=t \
             ref={input.human_genome} \
             path={params.bbmap_index_path} \
-            -Xmx{resources.mem_mb}m  \
             2>&1 | tee -a {log}
         """
 
@@ -2903,8 +2915,8 @@ rule map_to_contigs:
         #bam_dir = temp(directory("data/projects/{project}/{sample_type}/{sample}/bins/bam"))
         bam_dir = temp(directory(config["binning_bam_dir"]))
     params:
-        #mapper = "minimap2-sr",
-        mapper = "strobealign"
+        mapper = "minimap2-sr",
+        #mapper = "strobealign"
     conda: "config/conda_yaml/coverm.yaml"
     resources: cpus=32, mem_mb=150000, time_min=7200, disk_mb=500000, scratch_disk_mb = 1000000
     shell:
@@ -3959,5 +3971,47 @@ rule amplicon_hmm:
             nhmmscan --cpu {resources.cpus} --tblout {output.hmm_tbl_rev} {params.amplicon_hmm_db} - > {output.full_out_rev}
         """
 
+rule amplicon_hmm_summarize:
+    input:
+        hmm_tbl_fwd = "data/omics/{sample_type}/{sample}/detect_region/fwd.txt",
+        hmm_tbl_rev = "data/omics/{sample_type}/{sample}/detect_region/rev.txt"
+    output:
+        hmm_tbl_summary_fwd = "data/omics/{sample_type}/{sample}/detect_region/fwd_summary.tsv",
+        hmm_tbl_summary_rev = "data/omics/{sample_type}/{sample}/detect_region/rev_summary.tsv"
+    resources: cpus=1, mem_mb=10000, time_min=500
+    benchmark: "benchmarks/amplicon_hmm_summarize/{sample_type}_{sample}.txt"
+    log: "logs/amplicon_hmm_summarize/{sample_type}_{sample}.log"
+    container: "docker://eandersk/r_microbiome"
+    shell:
+        """
+        ./code/summarize_hmmscan.R --input {input.hmm_tbl_fwd} --output {output.hmm_tbl_summary_fwd}
+        ./code/summarize_hmmscan.R --input {input.hmm_tbl_rev} --output {output.hmm_tbl_summary_rev}
+        """
 
-
+rule deeparg_ls: #this rule is using LS mode and annotated genes  
+    input:
+        genes="data/omics/{sample_type}/{sample}/genes/{sample}_GENES.fna"  # For sets 35, 41, 42
+    output:
+        predictions = "data/omics/{sample_type}/{sample}/deeparg/predictions.out.mapping.ARG"
+    params:
+        reference="data/reference/deeparg",
+        output_prefix="data/omics/{sample_type}/{sample}/deeparg/predictions.out"
+    benchmark: "benchmarks/deeparg_ls/{sample_type}_{sample}.txt"
+    log: "logs/deeparg_ls/{sample_type}_{sample}.log"
+    conda:
+        "config/conda_yaml/deeparg.yml"
+    resources:
+        cpus=1, mem_mb=20000, time_min=10000
+    shell:
+        """
+        deeparg predict \
+            --model LS \
+            -i {input.genes} \
+            -o {params.output_prefix} \
+            -d {params.reference} \
+            --type nucl \
+            --min-prob 0.8 \
+            --arg-alignment-identity 30 \
+            --arg-alignment-evalue 1e-10 \
+            --arg-num-alignments-per-entry 1000 | tee {log}
+        """
