@@ -13,7 +13,7 @@ library(DBI)
 conflicted::conflicts_prefer(dplyr::select(), dplyr::rename(), dplyr::filter(), dplyr::lag())
 
 # Open database connection
-pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "localhost", port = "5431", user = "glamr_admin", password = "glamr2023")
+pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "localhost", port = "5432", user = "glamr_admin", password = "glamr2023")
 
 
 # Function for getting sample lists from tables quickly using existing index
@@ -64,8 +64,15 @@ cleaned_up_sample_table <- samples %>%
   mutate(across(c(part_microcyst,lon,nitrate,diss_microcyst, soluble_react_phosp, ammonia, urea, pH, tot_phos,wave_height, wind_speed, salinity, atmospheric_temp, particulate_cyl), ~as.numeric(.x))) %>% 
   filter(!is.na(SampleID))
 
+
+# Add GVHD samples 
+gvhd_samples <- googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/1jZLyocWDgjRKwjv0JgBQscLtgD2rIjkApoI2mjLGGqw/edit?gid=0#gid=0")
+
+combined_sample_table <- bind_rows(cleaned_up_sample_table, gvhd_samples)
+
+
 # Write table to database
-dbWriteTable(pg,"glamr_samples", cleaned_up_sample_table,overwrite = TRUE)
+dbWriteTable(pg,"glamr_samples", combined_sample_table,overwrite = TRUE)
 ```
 
 
@@ -1080,8 +1087,8 @@ read_mc_marker_abunds_to_pg <- function(path, sample, marker) {
 
 # Load new summaries into the database
 # Drop existing indices [speeds up loading of new data]
-# sql('DROP INDEX public.mc_marker_abunds_sample') %>% DBI::dbSendQuery(pg, .)
-# sql('DROP INDEX public.mc_marker_abunds_seq') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.mc_marker_abunds_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.mc_marker_abunds_seq') %>% DBI::dbSendQuery(pg, .)
 
 # Append new data
 pwalk(list(path = new_mc_marker_abunds$path, 
@@ -1149,8 +1156,8 @@ read_mc_clade_abunds_to_pg <- function(path, sample, marker) {
 
 # Load new summaries into the database
 # Drop existing indices [speeds up loading of new data]
-# sql('DROP INDEX public.mc_clade_abund_sample') %>% DBI::dbSendQuery(pg, .)
-# sql('DROP INDEX public.mc_clade_abund_clade') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.mc_clade_abund_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.mc_clade_abund_clade') %>% DBI::dbSendQuery(pg, .)
 
 # Append new data
 pwalk(list(path = new_mc_clade_abunds$path, 
@@ -1161,6 +1168,146 @@ pwalk(list(path = new_mc_clade_abunds$path,
 # Recreate indices
 sql('CREATE INDEX "mc_clade_abund_sample" ON "mc_clade_abunds" ("sample")') %>% DBI::dbSendQuery(pg, .)
 sql('CREATE INDEX "mc_clade_abund_clade" ON "mc_clade_abunds" ("clade")') %>% DBI::dbSendQuery(pg, .)
+```
+
+
+## Amplicon detection summary 
+```{r}
+# Get contig abundances that are already loaded into the database
+existing_amplicon_summaries <- tbl(pg, "amplicon_region_summary") %>% 
+  select(sample, read_direction) %>% 
+  distinct() %>% 
+  collect()
+
+# Find all contig abundance tsvs
+amplicon_summaries <- Sys.glob("data/omics/amplicons/*/detect_region/*_summary.tsv") %>% 
+  data.frame(path = .) %>% 
+  bind_cols(.,unglue::unglue_data(.$path,"data/omics/{sample_type}/{sample}/detect_region/{read_direction}_summary.tsv")) %>% 
+  bind_cols(file.info(.$path))
+
+# Filter list of tsvs to only those not already loaded into the database
+new_amplicon_summaries <- amplicon_summaries %>% 
+  anti_join(existing_amplicon_summaries) %>% 
+  filter(
+       (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_"))
+       )
+
+# Load an example summary tsv to get the column types
+amplicon_summary_test <- read_tsv("data/omics/amplicons/samp_100/detect_region/fwd_summary.tsv",show_col_types = FALSE) #%>% 
+
+
+# # First upload to establish the table
+# postgres_col_types = c(sample = "text",
+#                        read_direction = "text",
+#                        hmm_model = "text",
+#                        n_seqs = "integer",
+#                        hmm_start_median = "numeric",
+#                        hmm_end_median = "numeric",
+#                        e_value_median = "numeric",
+#                        score_median = "numeric",
+#                        seq_start_median = "numeric",
+#                        seq_end_median = "numeric",
+#                        tax_group = "text",
+#                        gene = "text"
+#                        )
+# 
+# read_tsv("data/omics/amplicons/samp_100/detect_region/fwd_summary.tsv",show_col_types = FALSE) %>%
+#       mutate(sample = "samp_100",
+#              read_direction = "fwd") %>%
+#       relocate(sample) %>%
+#       dbWriteTable(pg, "amplicon_region_summary", ., overwrite = TRUE, field.types = postgres_col_types)
+
+# Function for reading the summary tsv and saving it to the database
+read_amplicon_summaries_to_pg <- function(path, sample, direction) {
+  #print(sample)
+  tryCatch({
+    read_tsv(path, show_col_types = FALSE) %>%
+      mutate(sample = sample,
+             read_direction = direction) %>% 
+      relocate(sample) %>%
+      dbWriteTable(pg, "amplicon_region_summary", ., overwrite = FALSE, append = TRUE)
+  }, error = function(e) {
+    cat("Error occurred while processing file:", path, "\n")
+    cat("Error message:", conditionMessage(e), "\n")
+  })
+}
+
+#test <- read_drep_to_pg(drep_paths$path[1],sample = drep_paths$sample[1])
+
+
+# Load new summaries into the database
+# Drop existing indices [speeds up loading of new data]
+#sql('DROP INDEX public.amplicon_region_summary_sample') %>% DBI::dbSendQuery(pg, .)
+#sql('DROP INDEX public.amplicon_region_summary_direction') %>% DBI::dbSendQuery(pg, .)
+
+# Append new data
+pwalk(list(path = new_amplicon_summaries$path, 
+           sample = new_amplicon_summaries$sample, 
+           direction = new_amplicon_summaries$read_direction),
+          read_amplicon_summaries_to_pg,.progress = TRUE)
+
+# Recreate indices
+sql('CREATE INDEX "amplicon_region_summary_sample" ON "amplicon_region_summary" ("sample")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "amplicon_region_summary_direction" ON "amplicon_region_summary" ("read_direction")') %>% DBI::dbSendQuery(pg, .)
+```
+
+# Create bin summary view table
+```{r}
+checkm_pg <- tbl(pg, "checkm")
+gtdb_pg <- tbl(pg, "GTDB")
+drep_pg <- tbl(pg, "drep")
+sampinfo_pg <- tbl(pg, "glamr_samples")
+
+
+bin_info_view <- checkm_pg %>% 
+  select(bin, Completeness, Contamination, `Strain heterogeneity`) %>% 
+  mutate(SampleID = str_remove(bin, "[A-z].*_d\\+$")) %>% 
+  left_join(sampinfo_pg %>% select(SampleID, StudyID)) %>% 
+  left_join(gtdb_pg %>% select(bin, classification, domain, phylum, class, order, family, genus, species, red_value)) %>% 
+  left_join(drep_pg %>% select(bin, secondary_cluster, is_cluster_rep)) %>% 
+  show_query()
+
+sql_query <- glue::glue_sql("
+CREATE VIEW bin_summary AS
+WITH extracted AS (
+  SELECT
+    \"bin\",
+    \"Completeness\",
+    \"Contamination\",
+    \"Strain heterogeneity\",
+    (regexp_matches(\"bin\", '^(.+_\\d+)_(.+?)_(\\d+)$'))[1] AS \"sample\",
+    (regexp_matches(\"bin\", '^(.+_\\d+)_(.+?)_(\\d+)$'))[2] AS \"binner\",
+    (regexp_matches(\"bin\", '^(.+_\\d+)_(.+?)_(\\d+)$'))[3] AS \"bin_number\"
+  FROM \"checkm\")
+SELECT
+  extracted.\"bin\",
+  extracted.\"sample\",
+  \"glamr_samples\".\"StudyID\",
+  extracted.\"binner\",
+  extracted.\"bin_number\",
+  extracted.\"Completeness\",
+  extracted.\"Contamination\",
+  extracted.\"Strain heterogeneity\",
+  \"GTDB\".\"classification\",
+  \"GTDB\".\"domain\",
+  \"GTDB\".\"phylum\",
+  \"GTDB\".\"class\",
+  \"GTDB\".\"order\",
+  \"GTDB\".\"family\",
+  \"GTDB\".\"genus\",
+  \"GTDB\".\"species\",
+  \"GTDB\".\"red_value\",
+  \"drep\".\"secondary_cluster\",
+  \"drep\".\"is_cluster_rep\"
+FROM extracted
+LEFT JOIN \"glamr_samples\"
+  ON extracted.\"sample\" = \"glamr_samples\".\"SampleID\"
+LEFT JOIN \"GTDB\"
+  ON extracted.\"bin\" = \"GTDB\".\"bin\"
+LEFT JOIN \"drep\"
+  ON extracted.\"bin\" = \"drep\".\"bin\";", .con = pg)
+
+DBI::dbSendQuery(pg, sql_query)
 ```
 
 
