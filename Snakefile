@@ -63,7 +63,7 @@ kenya2023_samples = open("data/sample_metadata/sample_lists/kenya2023_samples").
 
 end_time = time.time() # Record end of name parsing
 execution_time = end_time - start_time
-print(f"Name processing time: {execution_time} seconds")
+#print(f"Name processing time: {execution_time} seconds")
 
 # Target rules
 rule assemble:
@@ -415,6 +415,43 @@ rule fastp:
             --overrepresentation_analysis 2>&1 | tee -a {log}
         """
 
+rule fastp_no_dedup:
+    input: 
+        fwd_reads = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
+        rev_reads = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz",
+        clumped = "data/omics/{sample_type}/{sample}/reads/done.touch"
+    output: 
+        fwd_reads = temp("data/omics/{sample_type}/{sample}/reads/fastp_no_dedup_fwd_reads.fastq.gz"),
+        rev_reads = temp("data/omics/{sample_type}/{sample}/reads/fastp_no_dedup_rev_reads.fastq.gz"),
+        html = "data/omics/{sample_type}/{sample}/reads/qc/fastp_no_dedup.html",
+        json = "data/omics/{sample_type}/{sample}/reads/qc/fastp_no_dedup.json"
+    conda: "config/conda_yaml/fastp.yaml"
+    benchmark:
+        "benchmarks/fastp_no_dedup/{sample_type}-{sample}.txt"
+    log: "logs/fastp_no_dedup/{sample_type}-{sample}_fastp.log"
+    resources: cpus=16, mem_mb = lambda wildcards, attempt: attempt * 60000,
+        time_min=2880
+    shell:
+        """
+        # Filter, trim, and remove adapters
+        fastp \
+            -i {input.fwd_reads} -I {input.rev_reads} \
+            -o {output.fwd_reads} -O {output.rev_reads} \
+            -h {output.html} -j {output.json} \
+            --thread {resources.cpus} \
+            -z 9 \
+            --length_required 50 \
+            --n_base_limit 5 \
+            --low_complexity_filter --complexity_threshold 7 \
+            --detect_adapter_for_pe \
+            --correction \
+            --cut_front \
+            --cut_tail \
+            --cut_window_size=4 \
+            --cut_mean_quality 20 \
+            --overrepresentation_analysis 2>&1 | tee -a {log}
+        """
+
 rule fastqc_fastp:
     input:
         fwd_reads = "data/omics/{sample_type}/{sample}/reads/fastp_fwd_reads.fastq.gz",
@@ -435,6 +472,7 @@ rule fastqc_fastp:
 
 rule fastqc_raw:
     input:
+        clumpify_done = "data/omics/{sample_type}/{sample}/reads/done.touch",
         fwd_reads = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
         rev_reads = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz",
     output:
@@ -689,6 +727,55 @@ rule remove_contaminants_fastp:
             2>&1 | tee -a {log}
         """
 
+rule remove_contaminants_fastp_no_dedup:
+    input:
+        dedup_reads_fwd = rules.fastp_no_dedup.output.fwd_reads,
+        dedup_reads_rev = rules.fastp_no_dedup.output.rev_reads,
+        human_genome = ancient(rules.get_contaminants.output.human_genome),
+        spike_ins = ancient(rules.get_contaminants.output.spike_ins),
+        bbmap_index = ancient("data/reference/contaminants/ref")
+    output:
+        phix_rm_fwd = temp("data/omics/{sample_type}/{sample}/reads/phix_fwd_reads_fastp_no_dedup.fastq.gz"),
+        phix_rm_rev = temp("data/omics/{sample_type}/{sample}/reads/phix_rev_reads_fastp_no_dedup.fastq.gz"),
+        decon_fwd = "data/omics/{sample_type}/{sample}/reads/noDedup_decon_fwd_reads_fastp.fastq.gz",
+        decon_rev = "data/omics/{sample_type}/{sample}/reads/noDedup_decon_rev_reads_fastp.fastq.gz"
+    params:
+        bbmap_index_path = "data/reference/contaminants"
+    conda: "config/conda_yaml/main.yaml"
+    log: "logs/remove_contaminants_fastp_no_dedup/{sample_type}-{sample}.log"
+    benchmark:
+        "benchmarks/remove_contaminants_fastp_no_dedup/{sample_type}-{sample}.txt"
+    resources: cpus = 24, mem_mb = lambda wildcards, attempt: attempt * 120000, time_min = 2880
+    shell:
+        """
+        bbmap_mem=$(echo "scale=-1; ({resources.mem_mb}*0.8)/1" | bc)
+       
+        echo "Job memory= {resources.mem_mb}, bbmap allocated memory=$bbmap_mem because it is greedy"
+
+        bbduk.sh \
+            -Xmx${{bbmap_mem}}m -eoom \
+            in1={input.dedup_reads_fwd} \
+            in2={input.dedup_reads_rev} \
+            outu1={output.phix_rm_fwd} \
+            outu2={output.phix_rm_rev} \
+            t={resources.cpus} k=31 hdist=1 \
+            ref={input.spike_ins} \
+            path={params.bbmap_index_path} \
+            2>&1 | tee -a {log}
+        
+        echo "\n\n***doing remove contaminants***\n\n" >> {log}
+        bbmap.sh \
+            -Xmx${{bbmap_mem}}m -eoom \
+            in1={output.phix_rm_fwd} \
+            in2={output.phix_rm_rev} \
+            outu1={output.decon_fwd} \
+            outu2={output.decon_rev} \
+            t={resources.cpus} fast=t \
+            ref={input.human_genome} \
+            path={params.bbmap_index_path} \
+            2>&1 | tee -a {log}
+        """
+
 rule make_read_blastdb:
     input: 
         decon_fwd = "data/omics/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
@@ -905,9 +992,10 @@ rule assemble_RNAspades:
         fwd_reads = rules.remove_contaminants_fastp.output.decon_fwd,
         rev_reads = rules.remove_contaminants_fastp.output.decon_rev
     output:
-        assembly_dir = directory("data/omics/{sample_type}/{sample}/assembly/RNAspades"),
         contigs = "data/omics/{sample_type}/{sample}/assembly/RNAspades/transcripts.fasta"
-    conda: "config/conda_yaml/main.yaml"
+    params:
+        assembly_dir = "data/omics/{sample_type}/{sample}/assembly/RNAspades"
+    conda: "config/conda_yaml/spades4.yaml"
     log: "logs/assembly/RNAspades/{sample_type}_{sample}.log"
     benchmark: "benchmarks/RNAspades/{sample_type}_{sample}.txt"
     #resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
@@ -923,7 +1011,7 @@ rule assemble_RNAspades:
             --memory $(({resources.mem_mb}/1024)) \
             -1 {input.fwd_reads} \
             -2 {input.rev_reads} \
-            -o {output.assembly_dir} 2>&1 | tee {log}
+            -o {params.assembly_dir} 2>&1 | tee {log}
         """
 
 rule assemble_biosyntheticSPAdes_100x:
@@ -962,6 +1050,28 @@ rule rename_metaspades_contigs:
     output:
         contigs = "data/projects/{project}/{sample_type}/{sample}/assembly/metaspades_noNORM/contigs.renamed.fasta",
         contig_info = "data/projects/{project}/{sample_type}/{sample}/assembly/metaspades_noNORM/contigs_info.tsv"
+        #done = touch("data/omics/{sample_type}/{sample}/assembly/megahit/.contigs_renamed")
+    container: "docker://eandersk/r_microbiome"
+    resources: cpus = 1, time_min=200, mem_mb = 50000
+    shell:
+        """
+        pwd
+        
+        ./{input.script} \
+            -i {input.contigs} \
+            -o {output.contigs} \
+            -s {output.contig_info} \
+            -p {wildcards.sample}
+        """
+
+rule rename_RNAspades_contigs:
+    input: 
+        script = "code/rename_contigs.R",
+        contigs = "data/omics/{sample_type}/{sample}/assembly/RNAspades/transcripts.fasta",
+        #assembly_done = "data/omics/{sample_type}/{sample}/assembly/megahit/.done"
+    output:
+        contigs = "data/omics/{sample_type}/{sample}/assembly/RNAspades/contigs.renamed.fasta",
+        contig_info = "data/omics/{sample_type}/{sample}/assembly/RNAspades/contigs_info.tsv"
         #done = touch("data/omics/{sample_type}/{sample}/assembly/megahit/.contigs_renamed")
     container: "docker://eandersk/r_microbiome"
     resources: cpus = 1, time_min=200, mem_mb = 50000
@@ -1284,6 +1394,28 @@ rule prodigal:
             -d {output.genes} 2>&1 | tee {log}
         """
 
+rule prodigal_metaT:
+    input:
+        assembly = "data/omics/metatranscriptomes/{sample}/assembly/RNAspades/contigs.renamed.fasta"
+    output:
+        proteins = "data/omics/metatranscriptomes/{sample}/proteins/{sample}_PROTEINS.faa",
+        genes = "data/omics/metatranscriptomes/{sample}/genes/{sample}_GENES.fna",
+        gbk = "data/omics/metatranscriptomes/{sample}/genes/{sample}_GENES.gbk"
+    conda: "config/conda_yaml/main.yaml"
+    log: "logs/prodigal_metaT/{sample}.log"
+    benchmark: "benchmarks/prodigal_metaT/{sample}.txt"
+    resources: cpus = 1, mem_mb = lambda wildcards, attempt: attempt * 16000, time_min = 2880
+    shell:
+        """
+        prodigal \
+            -p meta \
+            -i {input.assembly} \
+            -a {output.proteins} \
+            -o {output.gbk} \
+            -d {output.genes} 2>&1 | tee {log}
+        """
+
+ruleorder: prodigal_metaT > prodigal
 
 rule calc_gene_abundance:
     input:
@@ -1308,6 +1440,32 @@ rule calc_gene_abundance:
         bbmap.sh t={resources.cpus} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.assembly}) ref={input.assembly} rpkm={output.reads_vs_contigs_rpkm} 32bit=t outm={params.reads_vs_assembly_sam} 2>&1 | tee -a {log}
         pigz -9 -p {resources.cpus} {params.reads_vs_assembly_sam}
         """
+
+rule calc_gene_abundance_metaT:
+    input:
+        genes = "data/omics/metatranscriptomes/{sample}/genes/{sample}_GENES.fna",
+        proteins = "data/omics/metatranscriptomes/{sample}/proteins/{sample}_PROTEINS.faa",
+        assembly = "data/omics/metatranscriptomes/{sample}/assembly/RNAspades/contigs.renamed.fasta",
+        fwd_reads = "data/omics/metatranscriptomes/{sample}/reads/noDedup_decon_fwd_reads_fastp.fastq.gz",
+        rev_reads = "data/omics/metatranscriptomes/{sample}/reads/noDedup_decon_rev_reads_fastp.fastq.gz"
+    output:
+        reads_vs_genes_rpkm = "data/omics/metatranscriptomes/{sample}/genes/{sample}_READSvsGENES.rpkm",
+        reads_vs_contigs_rpkm = "data/omics/metatranscriptomes/{sample}/assembly/{sample}_READSvsCONTIGS.rpkm",
+        reads_vs_assembly_sam_gz = "data/omics/metatranscriptomes/{sample}/assembly/{sample}_READSvsCONTIGS.sam.gz"
+    params:
+        reads_vs_assembly_sam = "data/omics/metatranscriptomes/{sample}/assembly/{sample}_READSvsCONTIGS.sam"
+    conda: "config/conda_yaml/main.yaml"
+    log: "logs/calc_gene_abundance_metaT/{sample}.log"
+    benchmark: "benchmarks/calc_gene_abundance_metaT/{sample}.txt"
+    resources: cpus = 24, mem_mb = lambda wildcards, attempt: attempt * 64000, time_min = 2880
+    shell:
+        """
+        bbmap.sh t={resources.cpus} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.genes}) ref={input.genes} rpkm={output.reads_vs_genes_rpkm} 2>&1 | tee -a {log}
+        bbmap.sh t={resources.cpus} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.assembly}) ref={input.assembly} rpkm={output.reads_vs_contigs_rpkm} 32bit=t outm={params.reads_vs_assembly_sam} 2>&1 | tee -a {log}
+        pigz -9 -p {resources.cpus} {params.reads_vs_assembly_sam}
+        """
+    
+ruleorder: calc_gene_abundance_metaT > calc_gene_abundance
 
 # rule download_uniref:
 #     output: 
@@ -1429,6 +1587,42 @@ rule contig_abund:
 rule calc_contig_abund:
     input: expand("data/omics/metagenomes/{sample}/{sample}_contig_abund.tsv", sample = assembled_samples)
 
+rule contig_abund_metaT:
+    input:
+        contigs = "data/omics/metatranscriptomes/{sample}/assembly/RNAspades/contigs.renamed.fasta",
+        f_seq = "data/omics/metatranscriptomes/{sample}/reads/noDedup_decon_fwd_reads_fastp.fastq.gz",
+        r_seq = "data/omics/metatranscriptomes/{sample}/reads/noDedup_decon_fwd_reads_fastp.fastq.gz"
+    output: 
+        coverage_full = "data/omics/metatranscriptomes/{sample}/assembly/RNAspades/{sample}_contig_abund.tsv"
+    params:
+        tmpdir = "tmp/coverm_contig_abund/{sample}"
+    conda: "config/conda_yaml/coverm.yaml"
+    log: "logs/contig_abund_metaT/{sample}.log"
+    benchmark: "benchmarks/contig_abund_metaT/{sample}.txt"
+    resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
+    #resources: cpus=24, mem_mb=1000000, time_min=2880, partition = "largemem" # coassembly
+    shell:
+        """
+        export TMPDIR={params.tmpdir}
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/coverm_contig_abund/{wildcards.sample}
+        mkdir -p $TMPDIR
+
+        # Link reads w/ naming convention prefered by coverM
+        fwd_reads=$(dirname {input.f_seq})/{wildcards.sample}_R1.fq.gz
+        rev_reads=$(dirname {input.r_seq})/{wildcards.sample}_R2.fq.gz
+        ln {input.f_seq} $fwd_reads
+        ln {input.r_seq} $rev_reads
+
+        coverm contig \
+            -c $fwd_reads $rev_reads \
+            -r {input.contigs} \
+            -t {resources.cpus} \
+            -m mean trimmed_mean covered_bases variance length count reads_per_base rpkm tpm \
+            --output-format sparse \
+            --output-file {output.coverage_full} 2>&1 | tee {log}
+
+        rm -r $TMPDIR $fwd_reads $rev_reads 
+        """
 
 rule make_uniref_alignments:
     input: 
@@ -2104,7 +2298,7 @@ rule fortify_unrefLCA:
 
 rule kofam_scan:
     input:
-        genes = rules.prodigal.output.proteins,
+        genes = "data/omics/{sample_type}/{sample}/proteins/{sample}_PROTEINS.faa",
         profile = "data/reference/kegg/kofamscan/profiles",
         ko_list = "data/reference/kegg/kofamscan/ko_list"
     output:
@@ -4014,4 +4208,331 @@ rule deeparg_ls: #this rule is using LS mode and annotated genes
             --arg-alignment-identity 30 \
             --arg-alignment-evalue 1e-10 \
             --arg-num-alignments-per-entry 1000 | tee {log}
+        """
+
+
+rule metaEuk:
+    input:
+        assembly = "data/omics/{sample_type}/{sample}/assembly/RNAspades/contigs.renamed.fasta"
+    output: 
+        done = touch("data/omics/{sample_type}/{sample}/metaeuk/.done"),
+        aa_seqs = "data/omics/{sample_type}/{sample}/metaeuk/{sample}.fas",
+        header_map = "data/omics/{sample_type}/{sample}/metaeuk/{sample}.headersMap.tsv",
+        tax_res = "data/omics/{sample_type}/{sample}/metaeuk/{sample}_tax"
+    conda:  "config/conda_yaml/metaeuk.yaml"
+    params:
+        #unirefDB = "/home/kiledal/scratch_gdick1/mmseqs_unirefdb/mmseqs2/uniref100",
+        unirefDB = "data/reference/mmseqs2/uniref100",
+        out_prefix = "data/omics/{sample_type}/{sample}/metaeuk/{sample}",
+        # tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
+        # tmp_dir = "/dev/shm/akiledal/mmseqs2",
+        # tmp_fwd_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__fwd.fastq.gz",
+        # tmp_rev_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__rev.fastq.gz",
+        tmp_dir = "/scratch/kiledal/metaEuk/{sample}/",
+        # tmp_fwd_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__fwd.fastq.gz",
+        # tmp_rev_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__rev.fastq.gz"
+        #tmp_dir = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}",
+        tmp_fwd_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__fwd.fastq.gz",
+        tmp_rev_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__rev.fastq.gz"
+    benchmark: "benchmarks/metaEuk/{sample_type}-{sample}.txt"
+    log: "logs/metaEuk/{sample_type}-{sample}.log"
+    resources:
+        #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
+        mem_mb = 160000, cpus=32, time_min=20000
+    shell:
+        """
+        export MMSEQS_NUM_THREADS={resources.cpus}
+        mkdir -p {params.tmp_dir}
+
+        # Log how much temp space is available, can cause job to fail
+        printf "\nTemp directory storage available:\n" 2>&1 | tee {log}
+        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        printf "\n\n" 2>&1 | tee -a {log}
+        
+        metaeuk \
+            easy-predict \
+            --threads {resources.cpus} \
+            --split-memory-limit 50G \
+            {input.assembly} \
+            {params.unirefDB} \
+            {params.out_prefix} \
+            {params.tmp_dir}
+            2>&1 | tee -a {log} &&
+
+        metaeuk taxtocontig \
+            {params.tmp_dir}latest/contigs \
+            {output.aa_seqs} \
+            {output.header_map} \
+            {params.unirefDB} \
+            {output.tax_res} \
+            {params.tmp_dir} \
+            --majority 0.5 \
+            --tax-lineage 1 \
+            --lca-mode 2
+
+        # Prior to clearing temp files, log temp space to see if potential reason for fail
+        printf "\nTemp directory storage available:\n" 2>&1 | tee -a {log}
+        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        printf "\n\n" 2>&1 | tee -a {log}
+
+        #rm -r {params.tmp_dir} 2>&1 | tee -a {log}
+        #printf "Done, and deleted temp dir" 2>&1 | tee -a {log}
+        """
+
+rule reads_unirefLCA_mmseqs_metaT:
+    input:
+        fwd_reads = "data/omics/{sample_type}/{sample}/reads/noDedup_decon_fwd_reads_fastp.fastq.gz",
+        rev_reads = "data/omics/{sample_type}/{sample}/reads/noDedup_decon_rev_reads_fastp.fastq.gz"
+    output:
+        report = "data/omics/{sample_type}/{sample}/uniref_readmap_noDedup/{sample}_report"
+    conda:  "config/conda_yaml/mmseqs.yaml"
+    params:
+        #unirefDB = "/home/kiledal/scratch_gdick1/mmseqs_unirefdb/mmseqs2/uniref100",
+        unirefDB = "data/reference/mmseqs2/uniref100",
+        out_prefix = "data/omics/{sample_type}/{sample}/uniref_readmap_noDedup/{sample}",
+        # tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
+        # tmp_dir = "/dev/shm/akiledal/mmseqs2",
+        # tmp_fwd_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__fwd.fastq.gz",
+        # tmp_rev_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__rev.fastq.gz",
+        #tmp_dir = "/tmp/kiledal/mmseqs2/{sample}",
+        # tmp_fwd_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__fwd.fastq.gz",
+        # tmp_rev_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__rev.fastq.gz"
+        #tmp_dir = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}",
+        tmp_dir = "/scratch/kiledal/mmseqs_tmp/{sample}",
+        tmp_fwd_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__fwd.fastq.gz",
+        tmp_rev_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__rev.fastq.gz"
+    benchmark: "benchmarks/reads_unirefLCA_mmseqs/{sample_type}-{sample}.txt"
+    log: "logs/reads_unirefLCA_mmseqs/{sample_type}-{sample}.log"
+    resources:
+        #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
+        mem_mb = 160000, cpus=32, time_min=20000
+    shell:
+        """
+        mkdir -p {params.tmp_dir}
+        mkdir $(basename {params.out_prefix})
+
+        # Log how much temp space is available, can cause job to fail
+        printf "\nTemp directory storage available:\n" 2>&1 | tee {log}
+        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        printf "\n\n" 2>&1 | tee -a {log}
+
+        # Previous copied reads to temp space, but no longer think this is nescessary. Should be deleted.
+        #cp {input.fwd_reads} {params.tmp_fwd_reads}
+        #cp {input.rev_reads} {params.tmp_rev_reads}
+
+        #mmseqs touchdb {params.unirefDB} # loads  the database into memory, only use in large memory systems / nodes
+        
+        mmseqs \
+            easy-taxonomy \
+            {input.fwd_reads} {input.rev_reads} \
+            {params.unirefDB} \
+            ./{params.out_prefix} \
+            {params.tmp_dir} \
+            --lca-mode 3 \
+            --orf-filter 1 \
+            --orf-filter-s 3.5 \
+            -s 4 \
+            --tax-lineage 1 \
+            --threads {resources.cpus} \
+            --split-memory-limit 300G \
+            2>&1 | tee -a {log}
+
+            #{params.tmp_fwd_reads} {params.tmp_rev_reads} \
+            # --db-load-mode 2 # this loads the database into memory, was an attempt to speed up on Great Lakes but limited memory & scratch space were limiting factors
+
+        # Prior to clearing temp files, log temp space to see if potential reason for fail
+        printf "\nTemp directory storage available:\n" 2>&1 | tee -a {log}
+        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        printf "\n\n" 2>&1 | tee -a {log}
+
+        #rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} {params.tmp_dir} 2>&1 | tee -a {log}
+        rm -r {params.tmp_dir} 2>&1 | tee -a {log}
+        printf "Done, and deleted temp dir" 2>&1 | tee -a {log}
+        """
+
+rule add_lineage_to_unirefLCAtax_metaT:
+    input:
+        db = ancient("data/reference/ncbi_tax"),
+        report = "data/omics/{sample_type}/{sample}/uniref_readmap_noDedup/{sample}_report"
+    output: 
+        inspect_w_lineage = "data/omics/{sample_type}/{sample}/uniref_readmap_noDedup/{sample}_report_w_full_lineage",
+        inspect_w_7_lev_lineage = "data/omics/{sample_type}/{sample}/uniref_readmap_noDedup/{sample}_report_w_standardized_lineage"
+    conda: "config/conda_yaml/taxonkit.yaml"
+    resources: cpus=1, mem_mb=10000, time_min=5440, mem_gb = 10
+    log: "logs/unirefLCA_mmseqs_add_lineage/{sample_type}-{sample}.log"
+    shell:
+        """
+        taxonkit lineage \
+            {input.report} \
+            --data-dir {input.db} \
+            -i 5 \
+            -o {output.inspect_w_lineage} 2>&1 | tee {log}
+
+        taxonkit reformat \
+            {output.inspect_w_lineage} \
+            --data-dir {input.db} \
+            -i 7 \
+            -P \
+            -o {output.inspect_w_7_lev_lineage} 2>&1 | tee -a {log}
+        """
+
+rule contig_unirefLCA_mmseqs_generic:
+    input:
+        contigs = "data/omics/{sample_type}/{sample}/assembly/{assembly}/contigs.renamed.fasta"
+    output:
+        report = "data/omics/{sample_type}/{sample}/assembly/{assembly}/{sample}_contig_report"
+    conda:  "config/conda_yaml/mmseqs.yaml"
+    params:
+        #unirefDB = "/home/kiledal/scratch_gdick1/mmseqs_unirefdb/mmseqs2/uniref100",
+        unirefDB = "data/reference/mmseqs2/uniref100",
+        out_prefix = "data/omics/{sample_type}/{sample}/assembly/{assembly}/{sample}_contig",
+        # tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
+        # tmp_dir = "/dev/shm/akiledal/mmseqs2",
+        # tmp_fwd_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__fwd.fastq.gz",
+        # tmp_rev_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__rev.fastq.gz",
+        #tmp_dir = "/tmp/kiledal/mmseqs2/{sample}_contigs",
+        tmp_dir = "/scratch/kiledal/mmseqs2/{sample}_contigs",
+        # tmp_fwd_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__fwd.fastq.gz",
+        # tmp_rev_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__rev.fastq.gz"
+        #tmp_dir = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}",
+        tmp_fwd_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__fwd.fastq.gz",
+        tmp_rev_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__rev.fastq.gz"
+    benchmark: "benchmarks/contig_unirefLCA_mmseqs_generic/{sample_type}-{sample}--{assembly}.txt"
+    log: "logs/contig_unirefLCA_mmseqs_generic/{sample_type}-{sample}--{assembly}.log"
+    resources:
+        #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
+        mem_mb = 160000, cpus=32, time_min=7200
+    shell:
+        """
+        mkdir -p {params.tmp_dir}
+
+        # Log how much temp space is available, can cause job to fail
+        printf "\nTemp directory storage available:\n" 2>&1 | tee {log}
+        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        printf "\n\n" 2>&1 | tee -a {log}
+
+        #mmseqs touchdb {params.unirefDB} # loads the database into memory, only use in large memory systems / nodes
+
+        mmseqs \
+            easy-taxonomy \
+            {input.contigs} \
+            {params.unirefDB} \
+            ./{params.out_prefix} \
+            {params.tmp_dir} \
+            --lca-mode 3 \
+            --orf-filter 1 \
+            --orf-filter-s 3.5 \
+            -s 4 \
+            --tax-lineage 1 \
+            --threads {resources.cpus} \
+            --split-memory-limit $(echo "scale=0;({resources.mem_mb}*0.8)/1024" | bc)G \
+            --db-load-mode 1 \
+            2>&1 | tee -a {log}
+
+            # --db-load-mode 2 # this loads the database into memory, was an attempt to speed up on Great Lakes but limited memory & scratch space were limiting factors
+
+        # Prior to clearing temp files, log temp space to see if potential reason for fail
+        printf "\nTemp directory storage available:\n" 2>&1 | tee -a {log}
+        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        printf "\n\n" 2>&1 | tee -a {log}
+
+        #rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} {params.tmp_dir} 2>&1 | tee -a {log}
+        rm -r {params.tmp_dir} 2>&1 | tee -a {log}
+        printf "Done, and deleted temp dir" 2>&1 | tee -a {log}
+        """
+
+rule plass:
+    input:
+        fwd_reads = "data/omics/{sample_type}/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
+        rev_reads = "data/omics/{sample_type}/{sample}/reads/decon_rev_reads_fastp.fastq.gz"
+    output:
+        assembly = "data/omics/{sample_type}/{sample}/assembly/plass/assembly.faa",
+    params:
+        tmpdir = "tmp/coverm_contig_abund/{sample}"
+    conda: "config/conda_yaml/plass.yaml"
+    log: "logs/plass/{sample}-{sample_type}.log"
+    benchmark: "benchmarks/plass/{sample}-{sample_type}.txt"
+    resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
+    shell:
+        """
+        export TMPDIR={params.tmpdir}
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/plass/{wildcards.sample}
+        mkdir -p $TMPDIR
+
+        plass assemble \
+            --threads {resources.cpus} \
+            {input.fwd_reads} \
+            {input.rev_reads} \
+            {output.assembly} \
+            $TMPDIR
+        """
+
+rule kofam_scan_plass:
+    input:
+        genes = "data/omics/metatranscriptomes/{sample}/assembly/plass/assembly.faa",
+        profile = "data/reference/kegg/kofamscan/profiles",
+        ko_list = "data/reference/kegg/kofamscan/ko_list"
+    output:
+        ko_annot = "data/omics/metatranscriptomes/{sample}/assembly/plass/{sample}_kofam_results.txt"
+    conda: "config/conda_yaml/kofamscan.yaml"
+    #shadow: "shallow"
+    benchmark: "benchmarks/kofam_scan_plass/{sample}.txt"
+    log: "logs/kofam_scan_plass/{sample}.log"
+    resources: cpus=24, time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 100000
+    shell:
+        """
+        exec_annotation \
+            -o {output.ko_annot} \
+            --format=detail-tsv \
+            --cpu={resources.cpus}  \
+            --profile {input.profile} \
+            --tmp-dir=/tmp/{wildcards.sample}_kofamscan \
+            --ko-list {input.ko_list} {input.genes} | tee {log}
+        """
+
+
+rule map_reads_to_plass:
+    input:
+        plass = "data/omics/metatranscriptomes/{sample}/assembly/plass/assembly.faa",
+        fwd_reads = "data/omics/metatranscriptomes/{sample}/reads/noDedup_decon_fwd_reads_fastp.fastq.gz",
+        rev_reads = "data/omics/metatranscriptomes/{sample}/reads/noDedup_decon_rev_reads_fastp.fastq.gz"
+    output:
+        interleaved = temp("data/omics/metatranscriptomes/{sample}/reads/noDedup_decon_interleaved_reads_fastp.fastq.gz"),
+        temp_bam = temp("data/omics/metatranscriptomes/{sample}/assembly/plass/mapped_temp.bam"),
+        sam = temp("data/omics/metatranscriptomes/{sample}/assembly/plass/mapped.sam"),
+        unsorted_bam = temp("data/omics/metatranscriptomes/{sample}/assembly/plass/mapped_unsorted.bam"),
+        bam = "data/omics/metatranscriptomes/{sample}/assembly/plass/mapped.bam",
+        diamond_db = temp("data/omics/metatranscriptomes/{sample}/assembly/plass/diamond_db")
+    conda: "config/conda_yaml/diamond_read_map.yaml"
+    benchmark: "benchmarks/map_reads_to_plass/{sample}.txt"
+    log: "logs/map_reads_to_plass/{sample}.log"
+    resources: cpus=24, time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 100000
+    shell:
+        """
+        seqtk mergepe {input.fwd_reads} {input.rev_reads} > {output.interleaved}
+
+        diamond makedb --in {input.plass} --db {output.diamond_db}
+
+        # Step 2: Map metatranscriptomic reads to the PLASS assembly using DIAMOND (blastx mode) and output to SAM format
+        diamond blastx -d {output.diamond_db} \
+               -q {output.interleaved} \
+               -o {output.sam} \
+               --outfmt 100 \
+               --max-target-seqs 1 \
+               --evalue 1e-5 \
+               --threads 8 \
+               --sensitive
+
+        # Convert sam to bam
+        samtools view -bS {output.sam} > {output.temp_bam}
+        
+        # Filter mappings
+        filterBam \
+            --in {output.temp_bam} \
+            --out {output.unsorted_bam} \
+            --minCover 50 \
+            --minId 80
+        
+        samtools sort -o {output.bam} -@ {resources.cpus} {output.unsorted_bam}
+        samtools index -@ {resources.cpus} {output.bam}       
         """
