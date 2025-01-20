@@ -4,16 +4,16 @@ output: html_notebook
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_knit$set(root.dir = here::here())
+knitr::opts_knit$set(root.dir = here::here("~/GLAMR"))
 library(tidyverse)
 library(googlesheets4)
 library(googledrive)
 library(DBI)
 
-conflicted::conflicts_prefer(dplyr::select(), dplyr::rename(), dplyr::filter(), dplyr::lag())
+conflicted::conflicts_prefer(dplyr::select(), dplyr::rename(), dplyr::filter(), dplyr::lag(), base::as.data.frame)
 
 # Open database connection
-pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "localhost", port = "5432", user = "glamr_admin", password = "glamr2023")
+pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "cayman.earth.lsa.umich.edu", port = "5432", user = "glamr_admin", password = "glamr2023")
 
 
 # Function for getting sample lists from tables quickly using existing index
@@ -45,7 +45,7 @@ as_id("https://docs.google.com/spreadsheets/d/1z2IajV0Ay1lRjH9d0ibNBuf8PY0IbtEz/
 
 ```{r}
 samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples",guess_max = 3000)
-studies <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "studiesdatasets",range = "A1:R1000")
+studies <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "studiesdatasets",range = "A1:V1000")
 defined_sites <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "sampling_sites") %>% filter(!is.na(lat))
 units_and_notes <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "metadata_units_and_notes")
 ```
@@ -54,9 +54,13 @@ units_and_notes <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",s
 ```{r}
 # Clean up sample table from excel 
 cleaned_up_sample_table <- samples %>% 
-  mutate(date = lubridate::ymd(collection_date),
+  mutate(date = lubridate::ym(collection_date),
+         date = if_else(is.na(date), lubridate::ymd(collection_date), date),
          date = if_else(is.na(date), lubridate::ymd_hms(collection_date), date),
          date = if_else(is.na(date), lubridate::ymd_hm(collection_date), date),
+         # date = lubridate::ymd(collection_date),
+         # date = if_else(is.na(date), lubridate::ymd_hms(collection_date), date),
+         # date = if_else(is.na(date), lubridate::ymd_hm(collection_date), date),
          date_same_year = lubridate::`year<-`(date,2000),
          year = lubridate::year(date),
          across(everything(), ~if_else(.x %in% c("NA", "NF"), NA, .x))) %>% 
@@ -72,7 +76,11 @@ combined_sample_table <- bind_rows(cleaned_up_sample_table, gvhd_samples)
 
 
 # Write table to database
+#sql('DROP VIEW public.bin_summary') %>% DBI::dbSendQuery(pg, .) # have to drop dependencies first
 dbWriteTable(pg,"glamr_samples", combined_sample_table,overwrite = TRUE)
+studies %>% 
+  filter(!is.na(dataset)) %>% 
+  dbWriteTable(pg,"glamr_datasets", value = .,overwrite = TRUE)
 ```
 
 
@@ -360,7 +368,7 @@ contig_lca_annotation_files <- Sys.glob("data/omics/*/*/*_contig_lca.tsv") %>%
 
 new_contig_lca_annotation_files <- contig_lca_annotation_files %>% 
   filter(!sample %in% lca_samples$sample,
-         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_")) %>% 
+         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_")) %>% 
   mutate(fs::file_info(path))
 
 read_contig_lca <- function(path, sample_name){
@@ -473,7 +481,7 @@ GTDB_paths <- Sys.glob("data/omics/metagenomes/*/bins/GTDB/*.summary.tsv") %>%
 # Filter list of summary tsvs to only those not already loaded into the database
 new_GTDB <- GTDB_paths %>% 
   filter(!sample %in% existing_gtdb_annotations$sample,
-         str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_"))
+         str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_"))
 
 # Load an example summary tsv to get the column types
 gtdb_test <- read_tsv("data/omics/metagenomes/samp_2015/bins/GTDB/gtdbtk.bac120.summary.tsv",na = "N/A")
@@ -487,8 +495,10 @@ read_gtdb_to_pg <- function(path, sample) {
   tryCatch({
     read_tsv(path, na = "N/A",col_types = column_types) %>%
       separate(classification, into = c("domain","phylum", "class", "order", "family","genus","species"),sep = ";[a-z]__",remove = FALSE) %>% 
-      mutate(domain = str_remove(domain,"d__")) %>% 
+      mutate(domain = str_remove(domain,"d__"),
+             sample = sample) %>% 
       dplyr::rename(bin ="user_genome") %>% 
+      relocate(sample) %>% 
       dbWriteTable(pg, "GTDB", ., overwrite = FALSE, append = TRUE)
   }, error = function(e) {
     cat("Error occurred while processing file:", path, "\n")
@@ -497,20 +507,20 @@ read_gtdb_to_pg <- function(path, sample) {
 }
 
 sql('DROP INDEX public.gtdb_bin') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.gtdb_sample') %>% DBI::dbSendQuery(pg, .)
 
 # Load new summaries into the database
 walk2(new_GTDB$path, new_GTDB$sample, read_gtdb_to_pg)
 
 sql('CREATE INDEX "gtdb_bin" ON "GTDB" ("bin")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "gtdb_sample" ON "GTDB" ("sample")') %>% DBI::dbSendQuery(pg, .)
 
 ```
 
 ## CheckM
 ```{r}
-
 existing_checkM_summaries <- tbl(pg, "checkm") %>% 
   collect() %>% 
-  mutate(sample = str_extract(bin, "samp_\\d+")) %>% 
   relocate(bin, sample)
 
 checkm_paths <- Sys.glob("data/omics/metagenomes/*/bins/all_raw_bins/checkm.txt") %>% 
@@ -520,7 +530,7 @@ checkm_paths <- Sys.glob("data/omics/metagenomes/*/bins/all_raw_bins/checkm.txt"
 
 new_checkM <- checkm_paths %>% 
   filter(!sample %in% existing_checkM_summaries$sample,
-         str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_"))
+         str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_"))
 
 checkm_test <- read_tsv("data/omics/metagenomes/samp_2037/bins/all_raw_bins/checkm.txt")
 checkm_column_types <- as.col_spec(checkm_test)
@@ -532,6 +542,8 @@ read_checkm_to_pg <- function(path, sample) {
   tryCatch({
     read_tsv(path,col_types = checkm_column_types) %>%
       dplyr::rename(bin = "Bin Id") %>% 
+      dplyr::mutate(sample = sample) %>%
+      dplyr::relocate(sample) %>% 
       dbWriteTable(pg, "checkm", ., overwrite = FALSE, append = TRUE)
   }, error = function(e) {
     cat("Error occurred while processing file:", path, "\n")
@@ -540,23 +552,25 @@ read_checkm_to_pg <- function(path, sample) {
 }
 
 sql('DROP INDEX public.checkm_bin') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.checkm_sample') %>% DBI::dbSendQuery(pg, .)
 
 walk2(new_checkM$path, new_checkM$sample, read_checkm_to_pg)
 
 sql('CREATE INDEX "checkm_bin" ON "checkm" ("bin")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "checkm_sample" ON "checkm" ("sample")') %>% DBI::dbSendQuery(pg, .)
 
 ```
 
 
 ## DREP
 ```{r}
-# Get GTDB annotations that are already loaded into the database
+# Get DREP results that are already loaded into the database
 existing_drep_annotations <- tbl(pg, "drep") %>% 
   collect() %>% 
   mutate(sample = str_extract(bin, "samp_\\d+")) %>% 
   relocate(bin, sample)
 
-# Find all GTDB summary tsvs
+# Find all DREP results
 drep_paths <- Sys.glob("data/omics/metagenomes/*/bins/drep/data_tables/Cdb.csv") %>% 
   data.frame(path = .) %>% 
   bind_cols(.,unglue::unglue_data(.$path,"data/omics/{sample_type}/{sample}/bins/drep/data_tables/Cdb.csv")) %>% 
@@ -565,7 +579,8 @@ drep_paths <- Sys.glob("data/omics/metagenomes/*/bins/drep/data_tables/Cdb.csv")
 # Filter list of summary tsvs to only those not already loaded into the database
 new_drep <- drep_paths %>% 
   filter(
-      !sample %in% existing_drep_annotations$sample & (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_")))
+      #!sample %in% existing_drep_annotations$sample,
+      (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_")))
 
 # Load an example summary tsv to get the column types
 drep_test <- read_csv("data/omics/metagenomes/samp_447/bins/drep/data_tables/Cdb.csv") %>% 
@@ -579,9 +594,11 @@ read_drep_to_pg <- function(path, sample) {
     read_csv(path) %>%
       mutate(drep_folder = str_remove(path, '/data_tables/Cdb.csv'),
              is_cluster_rep = fs::file_exists(str_glue("{drep_folder}/dereplicated_genomes/{genome}")),
-             genome = str_remove(genome,".fa")) %>% 
+             genome = str_remove(genome,".fa"),
+             sample = sample) %>% 
       dplyr::rename(bin = "genome") %>% 
       select(-drep_folder) %>% 
+      dplyr::relocate(sample) %>% 
       dbWriteTable(pg, "drep", ., overwrite = FALSE, append = TRUE)
   }, error = function(e) {
     cat("Error occurred while processing file:", path, "\n")
@@ -597,6 +614,7 @@ read_drep_to_pg <- function(path, sample) {
 sql('DROP INDEX public.drep_bin') %>% DBI::dbSendQuery(pg, .)
 sql('DROP INDEX public.drep_rep') %>% DBI::dbSendQuery(pg, .)
 sql('DROP INDEX public.drep_cluster') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.drep_sample') %>% DBI::dbSendQuery(pg, .)
 
 # Append new data
 walk2(new_drep$path, new_drep$sample, read_drep_to_pg)
@@ -605,6 +623,7 @@ walk2(new_drep$path, new_drep$sample, read_drep_to_pg)
 sql('CREATE INDEX "drep_bin" ON "drep" ("bin")') %>% DBI::dbSendQuery(pg, .)
 sql('CREATE INDEX "drep_rep" ON "drep" ("is_cluster_rep")') %>% DBI::dbSendQuery(pg, .)
 sql('CREATE INDEX "drep_cluster" ON "drep" ("secondary_cluster")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "drep_sample" ON "drep" ("sample")') %>% DBI::dbSendQuery(pg, .)
 ```
 
 
@@ -632,7 +651,7 @@ bin_membership_files <- Sys.glob("data/omics/metagenomes/*/bins/contig_bins.rds"
 
 new_bin_membership_files <- bin_membership_files %>% 
   filter(!sample %in% bin_membership_samples$sample,
-         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_*")) %>% 
+         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_*") | str_detect(sample, "^GVHDsamp_")) %>% 
   mutate(fs::file_info(path))
 
 read_contig_bin_membership <- function(path){
@@ -692,7 +711,7 @@ gene_abundance_files <- Sys.glob("data/omics/metagenomes/*/genes/*_READSvsGENES.
 
 new_gene_abundance_files <- gene_abundance_files %>% 
   filter(!sample %in% gene_abundance_samples$sample,
-         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_*")) %>% 
+         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_*") | str_detect(sample, "^GVHDsamp_")) %>% 
   mutate(fs::file_info(path))
 
 #path <- "data/omics/metagenomes/samp_447/genes/samp_447_READSvsGENES.rpkm"
@@ -700,7 +719,7 @@ new_gene_abundance_files <- gene_abundance_files %>%
 
 read_gene_abundance <- function(path, sample_name){
   
-  gene_abund_df <- read_tsv(path,skip = 4) %>% 
+  gene_abund_df <- read_tsv(path,skip = 4,show_col_types = FALSE) %>% 
     dplyr::rename(gene_header = "#Name") %>% 
     mutate(tpm = (FPKM / sum(FPKM))*10^6) %>% 
     separate(gene_header, into = c("gene", "left_edge","right_edge", "strand", "id"),sep = " # ") %>% 
@@ -785,7 +804,7 @@ kofam_scan_files <- Sys.glob("data/omics/metagenomes/*/kofam_scan/*_kofam_result
 
 new_kofam_scan_files <- kofam_scan_files %>% 
   filter(!sample %in% kofam_scan_samples$sample,
-         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_*")) %>% 
+         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_*") | str_detect(sample, "^GVHDsamp_")) %>% 
   mutate(fs::file_info(path))
 
 read_kofam_scan <- function(path, sample_name){
@@ -855,11 +874,11 @@ drep_bin_abunds <- Sys.glob("data/omics/metagenomes/*/bins/coverage_drep_bins.ts
 # Filter list of summary tsvs to only those not already loaded into the database
 new_drep_bin_abunds <- drep_bin_abunds %>% 
   filter(
-      !sample %in% existing_bin_abund_samples$sample & (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_")))
+      !sample %in% existing_bin_abund_samples$sample & (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_")))
 
 # Load an example summary tsv to get the column types
 abund_test <- read_tsv("data/omics/metagenomes/samp_447/bins/coverage_drep_bins.tsv") #%>% 
-column_types <- as.col_spec(drep_test)
+column_types <- as.col_spec(abund_test)
 
 # First upload to establish the table
     # postgres_col_types = c(sample = "text",
@@ -950,7 +969,7 @@ contig_abunds <- Sys.glob("data/omics/metagenomes/*/*_contig_abund.tsv") %>%
 # Filter list of tsvs to only those not already loaded into the database
 new_contig_abunds <- contig_abunds %>% 
   filter(
-      !sample %in% existing_contig_abund_samples$sample & (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_")))
+      !sample %in% existing_contig_abund_samples$sample & (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_")))
 
 # Load an example summary tsv to get the column types
 abund_test <- read_tsv("data/omics/metagenomes/samp_447/samp_447_contig_abund.tsv") #%>% 
@@ -1260,11 +1279,11 @@ sampinfo_pg <- tbl(pg, "glamr_samples")
 
 
 bin_info_view <- checkm_pg %>% 
-  select(bin, Completeness, Contamination, `Strain heterogeneity`) %>% 
-  mutate(SampleID = str_remove(bin, "[A-z].*_d\\+$")) %>% 
-  left_join(sampinfo_pg %>% select(SampleID, StudyID)) %>% 
-  left_join(gtdb_pg %>% select(bin, classification, domain, phylum, class, order, family, genus, species, red_value)) %>% 
-  left_join(drep_pg %>% select(bin, secondary_cluster, is_cluster_rep)) %>% 
+  select(sample, bin, Completeness, Contamination, `Strain heterogeneity`) %>% 
+  #mutate(SampleID = str_remove(bin, "[A-z].*_d\\+$")) %>% 
+  left_join(sampinfo_pg %>% select(sample = "SampleID", StudyID)) %>% 
+  left_join(gtdb_pg %>% select(sample, bin, classification, domain, phylum, class, order, family, genus, species, red_value)) %>% 
+  left_join(drep_pg %>% select(sample, bin, secondary_cluster, is_cluster_rep)) %>% 
   show_query()
 
 sql_query <- glue::glue_sql("
@@ -1311,7 +1330,7 @@ DBI::dbSendQuery(pg, sql_query)
 ```
 
 
-
+# Tax abund summary from contig LCA
 ```{r}
 
 "data/omics/metagenomes/samp_447/samp_447_lca_abund_summarized.tsv"
@@ -1328,7 +1347,7 @@ tax_abund_from_contig_lca_and_abund_tsvs <- Sys.glob("data/omics/metagenomes/*/*
 # Filter list of summary tsvs to only those not already loaded into the database
 new_existing_tax_abund_from_contig_lca_and_abunds <- tax_abund_from_contig_lca_and_abund_tsvs %>% 
   filter(
-      !sample %in% existing_tax_abund_from_contig_lca_and_abund_samples$sample & (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_")))
+      !sample %in% existing_tax_abund_from_contig_lca_and_abund_samples$sample & (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_")))
 
 # Load an example summary tsv to get the column types
 abund_test <- read_tsv("data/omics/metagenomes/samp_447/samp_447_lca_abund_summarized.tsv") %>% mutate(sample = "samp_447")
@@ -1365,8 +1384,8 @@ read_tax_abund_from_contig_lca_and_abund_to_pg <- function(path, sample) {
 
 # Load new summaries into the database
 # Drop existing indices [speeds up loading of new data]
-sql('DROP INDEX public.contig_abund_contig') %>% DBI::dbSendQuery(pg, .)
-sql('DROP INDEX public.contig_abund_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.tax_abund_from_contig_lca_and_abund_tax_id') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.tax_abund_from_contig_lca_and_abund_sample') %>% DBI::dbSendQuery(pg, .)
 
 # Append new data
 walk2(new_existing_tax_abund_from_contig_lca_and_abunds$path, 
