@@ -17,14 +17,21 @@ library(docopt)
 library(fs)
 library(dplyr)
 library(readr)
+library(tidyr)
+library(stringr)
+library(tibble)
 
 # the below arguments for processing from the command line
 #arguments <- docopt(doc)
 
 # uncomment the below arguments for testing
-arguments <- docopt(doc, args = "--input ~/amplicon_sequencing/amplicons --directory ~/amplicon_sequencing/dataTest2 --quality 20")
+arguments <- docopt(doc, args = "--input ~/amplicon_sequencing/amplicons --directory ~/amplicon_sequencing/data_test --quality 25")
 
 inPath <- arguments$input
+
+# /geomicro/data2/kiledal/GLAMR/data/projects/set_4/amplicons/samp_100/reads/raw_fwd_reads.fastq.gz
+# /geomicro/data2/kiledal/GLAMR/data/projects/set_4/amplicons/samp_100/detect_region/fwd_summary.tsv
+
 
 # samp_1/detect_region/fwd.txt
 
@@ -67,6 +74,7 @@ revScanSummary <- file.path(base_dir, "detect_region", "rev_summary.tsv")
 fwd_summary <- read.delim(fwdScanSummary, header = TRUE, sep = "\t")
 rev_summary <- read.delim(revScanSummary, header = TRUE, sep = "\t")
 
+# using weighted mean
 resultMeanFwd <- plotDataFwd %>%
   group_by(Cycle) %>%
   mutate(mean = sum(Score * Count) / sum(Count)) %>%
@@ -79,38 +87,99 @@ resultMeanRev <- plotDataRev %>%
 
 threshold <- arguments$quality
 
+# fwd_last is meant to be the location on the hmm model that the forward read ends reading
+# fwd_first is meant to be the location on the hmm model that the forward read starts reading
+# rev_last is meant to be the location on the hmm model that the reverse read ends reading
+# rev_first is meant to be the location on the hmm model that the reverse read starts reading
+# so rev_last < rev_first and fwd_last > fwd_first
+#       rev_last --V          V-- rev_first
+#                  ------------
+#             -------------
+# fwd_first --^           ^-- fwd_last
 fwd_last <- fwd_summary$hmm_end_median # hmm_end_median
 fwd_first <- fwd_summary$hmm_start_median # hmm_start_median
 rev_last <- rev_summary$hmm_start_median # hmm_start_median
 rev_first <- rev_summary$hmm_end_median # hmm_end_median
 
+
+# Note: length of start and end on hmm does not necessarily correlate with length of start and end on seq
+
+# means the sequence is at follows
+# rev_first < fwd_first scenario:
+#       ---------                   <-- reverse read
+#                  ----------       <-- forward read
+
+# fwd_last < rev_last scenario:
+#               ----------          <-- reverse read
+#    --------                       <-- forward read
 if (rev_first < fwd_first || fwd_last < rev_last) {
   # print out: No overlap.
   # stop the program
   stop("No overlap")
 }
 
-if (rev_last < fwd_first) {
-  # means sequence is as follows. Top line is reverse. Bottom line is forward
-  #      -------------
-  #          -------------
+if (rev_last < fwd_first && rev_first < fwd_last) { # Case 1
+  # means sequence is as follows
+  #      -------------              <-- reverse read
+  #          -------------          <-- forward read
   if (abs(rev_first - fwd_first) < 20) {
-    stop(paste("Not enough overlap. Expected overlap is 20+. Overlap is", abs(fwd_last - rev_last)))
+    stop(paste("Not enough overlap. Expected overlap is 20+. Overlap is", abs(rev_first - fwd_first)))
   }
 
   begin_overlap_hmm <- fwd_first
   end_overlap_hmm <- rev_first
 
-  begin_overlap_seq <- begin_overlap_hmm - fwd_first + 1
-  end_overlap_seq <- end_overlap_hmm - fwd_first + 1
+  # left to right
+  begin_overlap_seq_fwd <- fwd_summary$seq_start_median
+  end_overlap_seq_fwd <- rev_first - fwd_first + 1
 
-  forStart <- begin_overlap_seq
-  revStart <- end_overlap_seq
+  # left to right
+  begin_overlap_seq_rev <- rev_summary$seq_start_median - (fwd_first - rev_last)
+  end_overlap_seq_rev <- rev_summary$seq_end_median
 
-} else {
-  # below assuming normal two sequences. Top line is reverse. Bottom line is forward
-  #           ---------------
-  #     ----------------
+} else if (rev_last < fwd_first && fwd_last < rev_first) { # Case 2
+  # below assuming two sequences
+  #     ---------------               <-- reverse read
+  #        -------                    <-- forward read
+
+  if (fwd_last - fwd_first < 20) {
+    stop(paste("Not enough overlap. Expected overlap is 20+. Overlap is", abs(fwd_last - fwd_first)))
+  }
+
+  begin_overlap_hmm <- fwd_first
+  end_overlap_hmm <- fwd_last
+
+  # left to right
+  begin_overlap_seq_fwd <- fwd_summary$seq_start_median
+  end_overlap_seq_fwd <- fwd_summary$seq_end_median
+
+  # left to right
+  begin_overlap_seq_rev <- rev_summary$seq_start_median - (fwd_first - rev_last)
+  end_overlap_seq_rev <- begin_overlap_seq_rev - (end_overlap_seq_fwd - begin_overlap_seq_fwd)
+
+} else if (fwd_first < rev_last && rev_first < fwd_last) { # Case 3
+  # below assuming two sequences
+  #         --------                  <-- reverse read
+  #     --------------                <-- forward read
+  if (rev_first - rev_last < 20) {
+    stop(paste("Note enough overlap. Expected overlap is 20+. Overlap is", rev_first - rev_last))
+  }
+
+  begin_overlap_hmm <- rev_last
+  end_overlap_hmm <- rev_first
+
+  # left to right
+  begin_overlap_seq_fwd <- rev_last - fwd_first + 1
+  end_overlap_seq_fwd <- rev_first - fwd_first + 1
+
+  # left to right
+  begin_overlap_seq_rev <- rev_summary$seq_start_median
+  end_overlap_seq_rev <- rev_summary$seq_end_median
+
+} else { # Case 4
+  # below assuming normal two sequences
+  #           ---------------         <-- reverse read
+  #     ----------------              <-- forward read
   if (abs(fwd_last - rev_last) < 20) {
     stop(paste("Not enough overlap. Expected overlap is 20+. Overlap is", abs(fwd_last - rev_last)))
   }
@@ -118,38 +187,40 @@ if (rev_last < fwd_first) {
   begin_overlap_hmm <- rev_last
   end_overlap_hmm <- fwd_last
 
-  begin_overlap_seq <- begin_overlap_hmm - fwd_first + 1
-  end_overlap_seq <- end_overlap_hmm - fwd_first + 1
+  # left to right
+  begin_overlap_seq_fwd <- rev_last - fwd_first + 1
+  end_overlap_seq_fwd <- fwd_summary$seq_end_median
 
-  forStart <- begin_overlap_seq
-  revStart <- nrow(resultMeanRev)
+  # left to right
+  begin_overlap_seq_rev <- rev_summary$seq_start_median
+  end_overlap_seq_rev <- rev_summary$seq_start_median - (end_overlap_seq_fwd - begin_overlap_seq_fwd)
 }
 
 sum <- 0
 
 # obtain first rolling avg
 for (i in 0:19) {
-  sum <- sum + resultMeanFwd$mean[i + forStart] + resultMeanRev$mean[revStart - i]
+  sum <- sum + resultMeanFwd$mean[i + begin_overlap_seq_fwd] + resultMeanRev$mean[begin_overlap_seq_rev - i]
 }
 
-revTrunc <- revStart
-forTrunc <- forStart + 20
+revTrunc <- begin_overlap_seq_rev
+forTrunc <- begin_overlap_seq_fwd + 20
 optimal_sum <- sum
 
-for (i in 1:(end_overlap_seq - begin_overlap_seq - 20 + 1)) {
-  sum <- sum - resultMeanFwd$mean[i + forStart - 1] - resultMeanRev$mean[revStart - i + 1]
-  sum <- sum + resultMeanFwd$mean[i + forStart + 20 - 1] + resultMeanRev$mean[revStart - i - 20 + 1]
+for (i in 1:(end_overlap_seq_fwd - begin_overlap_seq_fwd - 20 + 1)) {
+  sum <- sum - resultMeanFwd$mean[i + begin_overlap_seq_fwd - 1] - resultMeanRev$mean[begin_overlap_seq_rev - i + 1]
+  sum <- sum + resultMeanFwd$mean[i + begin_overlap_seq_fwd + 20 - 1] + resultMeanRev$mean[begin_overlap_seq_rev - i - 20 + 1]
 
   if (optimal_sum < sum) {
     optimal_sum <- sum
-    revTrunc <- revStart - i
-    forTrunc <- forStart + 20 + i - 1
+    revTrunc <- begin_overlap_seq_rev - i
+    forTrunc <- begin_overlap_seq_fwd + 20 + i - 1
   }
 }
 
 continue <- TRUE
 # extend to the "right"
-while (forTrunc + 1 <= end_overlap_seq & continue) {
+while (forTrunc + 1 <= end_overlap_seq_fwd && continue) {
   continue <- FALSE
   sum <- resultMeanFwd$mean[forTrunc] + resultMeanFwd$mean[forTrunc - 1] + resultMeanFwd$mean[forTrunc + 1]
   if (sum / 3 > threshold) {
@@ -160,7 +231,7 @@ while (forTrunc + 1 <= end_overlap_seq & continue) {
 
 continue <- TRUE
 # extend to the "left
-while (revTrunc + 1 <= revStart & continue) {
+while (revTrunc + 1 <= begin_overlap_seq_rev & continue) {
   continue <- FALSE
   sum <- resultMeanRev$mean[revTrunc] + resultMeanRev$mean[revTrunc - 1] + resultMeanRev$mean[revTrunc + 1]
   if (sum / 3 > threshold) {
