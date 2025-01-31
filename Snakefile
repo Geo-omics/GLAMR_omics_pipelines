@@ -2012,14 +2012,13 @@ rule bracken_metacodeR:
 
 rule contig_abund_metacodeR:
         input:
-            script = "code/plot_contig_abund_uniref_LCA_single_sample.R",
             contig_abund = "data/omics/{sample_type}/{sample}/{sample}_lca_abund_summarized.tsv"
         output: "data/omics/{sample_type}/{sample}/{sample}_lca_abund_metacoder.pdf"
         resources: cpus=1, mem_mb=8000, time_min=60
         container: "docker://eandersk/r_microbiome"
         shell:
             """
-            {input.script} \
+            code/plot_contig_abund_uniref_LCA_single_sample.R \
                 --abund={input.contig_abund} \
                 --sample={wildcards.sample} \
                 --output={output}
@@ -2036,11 +2035,11 @@ rule reads_unirefLCA_mmseqs:
         #unirefDB = "/home/kiledal/scratch_gdick1/mmseqs_unirefdb/mmseqs2/uniref100",
         unirefDB = "data/reference/mmseqs2/uniref100",
         out_prefix = "data/omics/{sample_type}/{sample}/{sample}",
-        # tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
+        tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
         # tmp_dir = "/dev/shm/akiledal/mmseqs2",
         # tmp_fwd_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__fwd.fastq.gz",
         # tmp_rev_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__rev.fastq.gz",
-        tmp_dir = "/tmp/kiledal/mmseqs2/{sample}",
+        #tmp_dir = "/tmp/kiledal/mmseqs2/{sample}",
         # tmp_fwd_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__fwd.fastq.gz",
         # tmp_rev_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__rev.fastq.gz"
         #tmp_dir = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}",
@@ -2053,11 +2052,16 @@ rule reads_unirefLCA_mmseqs:
         mem_mb = 160000, cpus=32, time_min=20000
     shell:
         """
-        mkdir -p {params.tmp_dir}
+        export TMPDIR={params.tmp_dir}
+        
+        # Different tmp dir if running on lab servers
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/mmseqs/{wildcards.sample}/tmp
+
+        mkdir -p $TMPDIR
 
         # Log how much temp space is available, can cause job to fail
         printf "\nTemp directory storage available:\n" 2>&1 | tee {log}
-        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        df -h $TMPDIR 2>&1 | tee -a {log}
         printf "\n\n" 2>&1 | tee -a {log}
 
         # Previous copied reads to temp space, but no longer think this is nescessary. Should be deleted.
@@ -2071,7 +2075,7 @@ rule reads_unirefLCA_mmseqs:
             {input.fwd_reads} {input.rev_reads} \
             {params.unirefDB} \
             ./{params.out_prefix} \
-            {params.tmp_dir} \
+            $TMPDIR \
             --lca-mode 3 \
             --orf-filter 1 \
             --orf-filter-s 3.5 \
@@ -2086,11 +2090,11 @@ rule reads_unirefLCA_mmseqs:
 
         # Prior to clearing temp files, log temp space to see if potential reason for fail
         printf "\nTemp directory storage available:\n" 2>&1 | tee -a {log}
-        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        df -h $TMPDIR 2>&1 | tee -a {log}
         printf "\n\n" 2>&1 | tee -a {log}
 
-        #rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} {params.tmp_dir} 2>&1 | tee -a {log}
-        rm -r {params.tmp_dir} 2>&1 | tee -a {log}
+        #rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} $TMPDIR 2>&1 | tee -a {log}
+        rm -r $TMPDIR 2>&1 | tee -a {log}
         printf "Done, and deleted temp dir" 2>&1 | tee -a {log}
         """
 
@@ -2141,11 +2145,11 @@ rule contig_unirefLCA_mmseqs:
         #unirefDB = "/home/kiledal/scratch_gdick1/mmseqs_unirefdb/mmseqs2/uniref100",
         unirefDB = "data/reference/mmseqs2/uniref100",
         out_prefix = "data/omics/{sample_type}/{sample}/{sample}_contig",
-        # tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
+        tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
         # tmp_dir = "/dev/shm/akiledal/mmseqs2",
         # tmp_fwd_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__fwd.fastq.gz",
         # tmp_rev_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__rev.fastq.gz",
-        tmp_dir = "/tmp/kiledal/mmseqs2/{sample}_contigs",
+        #tmp_dir = "/tmp/kiledal/mmseqs2/{sample}_contigs",
         # tmp_fwd_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__fwd.fastq.gz",
         # tmp_rev_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__rev.fastq.gz"
         #tmp_dir = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}",
@@ -2158,11 +2162,16 @@ rule contig_unirefLCA_mmseqs:
         mem_mb = 160000, cpus=32, time_min=7200
     shell:
         """
-        mkdir -p {params.tmp_dir}
+        export TMPDIR={params.tmp_dir}
+        
+        # Different tmp dir if running on lab servers
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/mmseqs2/{wildcards.sample}_contigs
+        
+        mkdir -p $TMPDIR
 
         # Log how much temp space is available, can cause job to fail
         printf "\nTemp directory storage available:\n" 2>&1 | tee {log}
-        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        df -h $TMPDIR 2>&1 | tee -a {log}
         printf "\n\n" 2>&1 | tee -a {log}
 
         #mmseqs touchdb {params.unirefDB} # loads the database into memory, only use in large memory systems / nodes
@@ -2172,7 +2181,7 @@ rule contig_unirefLCA_mmseqs:
             {input.contigs} \
             {params.unirefDB} \
             ./{params.out_prefix} \
-            {params.tmp_dir} \
+            $TMPDIR \
             --lca-mode 3 \
             --orf-filter 1 \
             --orf-filter-s 3.5 \
@@ -2187,11 +2196,11 @@ rule contig_unirefLCA_mmseqs:
 
         # Prior to clearing temp files, log temp space to see if potential reason for fail
         printf "\nTemp directory storage available:\n" 2>&1 | tee -a {log}
-        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        df -h $TMPDIR 2>&1 | tee -a {log}
         printf "\n\n" 2>&1 | tee -a {log}
 
-        #rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} {params.tmp_dir} 2>&1 | tee -a {log}
-        rm -r {params.tmp_dir} 2>&1 | tee -a {log}
+        #rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} $TMPDIR 2>&1 | tee -a {log}
+        rm -r $TMPDIR 2>&1 | tee -a {log}
         printf "Done, and deleted temp dir" 2>&1 | tee -a {log}
         """
 
@@ -3112,6 +3121,7 @@ rule map_to_contigs:
         mapper = "minimap2-sr",
         #mapper = "strobealign"
     conda: "config/conda_yaml/coverm.yaml"
+    benchmark: "benchmarks/map_to_contigs/{sample_type}-{project}__{sample}.txt"
     resources: cpus=32, mem_mb=150000, time_min=7200, disk_mb=500000, scratch_disk_mb = 1000000
     shell:
         """
@@ -3147,6 +3157,7 @@ rule contig_coverage:
         coverage_metabat = "data/projects/{project}/{sample_type}/{sample}/bins/metabat_style_contig_coverage.tsv"
     params:
         tmpdir = "tmp/coverm_contig_coverage/{sample}"
+    benchmark: "benchmarks/contig_coverage/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/coverm.yaml"
     resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
     #resources: cpus=24, mem_mb=1000000, time_min=2880, partition = "largemem" # coassembly
@@ -3187,6 +3198,7 @@ rule index_contig_coverage:
     params:
         #bam = "data/projects/{project}/{sample_type}/{sample}/bins/bam/final.contigs.renamed.fa.decon_fwd_reads_fastp.fastq.gz.bam"
         bam = config["binning_bam_dir"] + "/final.contigs.renamed.fa.decon_fwd_reads_fastp.fastq.gz.bam"
+    benchmark: "benchmarks/index_contig_coverage/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/coverm.yaml"
     resources: cpus=4, mem_mb=60000, time_min=2880
     priority: 2
@@ -3218,6 +3230,8 @@ rule concoct:
     priority: 3
     shell:
         """
+        export OMP_THREAD_LIMIT={resources.cpus}
+
         cut_up_fasta.py {input.contigs} -c 10000 -o 0 --merge_last -b {output.cut_contigs_bed} > {output.cut_contigs}
         
         concoct_coverage_table.py {output.cut_contigs_bed} {params.bam} > {output.cut_coverage}
@@ -3370,7 +3384,7 @@ rule VAMB:
     #conda: "/home/kiledal/miniconda3/envs/vamb"
     benchmark: "benchmarks/VAMB/{sample_type}-{project}__{sample}.txt"
     log: "logs/VAMB/{sample_type}-{project}__{sample}.log"
-    resources: cpus=1, mem_mb=40000, time_min=1440, partition = "gpu", gpu = 1 # standard samples
+    resources: cpus=1, mem_mb=40000, time_min=5000, partition = "gpu", gpu = 1 # standard samples
     #resources: cpus=1, mem_mb=120000, time_min=14400, partition = "gpu", gpu = 1 # coassembly
     priority: 3
     shell:
@@ -3449,6 +3463,7 @@ rule standardize_bins:
     params: 
         sample = "{sample}",
         sample_dir = "data/projects/{project}/{sample_type}/{sample}"
+    benchmark: "benchmarks/standardize_bins/{sample_type}-{project}__{sample}.txt"
     singularity: "docker://eandersk/r_microbiome"
     resources: cpus=1, mem_mb = 50000, time_min=360
     priority: 4
@@ -3466,8 +3481,9 @@ rule checkm_new_per_sample:
     params:
         in_dir = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins",
         out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/checkm"
+    benchmark: "benchmarks/checkm_new_per_sample/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/checkm.yaml"
-    resources: cpus=16, mem_mb=80000, time_min=2880
+    resources: cpus=16, mem_mb=80000, time_min=7200
     priority: 4
     shell:
         """
@@ -3493,6 +3509,7 @@ rule make_das_and_drep_inputs:
         semibin_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/semibin_contigs.tsv",
         VAMB_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/VAMB_contigs.tsv"
     singularity: "docker://eandersk/r_microbiome"
+    benchmark: "benchmarks/make_das_and_drep_inputs/{sample_type}-{project}__{sample}.txt"
     resources: cpus=1, mem_mb = 50000, time_min=1440
     priority: 4
     shell:
@@ -3510,6 +3527,7 @@ rule checkm_new:
     params:
         in_dir = "data/projects/{project}/{sample_type}/metagenome_bins/raw_combined_bins",
         out_dir = "data/projects/{project}/{sample_type}/metagenome_bins/raw_combined_bins/checkm"
+    benchmark: "benchmarks/checkm_new/{sample_type}-{project}.txt"
     conda: "config/conda_yaml/checkm.yaml"
     resources: cpus=24, mem_mb=120000, time_min=2880
     priority: 4
@@ -4025,7 +4043,7 @@ rule ref_read_mapping:
         minimap2 \
             -ax sr \
             -t {resources.cpus} \
-            --secondary=yes \
+            --secondary=no \
             {input.ref} \
             {input.f_reads} {input.r_reads} > {output.sam}
 
@@ -4224,11 +4242,11 @@ rule metaEuk:
         #unirefDB = "/home/kiledal/scratch_gdick1/mmseqs_unirefdb/mmseqs2/uniref100",
         unirefDB = "data/reference/mmseqs2/uniref100",
         out_prefix = "data/omics/{sample_type}/{sample}/metaeuk/{sample}",
-        # tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
+        tmp_dir = "/home/kiledal/scratch_gdick1/metaEuk/{sample}",
         # tmp_dir = "/dev/shm/akiledal/mmseqs2",
         # tmp_fwd_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__fwd.fastq.gz",
         # tmp_rev_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__rev.fastq.gz",
-        tmp_dir = "/scratch/kiledal/metaEuk/{sample}/",
+        #tmp_dir = "/scratch/kiledal/metaEuk/{sample}",
         # tmp_fwd_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__fwd.fastq.gz",
         # tmp_rev_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__rev.fastq.gz"
         #tmp_dir = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}",
@@ -4242,11 +4260,16 @@ rule metaEuk:
     shell:
         """
         export MMSEQS_NUM_THREADS={resources.cpus}
-        mkdir -p {params.tmp_dir}
+        export TMPDIR={params.tmp_dir}
+        
+        # Different tmp dir if running on lab servers
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/metaEuk/{wildcards.sample}
+        
+        mkdir -p $TMPDIR
 
         # Log how much temp space is available, can cause job to fail
         printf "\nTemp directory storage available:\n" 2>&1 | tee {log}
-        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        df -h $TMPDIR 2>&1 | tee -a {log}
         printf "\n\n" 2>&1 | tee -a {log}
         
         metaeuk \
@@ -4256,26 +4279,26 @@ rule metaEuk:
             {input.assembly} \
             {params.unirefDB} \
             {params.out_prefix} \
-            {params.tmp_dir}
+            $TMPDIR
             2>&1 | tee -a {log} &&
 
         metaeuk taxtocontig \
-            {params.tmp_dir}latest/contigs \
+            $TMPDIR/latest/contigs \
             {output.aa_seqs} \
             {output.header_map} \
             {params.unirefDB} \
             {output.tax_res} \
-            {params.tmp_dir} \
+            $TMPDIR \
             --majority 0.5 \
             --tax-lineage 1 \
             --lca-mode 2
 
         # Prior to clearing temp files, log temp space to see if potential reason for fail
         printf "\nTemp directory storage available:\n" 2>&1 | tee -a {log}
-        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        df -h $TMPDIR 2>&1 | tee -a {log}
         printf "\n\n" 2>&1 | tee -a {log}
 
-        #rm -r {params.tmp_dir} 2>&1 | tee -a {log}
+        #rm -r $TMPDIR 2>&1 | tee -a {log}
         #printf "Done, and deleted temp dir" 2>&1 | tee -a {log}
         """
 
@@ -4290,7 +4313,7 @@ rule reads_unirefLCA_mmseqs_metaT:
         #unirefDB = "/home/kiledal/scratch_gdick1/mmseqs_unirefdb/mmseqs2/uniref100",
         unirefDB = "data/reference/mmseqs2/uniref100",
         out_prefix = "data/omics/{sample_type}/{sample}/uniref_readmap_noDedup/{sample}",
-        # tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
+        tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
         # tmp_dir = "/dev/shm/akiledal/mmseqs2",
         # tmp_fwd_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__fwd.fastq.gz",
         # tmp_rev_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__rev.fastq.gz",
@@ -4298,7 +4321,7 @@ rule reads_unirefLCA_mmseqs_metaT:
         # tmp_fwd_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__fwd.fastq.gz",
         # tmp_rev_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__rev.fastq.gz"
         #tmp_dir = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}",
-        tmp_dir = "/scratch/kiledal/mmseqs_tmp/{sample}",
+        #tmp_dir = "/scratch/kiledal/mmseqs_tmp/{sample}",
         tmp_fwd_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__fwd.fastq.gz",
         tmp_rev_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__rev.fastq.gz"
     benchmark: "benchmarks/reads_unirefLCA_mmseqs/{sample_type}-{sample}.txt"
@@ -4308,12 +4331,17 @@ rule reads_unirefLCA_mmseqs_metaT:
         mem_mb = 160000, cpus=32, time_min=20000
     shell:
         """
-        mkdir -p {params.tmp_dir}
+        export TMPDIR={params.tmp_dir}
+        
+        # Different tmp dir if running on lab servers
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/mmseqs2/{wildcards.sample}
+        
+        mkdir -p $TMPDIR
         mkdir $(basename {params.out_prefix})
 
         # Log how much temp space is available, can cause job to fail
         printf "\nTemp directory storage available:\n" 2>&1 | tee {log}
-        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        df -h $TMPDIR 2>&1 | tee -a {log}
         printf "\n\n" 2>&1 | tee -a {log}
 
         # Previous copied reads to temp space, but no longer think this is nescessary. Should be deleted.
@@ -4327,7 +4355,7 @@ rule reads_unirefLCA_mmseqs_metaT:
             {input.fwd_reads} {input.rev_reads} \
             {params.unirefDB} \
             ./{params.out_prefix} \
-            {params.tmp_dir} \
+            $TMPDIR \
             --lca-mode 3 \
             --orf-filter 1 \
             --orf-filter-s 3.5 \
@@ -4342,11 +4370,11 @@ rule reads_unirefLCA_mmseqs_metaT:
 
         # Prior to clearing temp files, log temp space to see if potential reason for fail
         printf "\nTemp directory storage available:\n" 2>&1 | tee -a {log}
-        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        df -h $TMPDIR 2>&1 | tee -a {log}
         printf "\n\n" 2>&1 | tee -a {log}
 
-        #rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} {params.tmp_dir} 2>&1 | tee -a {log}
-        rm -r {params.tmp_dir} 2>&1 | tee -a {log}
+        #rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} $TMPDIR 2>&1 | tee -a {log}
+        rm -r $TMPDIR 2>&1 | tee -a {log}
         printf "Done, and deleted temp dir" 2>&1 | tee -a {log}
         """
 
@@ -4386,12 +4414,12 @@ rule contig_unirefLCA_mmseqs_generic:
         #unirefDB = "/home/kiledal/scratch_gdick1/mmseqs_unirefdb/mmseqs2/uniref100",
         unirefDB = "data/reference/mmseqs2/uniref100",
         out_prefix = "data/omics/{sample_type}/{sample}/assembly/{assembly}/{sample}_contig",
-        # tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
+        tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
         # tmp_dir = "/dev/shm/akiledal/mmseqs2",
         # tmp_fwd_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__fwd.fastq.gz",
         # tmp_rev_reads = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/{sample}__rev.fastq.gz",
         #tmp_dir = "/tmp/kiledal/mmseqs2/{sample}_contigs",
-        tmp_dir = "/scratch/kiledal/mmseqs2/{sample}_contigs",
+        #tmp_dir = "/scratch/kiledal/mmseqs2/{sample}_contigs",
         # tmp_fwd_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__fwd.fastq.gz",
         # tmp_rev_reads = "/tmp/kiledal/mmseqs2/{sample}/{sample}__rev.fastq.gz"
         #tmp_dir = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}",
@@ -4404,11 +4432,16 @@ rule contig_unirefLCA_mmseqs_generic:
         mem_mb = 160000, cpus=32, time_min=7200
     shell:
         """
-        mkdir -p {params.tmp_dir}
+        export TMPDIR={params.tmp_dir}
+        
+        # Different tmp dir if running on lab servers
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/mmseqs2/{wildcards.sample}_contigs
+        
+        mkdir -p $TMPDIR
 
         # Log how much temp space is available, can cause job to fail
         printf "\nTemp directory storage available:\n" 2>&1 | tee {log}
-        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        df -h $ 2>&1 | tee -a {log}
         printf "\n\n" 2>&1 | tee -a {log}
 
         #mmseqs touchdb {params.unirefDB} # loads the database into memory, only use in large memory systems / nodes
@@ -4418,7 +4451,7 @@ rule contig_unirefLCA_mmseqs_generic:
             {input.contigs} \
             {params.unirefDB} \
             ./{params.out_prefix} \
-            {params.tmp_dir} \
+            $ \
             --lca-mode 3 \
             --orf-filter 1 \
             --orf-filter-s 3.5 \
@@ -4433,11 +4466,11 @@ rule contig_unirefLCA_mmseqs_generic:
 
         # Prior to clearing temp files, log temp space to see if potential reason for fail
         printf "\nTemp directory storage available:\n" 2>&1 | tee -a {log}
-        df -h {params.tmp_dir} 2>&1 | tee -a {log}
+        df -h $ 2>&1 | tee -a {log}
         printf "\n\n" 2>&1 | tee -a {log}
 
-        #rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} {params.tmp_dir} 2>&1 | tee -a {log}
-        rm -r {params.tmp_dir} 2>&1 | tee -a {log}
+        #rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} $ 2>&1 | tee -a {log}
+        rm -r $ 2>&1 | tee -a {log}
         printf "Done, and deleted temp dir" 2>&1 | tee -a {log}
         """
 
@@ -4448,7 +4481,7 @@ rule plass:
     output:
         assembly = "data/omics/{sample_type}/{sample}/assembly/plass/assembly.faa",
     params:
-        tmpdir = "tmp/coverm_contig_abund/{sample}"
+        tmpdir = "/home/kiledal/scratch_gdick1/plass/{sample}"
     conda: "config/conda_yaml/plass.yaml"
     log: "logs/plass/{sample}-{sample_type}.log"
     benchmark: "benchmarks/plass/{sample}-{sample_type}.txt"
@@ -4506,7 +4539,7 @@ rule map_reads_to_plass:
     conda: "config/conda_yaml/diamond_read_map.yaml"
     benchmark: "benchmarks/map_reads_to_plass/{sample}.txt"
     log: "logs/map_reads_to_plass/{sample}.log"
-    resources: cpus=24, time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 100000
+    resources: cpus=24, time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 150000
     shell:
         """
         seqtk mergepe {input.fwd_reads} {input.rev_reads} > {output.interleaved}
@@ -4517,7 +4550,7 @@ rule map_reads_to_plass:
         diamond blastx -d {output.diamond_db} \
                -q {output.interleaved} \
                -o {output.sam} \
-               --outfmt 100 \
+               --outfmt 101 \
                --max-target-seqs 1 \
                --evalue 1e-5 \
                --threads 8 \
