@@ -2139,7 +2139,8 @@ rule contig_unirefLCA_mmseqs:
     input:
         contigs = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa"
     output:
-        report = "data/omics/{sample_type}/{sample}/{sample}_contig_report"
+        report = "data/omics/{sample_type}/{sample}/{sample}_contig_report",
+        lca = "data/omics/{sample_type}/{sample}/{sample}_contig_lca.tsv"
     conda:  "config/conda_yaml/mmseqs.yaml"
     params:
         #unirefDB = "/home/kiledal/scratch_gdick1/mmseqs_unirefdb/mmseqs2/uniref100",
@@ -2166,6 +2167,7 @@ rule contig_unirefLCA_mmseqs:
         
         # Different tmp dir if running on lab servers
         [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/mmseqs2/{wildcards.sample}_contigs
+        [[ "${{HOSTNAME}}" == "alpena" ]] && export TMPDIR=/old-geomicro/kiledal-extra/mmseqs_contig/$USER/mmseqs2/{wildcards.sample}_contigs
         
         mkdir -p $TMPDIR
 
@@ -2208,12 +2210,12 @@ rule tax_abund_summary_from_contigs:
     input: 
         mmseqs_report = "data/omics/{sample_type}/{sample}/{sample}_contig_report",
         script = "code/tax_abund_from_contigs.R",
-        contig_abund = "data/omics/{sample_type}/{sample}/{sample}_contig_abund.tsv"
+        contig_abund = "data/omics/{sample_type}/{sample}/{sample}_contig_abund.tsv",
+        lca = "data/omics/{sample_type}/{sample}/{sample}_contig_lca.tsv"
         #assembly_done = "data/omics/{sample_type}/{sample}/assembly/megahit/.done"
     output:
         abund_summary = "data/omics/{sample_type}/{sample}/{sample}_lca_abund_summarized.tsv"
     params:
-        lca = "data/omics/{sample_type}/{sample}/{sample}_contig_lca.tsv",
         taxonkit_path = "code/dependencies/taxonkit",
         taxdump = "data/reference/ncbi_tax"
     benchmark: "benchmarks/tax_abund_summary_from_contigs/{sample_type}-{sample}.txt"
@@ -2225,7 +2227,7 @@ rule tax_abund_summary_from_contigs:
         pwd #check that the proper working directory is being used
         
         ./{input.script} \
-            -l {params.lca} \
+            -l {input.lca} \
             -r {input.contig_abund} \
             -o {output.abund_summary} \
             -c {resources.cpus} \
