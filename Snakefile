@@ -942,19 +942,19 @@ rule quast_megahit:
         quast.py {input.megahit_contigs} -o {params.out_dir} 2>&1 | tee {log}
         """
 
-rule concat_reads_for_COassembly:
-    input:
-        fwd_reads = expand(rules.remove_contaminants_fastp.output.decon_fwd, sample = jgi_samples, sample_type = "metagenomes"),
-        rev_reads = expand(rules.remove_contaminants_fastp.output.decon_rev, sample = jgi_samples, sample_type = "metagenomes")
-    output:
-        concat_fwd = temp("tmp/fwd_concat.fastq"),
-        concat_rev = temp("tmp/rev_concat.fastq")
-    resources: cpus = 1, time_min=20000, mem_mb = 4000
-    shell:
-        """
-        zcat {input.fwd_reads} > {output.concat_fwd}
-        zcat {input.rev_reads} > {output.concat_rev}
-        """
+# rule concat_reads_for_COassembly:
+#     input:
+#         fwd_reads = expand(rules.remove_contaminants_fastp.output.decon_fwd, sample = jgi_samples, sample_type = "metagenomes"),
+#         rev_reads = expand(rules.remove_contaminants_fastp.output.decon_rev, sample = jgi_samples, sample_type = "metagenomes")
+#     output:
+#         concat_fwd = temp("tmp/fwd_concat.fastq"),
+#         concat_rev = temp("tmp/rev_concat.fastq")
+#     resources: cpus = 1, time_min=20000, mem_mb = 4000
+#     shell:
+#         """
+#         zcat {input.fwd_reads} > {output.concat_fwd}
+#         zcat {input.rev_reads} > {output.concat_rev}
+#         """
 
 rule COassemble_megahit:
     input:
@@ -1942,54 +1942,6 @@ rule annotate_contigs:
         #> ${{proj_dir}}/{log}
         """
 
-rule dastool:
-    input:
-        contigs = "data/omics/{sample_type}/{sample}/bins/work_files/assembly.fa",
-        #bin_folder = rules.make_bins.params.out_dir
-        bins = "data/omics/{sample_type}/{sample}/bins/metabat2_bins"
-    params:
-        bin_folder = rules.make_bins.params.out_dir
-    output: 
-        #summary = "data/omics/{sample_type}/{sample}/bins/DASTool/_DASTool_summary.txt",
-        das_folder = directory("data/omics/{sample_type}/{sample}/bins/DASTool"),
-        das_bins_folder = directory("data/omics/{sample_type}/{sample}/bins/DASTool/_DASTool_bins")
-    conda: "config/conda_yaml/das_tool.yaml"
-    resources: cpus=8, mem_mb=50000, time_min=2880, mem_gb = 50
-    shell:
-        """
-        touch {params.bin_folder}/ran_dastool.touch # for tracking that DAStool ran, even if unsuccessfully
-
-        #Maxbin2
-        Fasta_to_Contig2Bin.sh \
-        -i {params.bin_folder}/maxbin2_bins \
-        -e fa \
-        > {params.bin_folder}/maxbin.scaffolds2bin.tsv
-
-        #CONCOT
-        Fasta_to_Contig2Bin.sh \
-        -i {params.bin_folder}/concoct_bins \
-        -e fa \
-        > {params.bin_folder}/concoct.scaffolds2bin.tsv
-
-        #Metabat2
-        Fasta_to_Contig2Bin.sh \
-        -i {params.bin_folder}/metabat2_bins \
-        -e fa \
-        > {params.bin_folder}/metabat2.scaffolds2bin.tsv
-
-        DAS_Tool \
-            -i {params.bin_folder}/maxbin.scaffolds2bin.tsv,{params.bin_folder}/concoct.scaffolds2bin.tsv,{params.bin_folder}/metabat2.scaffolds2bin.tsv \
-            -l maxbin,concoct,metabat2 \
-            -c {input.contigs} \
-            -t {resources.cpus} \
-            --write_bins \
-            -o {output.das_folder}/
-
-        # Rename bins to include sample name, make several downstream analyses easier
-        cd {output.das_bins_folder}
-        for f in *.fa; do mv -v -- "$f" "{wildcards.sample}_$f"; done
-        """
-
 
 rule download_gtdbtk_refs:
     output:
@@ -2030,120 +1982,6 @@ rule drep_mag_coverage:
             --genome-fasta-files {params.drep_bins}/*.fa \
             -o {output}
         """
-
-rule das_mag_coverage:
-    input:
-        fwd_reads = rules.remove_contaminants_fastp.output.decon_fwd,
-        rev_reads = rules.remove_contaminants_fastp.output.decon_rev,
-        bins = rules.dastool.output.das_bins_folder
-    output: "data/omics/{sample_type}/{sample}/bins/coverage_das_bins.tsv"
-    conda: "config/conda_yaml/coverm_env.yaml"
-    resources: cpus=24, mem_mb=150000, time_min=2880
-    shell:
-        """
-        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/
-        
-        coverm genome \
-            -t {resources.cpus} \
-            -m relative_abundance mean trimmed_mean covered_bases variance length count reads_per_base rpkm tpm \
-            --min-covered-fraction 0 \
-            --output-format sparse \
-            -1 {input.fwd_reads} \
-            -2 {input.rev_reads} \
-            --genome-fasta-files {input.bins}/*.fa \
-            -o {output}
-        """
-
-rule map_to_bins_for_reassembly:
-    input:
-        fwd_reads = rules.remove_contaminants.output.cleaned_fwd,
-        rev_reads = rules.remove_contaminants.output.cleaned_rev,
-        bins_folder = rules.dastool.output.das_bins_folder,
-        bin = "data/omics/{sample_type}/{sample}/bins/DASTool/_DASTool_bins/{bin}.fa"
-    output:
-        #unfiltered_bam = "data/omics/{sample_type}/{sample}/bins/reassembly/reads/{bin}_prefilt.bam",
-        unfiltered_bam_dir = temp(directory("data/omics/{sample_type}/{sample}/bins/reassembly/mapped_reads/{bin}__bam_unfiltered")),
-        filtered_bam = temp("data/omics/{sample_type}/{sample}/bins/reassembly/mapped_reads/{bin}.bam"),
-        #filtered_bam_dir = directory("data/omics/{sample_type}/{sample}/bins/reassembly/reads/{bin}__bam_filtered"),
-        fwd_reads = temp("data/omics/{sample_type}/{sample}/bins/reassembly/mapped_reads/{bin}_R1.fastq.gz"),
-        rev_reads = temp("data/omics/{sample_type}/{sample}/bins/reassembly/mapped_reads/{bin}_R2.fastq.gz")
-    conda: "config/conda_yaml/coverm.yaml"
-    resources: cpus=24, mem_mb=100000, time_min=2880
-    shell:
-        """
-        coverm make \
-            -t {resources.cpus} \
-            -1 {input.fwd_reads} \
-            -2 {input.rev_reads} \
-            --reference {input.bin} \
-            -o {output.unfiltered_bam_dir}
-
-        coverm filter \
-            -b {output.unfiltered_bam_dir}/*.bam \
-            -o {output.filtered_bam} \
-            --min-read-percent-identity 0.98 \
-            --threads {resources.cpus}
-
-        samtools fastq -@ {resources.cpus} \
-            {output.filtered_bam} \
-            -1 {output.fwd_reads} \
-            -2 {output.rev_reads} \
-            -0 /dev/null -s /dev/null -n
-        """
-
-rule reassemble_bin:
-    input:
-        fwd_reads = rules.map_to_bins_for_reassembly.output.fwd_reads,
-        rev_reads = rules.map_to_bins_for_reassembly.output.rev_reads,
-        bin = "data/omics/{sample_type}/{sample}/bins/DASTool/_DASTool_bins/{bin}.fa"
-    output:
-        #assembly_dir = directory("data/omics/{sample_type}/{sample}/bins/reassembly/{bin}"),
-        contigs = "data/omics/{sample_type}/{sample}/bins/reassembly/{bin}_reassembled_contigs.fasta"
-    params: 
-        assembly_dir = directory("data/omics/{sample_type}/{sample}/bins/reassembly/{bin}")
-    conda: "config/conda_yaml/main.yaml"
-    log: "logs/bin_reassembly/{sample_type}-{sample}/{bin}.log"
-    benchmark: "logs/bin_reassembly/{sample_type}-{sample}/{bin}.log"
-    resources: cpus = 16, time_min=20160, mem_mb = 16000
-        #mem_mb = lambda wildcards, attempt: attempt * 100000
-    shell:
-        """
-        spades.py \
-            -t {resources.cpus} \
-            -m $(echo "scale=-1; ({resources.mem_mb}/1000)/1" | bc) \
-            --careful \
-		    --untrusted-contigs {input.bin} \
-		    -1 {input.fwd_reads} \
-		    -2 {input.rev_reads} \
-		    -o {params.assembly_dir} > {log}
-
-        mv {params.assembly_dir}/contigs.fasta {output.contigs}
-        rm -r {params.assembly_dir}
-        """
-
-rule gather_bin:
-    input: expand("data/omics/{sample_type}/{sample}/bins/ran_dastool.touch",sample=metaG_samples,sample_type ="metagenomes")
-    output: directory("data/omics/metagenome_bins")
-    shell:
-        """
-        mkdir -p {output}
-        
-        ln data/omics/{wildcards.sample_type}/*/bins/DASTool/_DASTool_bins/*.fa {output}
-        """
-
-checkpoint drep:
-    input: 
-        bins = rules.gather_bin.output
-    output:
-        main_dir = directory("data/omics/metagenome_bins/derep"),
-        MAGs= directory("data/omics/metagenome_bins/derep/dereplicated_genomes")
-    conda: "config/conda_yaml/drep.yaml"
-    resources: cpus=8, mem_mb=250000, time_min=2880,
-    shell:
-        """
-        dRep dereplicate {output.main_dir} -g {input.bins}/*.fa
-        """
-
 
 rule humann:
     input:
@@ -2186,10 +2024,6 @@ rule humann:
             --output-basename {wildcards.sample}_humann \
             --output {output.humann_output}/ > {log}
         """
-
-rule run_humann: 
-    input: expand("data/omics/metagenomes/{sample}/humann", sample=metaG_samples)
-
 
 rule humann_fastp:
     input:
@@ -2235,9 +2069,6 @@ rule humann_fastp:
 
         rm -r {output.humann_output}/{wildcards.sample}_humann_humann_temp
         """
-
-rule run_humann_fastp: 
-    input: expand("data/omics/metagenomes/{sample}/humann_fastp", sample=metaG_samples)
 
 
 rule sourmash_sketch:
@@ -2744,7 +2575,7 @@ checkpoint dastool_new:
         contigs = rules.rename_contigs.output.contigs,
         checkm_res = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/checkm.txt"
     params:
-        bin_folder = rules.make_bins.params.out_dir,
+        bin_folder = "data/omics/{sample_type}/{sample}/bins",
         das_prefix = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/output/{sample}",
         metabat2_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/metabat2_contigs.tsv",
         maxbin_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/maxbin_contigs.tsv",
