@@ -76,7 +76,7 @@ combined_sample_table <- bind_rows(cleaned_up_sample_table, gvhd_samples)
 
 
 # Write table to database
-#sql('DROP VIEW public.bin_summary') %>% DBI::dbSendQuery(pg, .) # have to drop dependencies first
+sql('DROP VIEW public.bin_summary') %>% DBI::dbSendQuery(pg, .) # have to drop dependencies first
 dbWriteTable(pg,"glamr_samples", combined_sample_table,overwrite = TRUE)
 studies %>% 
   filter(!is.na(dataset)) %>% 
@@ -91,16 +91,19 @@ Output of:
 
 
 ```{r}
-tax_cols <- c("tax_id", "full_lineage", "std_lineage")
-taxa_list_std <- read_tsv("~/references/taxonkit/standardized_lineages.txt",col_names = tax_cols)
+tax_cols <- c("tax_id", "full_lineage", "rank", "std_lineage")
+taxa_list_std <- read_tsv("~/references/taxonkit/standardized_lineages_with_rank.txt",col_names = tax_cols)
 
 tax_info <- taxa_list_std %>% 
   separate(std_lineage, into = c("kingdom", "phylum", "class", "order", "family", "genus", "species"),sep = ";[a-z]__" ,remove = FALSE) %>% 
   mutate(tax_name = str_remove(full_lineage, ".*;"),
          kingdom = str_remove(kingdom, "^k__")) %>% 
-  relocate(tax_id, tax_name, full_lineage, std_lineage)
+  relocate(tax_id, tax_name, rank, full_lineage, std_lineage)
 
 dbWriteTable(pg,"tax_info", tax_info, overwrite = TRUE)
+sql('CREATE INDEX "tax_info_tax_id" ON "tax_info" ("tax_id")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "tax_info_tax_name" ON "tax_info" ("tax_name")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "tax_info_rank" ON "tax_info" ("rank")') %>% DBI::dbSendQuery(pg, .)
 ```
 
 
@@ -351,7 +354,6 @@ sql('CREATE INDEX read_mapping_to_uniref_taxonomy ON public.read_mapping_to_unir
 #### Contig LCAs from mmseqs LCA on UniRef
 
 ```{r}
-
 contig_lca_uniref <- tbl(pg, "contig_lca_uniref")
 
 lca_samples <- get_pg_table_samples(pg, "contig_lca_uniref", "sample")
@@ -591,7 +593,7 @@ column_types <- as.col_spec(drep_test)
 read_drep_to_pg <- function(path, sample) {
   print(sample)
   tryCatch({
-    read_csv(path) %>%
+    read_csv(path,show_col_types = FALSE) %>%
       mutate(drep_folder = str_remove(path, '/data_tables/Cdb.csv'),
              is_cluster_rep = fs::file_exists(str_glue("{drep_folder}/dereplicated_genomes/{genome}")),
              genome = str_remove(genome,".fa"),
@@ -1397,4 +1399,172 @@ walk2(new_existing_tax_abund_from_contig_lca_and_abunds$path,
 sql('CREATE INDEX "tax_abund_from_contig_lca_and_abund_tax_id" ON "tax_abund_from_contig_lca_and_abund" ("tax_id")') %>% DBI::dbSendQuery(pg, .)
 sql('CREATE INDEX "tax_abund_from_contig_lca_and_abund_sample" ON "tax_abund_from_contig_lca_and_abund" ("sample")') %>% DBI::dbSendQuery(pg, .)
 ```
+
+
+# Benchmarks
+```{r}
+# Get benchmarks that are already loaded into the database
+existing_benchmark_samples <- tbl(pg,"benchmarks") %>% 
+  dplyr::select(sample, rule) %>% distinct() %>% 
+  collect()
+
+# Find all benchmark tsvs
+benchmark_tsvs <- Sys.glob("benchmarks/*/*.txt") %>% 
+  data.frame(path = .) %>% 
+  bind_cols(.,unglue::unglue_data(.$path,"benchmarks/{rule}/{filename}.txt")) %>% 
+  mutate(sample = str_extract(filename, "(samp[_-]\\d+|GVHDsamp[_-]\\d+|coassembly[_-]\\d+)"),
+         sample = str_replace(sample, "-","_")) %>% 
+  bind_cols(file.info(.$path)) 
+
+# Filter list of summary tsvs to only those not already loaded into the database
+new_benchmark_tsvs <- benchmark_tsvs %>% 
+  anti_join(existing_benchmark_samples) %>% 
+  filter(str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_"))
+
+# Load an example summary tsv to get the column types
+
+
+# First upload to establish the table
+
+    # benchmark <- read_tsv("benchmarks/concoct/metagenomes-GVHDset2__GVHDsamp_306.txt") %>% 
+    #   janitor::clean_names() %>% 
+    #   mutate(sample = "GVHDsamp_306", 
+    #          rule = "concoct", 
+    #          h_m_s = as.character(h_m_s),
+    #          mod_time = fs::file_info("benchmarks/concoct/metagenomes-GVHDset2__GVHDsamp_306.txt") %>% pull(modification_time))
+    # 
+    # column_types <- as.col_spec(benchmark)
+    # 
+    # # postgres_col_types = c(tax_id = "integer",
+    # #                        abund_w_subtax = "numeric",
+    # #                        abund_direct = "numeric",
+    # #                        sample = "text"
+    # #                        )
+    # 
+    # benchmark %>%
+    #       relocate(sample,rule) %>%
+    #       dbWriteTable(pg, "benchmarks", ., overwrite = FALSE)
+
+# Function for reading the summary tsv and saving it to the database
+read_benchmarks_to_pg <- function(path, sample, rule) {
+  print(sample)
+  tryCatch({
+    read_tsv(path,show_col_types = FALSE) %>%
+      janitor::clean_names() %>% 
+      mutate(sample = sample, 
+             rule = rule, 
+             h_m_s = as.character(h_m_s),
+             mod_time = fs::file_info(path) %>% 
+               pull(modification_time)) %>% 
+      dplyr::relocate(sample,rule) %>% 
+      dbWriteTable(pg, "benchmarks", ., overwrite = FALSE, append = TRUE)
+  }, error = function(e) {
+    cat("Error occurred while processing file:", path, "\n")
+    cat("Error message:", conditionMessage(e), "\n")
+  })
+}
+
+# Load new summaries into the database
+# Drop existing indices [speeds up loading of new data]
+#sql('DROP INDEX public.benchmarks_sample') %>% DBI::dbSendQuery(pg, .)
+#sql('DROP INDEX public.benchmarks_rule') %>% DBI::dbSendQuery(pg, .)
+
+pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "cayman.earth.lsa.umich.edu", port = "5432", user = "glamr_admin", password = "glamr2023")
+# Append new data
+purrr::pwalk(.l = list(new_benchmark_tsvs$path,
+                  new_benchmark_tsvs$sample,
+                  new_benchmark_tsvs$rule),
+             .f = read_benchmarks_to_pg,.progress = TRUE)
+
+# Recreate indices
+sql('CREATE INDEX "benchmarks_sample" ON "benchmarks" ("sample")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "benchmarks_rule" ON "benchmarks" ("rule")') %>% DBI::dbSendQuery(pg, .)
+```
+
+
+
+# BLASTn-like searches of contigs
+```{r}
+# Get results already loaded into the database
+existing_contig_search_res <- tbl(pg, "contig_blast") %>% 
+  select(sample,search_name) %>% 
+  distinct() %>% 
+  collect()
+
+# Find all result files
+contig_search_res <- Sys.glob("data/omics/metagenomes/*/contig_search/*.m8") %>% 
+  data.frame(path = .) %>% 
+  bind_cols(.,unglue::unglue_data(.$path,"data/omics/{sample_type}/{sample}/contig_search/{query}.m8")) %>% 
+  bind_cols(file.info(.$path))
+
+# Filter list of summary tsvs to only those not already loaded into the database
+new_contig_search_res <- contig_search_res %>% 
+  anti_join(existing_contig_search_res %>% rename(query = "search_name")) %>% 
+  filter(str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_"))
+
+# Load an example summary tsv to get the column types
+# col_names_m8 <- c("query", "subject","percent_id", "alignment_length", "mismatches", "gap_openings", "query_start", "query_end", "subject_start", "subject_end", "e_value","bit_score")
+# 
+# contig_search_test <- read_tsv("data/omics/metagenomes/samp_2233/contig_search/guanitoxin.m8",col_names = col_names_m8) %>% mutate(sample = "samp_2233", search_name = "guanitoxin")
+# column_types <- as.col_spec(contig_search_test)
+
+# First upload to establish the table
+    # postgres_col_types = c(query = "text", 
+    #                        subject = "text",
+    #                        percent_id = "numeric", 
+    #                        alignment_length = "integer", 
+    #                        mismatches = "integer", 
+    #                        gap_openings = "integer", 
+    #                        query_start = "bigint", 
+    #                        query_end = "bigint", 
+    #                        subject_start = "bigint", 
+    #                        subject_end = "bigint", 
+    #                        e_value = "numeric",
+    #                        bit_score = "numeric"
+    #                        )
+    # 
+    # read_tsv("data/omics/metagenomes/samp_2233/contig_search/guanitoxin.m8",col_names = col_names_m8) %>% 
+    #   mutate(sample = "samp_2233", search_name = "guanitoxin") %>% 
+    #   relocate(sample, search_name) %>% 
+    #   dbWriteTable(pg, "contig_blast", ., overwrite = FALSE, field.types = postgres_col_types)
+
+# Function for reading the summary tsv and saving it to the database
+read_contig_search_res <- function(path, sample, search_name) {
+  col_names_m8 <- c("query", "subject","percent_id", "alignment_length", "mismatches", "gap_openings", "query_start", "query_end", "subject_start", "subject_end", "e_value","bit_score")
+  print(sample)
+  tryCatch({
+    read_tsv(path,col_names = col_names_m8,show_col_types = FALSE) %>%
+      mutate(sample = sample, search_name = search_name) %>%
+      relocate(sample, search_name) %>%
+      dbWriteTable(pg, "contig_blast", ., overwrite = FALSE, append = TRUE)
+  }, error = function(e) {
+    cat("Error occurred while processing file:", path, "\n")
+    cat("Error message:", conditionMessage(e), "\n")
+  })
+}
+
+#test <- read_drep_to_pg(drep_paths$path[1],sample = drep_paths$sample[1])
+
+
+# Load new summaries into the database
+# Drop existing indices [speeds up loading of new data]
+sql('DROP INDEX public.contig_blast_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.contig_blast_search_name') %>% DBI::dbSendQuery(pg, .)
+
+# Append new data
+pwalk(list(path = new_contig_search_res$path, 
+           sample = new_contig_search_res$sample, 
+           search_name = new_contig_search_res$query),
+      read_contig_search_res,
+      .progress = TRUE)
+
+# Recreate indices
+sql('CREATE INDEX "contig_blast_sample" ON "contig_blast" ("sample")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "contig_blast_search_name" ON "contig_blast" ("search_name")') %>% DBI::dbSendQuery(pg, .)
+```
+
+
+
+
+
 
