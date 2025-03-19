@@ -170,34 +170,34 @@ rule deduplicate:
         """
 
 
-rule de_interleave:
-    input: 
-        reads = "import/staging/jgi_2022/all_sample_filtered_reads/{sample}_interleaved.fastq.gz"
-    output: 
-        reads_fwd = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
-        reads_rev = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz"
-    conda: "config/conda_yaml/main.yaml"
-    log: "logs/de_interleave/{sample_type}-{sample}.log"
-    # resources: cpus=36, time_min=2880,
-    #     mem_mb = lambda wildcards, attempt: attempt * 170000,
-    #     #partition = "largemem"
-    resources: 
-        #partition = "largemem",
-        cpus = 24, 
-        time_min = 7200,
-        mem_mb = 120000
-    shell:
-        """
-        #BBtools use more memory than given, amount given by 20% to stay within job specs.
-        bbmap_mem=$(echo "scale=-1; ({resources.mem_mb}*0.6)/1" | bc)
+# rule de_interleave:
+#     input: 
+#         reads = "import/staging/jgi_2022/all_sample_filtered_reads/{sample}_interleaved.fastq.gz"
+#     output: 
+#         reads_fwd = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
+#         reads_rev = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz"
+#     conda: "config/conda_yaml/main.yaml"
+#     log: "logs/de_interleave/{sample_type}-{sample}.log"
+#     # resources: cpus=36, time_min=2880,
+#     #     mem_mb = lambda wildcards, attempt: attempt * 170000,
+#     #     #partition = "largemem"
+#     resources: 
+#         #partition = "largemem",
+#         cpus = 24, 
+#         time_min = 7200,
+#         mem_mb = 120000
+#     shell:
+#         """
+#         #BBtools use more memory than given, amount given by 20% to stay within job specs.
+#         bbmap_mem=$(echo "scale=-1; ({resources.mem_mb}*0.6)/1" | bc)
 
-        # Dedup only outputs interleaved files, this just converts back to paired
-        reformat.sh in={input.reads} \
-            out1={output.reads_fwd} \
-            out2={output.reads_rev} 2>&1 | tee -a {log}
-        """
+#         # Dedup only outputs interleaved files, this just converts back to paired
+#         reformat.sh in={input.reads} \
+#             out1={output.reads_fwd} \
+#             out2={output.reads_rev} 2>&1 | tee -a {log}
+#         """
 
-ruleorder: remove_contaminants_fastp > de_interleave
+#ruleorder: remove_contaminants_fastp > de_interleave
 
 
 rule fastp:
@@ -620,6 +620,7 @@ rule fastqc_decontam:
         touch("data/omics/{sample_type}/{sample}/reads/fastqc_decontam/.done")
     conda:
           "config/conda_yaml/fastqc.yaml"
+    resources: cpus = 4, mem_mb = 16000, time_min = 2880
     shell:
         """
         mkdir -p data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_decontam
@@ -1698,7 +1699,7 @@ rule reads_unirefLCA_mmseqs:
     log: "logs/reads_unirefLCA_mmseqs/{sample_type}-{sample}.log"
     resources:
         #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
-        mem_mb = 160000, cpus=32, time_min=20000
+        mem_mb = 160000, cpus=48, time_min=20000
     shell:
         """
         export TMPDIR={params.tmp_dir}
@@ -1731,7 +1732,7 @@ rule reads_unirefLCA_mmseqs:
             -s 4 \
             --tax-lineage 1 \
             --threads {resources.cpus} \
-            --split-memory-limit 100G \
+            --split-memory-limit 500G \
             2>&1 | tee -a {log}
 
             #{params.tmp_fwd_reads} {params.tmp_rev_reads} \
@@ -1798,7 +1799,8 @@ rule contig_unirefLCA_mmseqs:
     log: "logs/contig_unirefLCA_mmseqs/{sample_type}-{sample}.log"
     resources:
         #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
-        mem_mb = 160000, cpus=32, time_min=7200
+        #mem_mb = 160000, cpus=32, time_min=7200
+        mem_mb = 160000, cpus=32, time_min=500
     shell:
         """
         export TMPDIR={params.tmp_dir}
@@ -2196,8 +2198,9 @@ rule contig_coverage:
         tmpdir = "tmp/coverm_contig_coverage/{sample}"
     benchmark: "benchmarks/contig_coverage/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/coverm.yaml"
-    resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
-    #resources: cpus=24, mem_mb=1000000, time_min=2880, partition = "largemem" # coassembly
+    resources: cpus=24, mem_mb=120000, time_min=10000 # standard assemblies
+    #resources: cpus=24, mem_mb=1000000, time_min=14400, partition = "largemem" # coassembly
+    #resources: cpus=24, mem_mb=1500000, time_min=14400, partition = "largemem" # XL coassembly
     priority: 2
     shell:
         """
@@ -2263,7 +2266,7 @@ rule concoct:
     conda: "config/conda_yaml/concoct.yaml"
     resources: cpus=16, mem_mb=150000, time_min=10080, mem_gb = 50 # standard samples
     #resources: cpus=24, mem_mb=170000, time_min=10080, mem_gb = 50 # coassembly
-    #resources: cpus=16, mem_mb=500000, time_min=10080, partition = "largemem" # XLcoassembly
+    #resources: cpus=32, mem_mb=1200000, time_min=18720, partition = "largemem" # XLcoassembly
     priority: 3
     shell:
         """
@@ -2693,6 +2696,34 @@ rule GTDB_to_NCBI:
             --ar53_metadata_file {params.refs}/ar53_metadata_r207.tar.gz
         """
 
+rule GTDB_versioned:
+    input:
+        "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/.bins_linked",
+        refs = "data/reference/GTDBtk/{database_version}"
+    params:
+        input_bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep",
+        out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/GTDB_{database_version}",
+        pplacer_cpus = 1
+    output:
+        done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.done_GTDB_{database_version}")
+    conda: "config/conda_yaml/gtdbtk_2.4.0.yaml"
+    benchmark: "benchmarks/GTDB/{sample_type}-{project}__{sample}_database-{database_version}.txt"
+    log: "logs/GTDB/{sample_type}-{project}__{sample}_database-{database_version}.log"
+    resources: cpus=16, mem_mb=100000, time_min=2880
+    shell:
+        """
+        export GTDBTK_DATA_PATH={input.refs}
+
+        gtdbtk classify_wf \
+            --extension fa \
+            --genome_dir {params.input_bin_dir} \
+            --out_dir {params.out_dir} \
+            --cpus {resources.cpus} \
+            --pplacer_cpus {params.pplacer_cpus} \
+            --mash_db $GTDBTK_DATA_PATH/mash_db
+        """
+
+
 rule gunc_GTDB_db_download:
     output: directory("data/reference/gunc_gtdb")
     resources: cpus=1, time_min=2880
@@ -2856,6 +2887,7 @@ rule bakta_generic:
     shell:
         """
         bakta --db {params.db} \
+            --keep-contig-headers \
             --output {output.dir} \
             --threads {resources.cpus} \
             {input.genome} | tee {log}
@@ -2880,6 +2912,37 @@ rule antismash:
         """
         antismash \
             --cb-general --cb-knownclusters --cb-subclusters --asf --pfam2go --smcog-trees \
+            --databases {params.db} \
+            --genefinding-tool none \
+            --output-dir {output.dir} \
+            --cpus {resources.cpus} \
+            {params.genome} | tee {log}
+        """
+
+rule antismash7:
+    input:
+        #dir = "data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}",
+        gff = "data/projects/{project}/{sample_type}/{sample}/bins/prodigal/{genome}.gff",
+        #genome = "data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}/{genome}.gbff",
+        bakta_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}"
+    output:
+        dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/antismash7/{genome}")
+    params:
+        db = "/local/databases",
+        genome = "data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}/{genome}.gbff"
+    singularity: "docker://antismash/standalone"
+    log: "logs/antismash7/{sample_type}-{project}__{sample}__{genome}.tsv"
+    benchmark: "benchmarks/antismash7/{sample_type}-{project}__{sample}__{genome}.tsv"
+    resources: cpus=16, mem_mb=10000, time_min=5000, 
+    shell:
+        """
+        pwd 
+        cd {current_dir}
+        pwd
+
+        antismash \
+            --cb-general --cb-knownclusters --cb-subclusters --asf --pfam2go --smcog-trees --cc-mibig --tfbs \
+            -t bacteria \
             --databases {params.db} \
             --genefinding-tool none \
             --output-dir {output.dir} \
@@ -3036,6 +3099,28 @@ rule ref_read_mapping_pileup:
     shell:
         """
         samtools mpileup -f {input.ref} -o {output.pileup} {input.bam}
+        """
+
+rule contig_search:
+    input:
+        query="data/reference/blast_queries/{ref_seqs}.fasta",
+        contigs="data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa"
+    output:
+        "data/omics/{sample_type}/{sample}/contig_search/{ref_seqs}.m8"
+    params:
+        tmp_results = "/tmp/{sample_type}/{sample}/contig_search/tmp_results_{ref_seqs}"
+    conda: "config/conda_yaml/mmseqs.yaml"
+    benchmark: "benchmarks/contig_search/{sample_type}_{sample}--{ref_seqs}.txt"
+    log: "logs/contig_search/{sample_type}_{sample}--{ref_seqs}.log"
+    resources: cpus=24, mem_mb=120000, time_min=20000
+    shell:
+        """
+        mkdir -p {params.tmp_results}
+
+        mmseqs easy-search {input.query} {input.contigs} {output} {params.tmp_results} \
+        --threads {resources.cpus} \
+        --exhaustive-search \
+        --search-type 3
         """
 
 rule map_reads_to_microcystis_markers:
@@ -3517,4 +3602,53 @@ rule map_reads_to_plass:
         
         samtools sort -o {output.bam} -@ {resources.cpus} {output.unsorted_bam}
         samtools index -@ {resources.cpus} {output.bam}       
+        """
+
+rule virsorter2:
+    input:
+        contigs = rules.rename_contigs.output.contigs
+    output:
+        virsorter_dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/virsorter2"),
+        virsorter_done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.virsorter2_done")
+    params:
+        out_prefix = "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/bins/{sample}"
+    conda: "config/conda_yaml/virsorter.yaml"
+    benchmark: "benchmarks/virsorter2/{sample_type}-{project}__{sample}.txt"
+    log: "logs/virsorter2/{sample_type}-{project}__{sample}.log"
+    resources: cpus=32, mem_mb=150000, time_min=10080 # standard samples
+    priority: 3
+    shell:
+        """
+        virsorter run \
+            -w {output.virsorter_dir} \
+            -i {input.contigs} \
+            --db-dir data/reference/virsorter2 \
+            --include-groups all \
+            -j {resources.cpus} \
+            all | tee {log}
+        """
+
+rule genomad:
+    input:
+        contigs = rules.rename_contigs.output.contigs
+    output:
+        genomad_dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/genomad"),
+        genomad_done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.genomad_done")
+    params:
+        db_path = "data/reference/genomad/genomad_db",
+        splits = "8",
+        out_prefix = "data/projects/{project}/{sample_type}/{sample}/bins/genomad"
+    conda: "config/conda_yaml/genomad.yaml"
+    benchmark: "benchmarks/genomad/{sample_type}-{project}__{sample}.txt"
+    log: "logs/genomad/{sample_type}-{project}__{sample}.log"
+    resources: cpus=32, mem_mb=150000, time_min=10080 # standard samples
+    priority: 3
+    shell:
+        """
+        genomad end-to-end \
+            --cleanup \
+            --splits {params.splits} \
+            {input.contigs} \
+            {output.genomad_dir} \
+            {params.db_path} | tee {log}
         """
