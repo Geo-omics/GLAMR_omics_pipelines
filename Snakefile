@@ -2950,6 +2950,24 @@ rule antismash7:
             {params.genome} | tee {log}
         """
 
+rule antismash_summary:
+    input:
+        "data/projects/{project}/{sample_type}/{sample}/bins/antismash7/{genome}"
+    output:
+        counts = "data/projects/{project}/{sample_type}/{sample}/bins/antismash7/{genome}/counts.tsv",
+        region_summary = "data/projects/{project}/{sample_type}/{sample}/bins/antismash7/{genome}/region_summary.tsv"
+    params:
+        count_script = "code/multismash/workflow/scripts/count_regions.py",
+        summarize_script = "code/multismash/workflow/scripts/tabulate_regions.py"
+    log: "logs/antismash_summary/{sample_type}-{project}__{sample}__{genome}.tsv"
+    benchmark: "benchmarks/antismash_summary/{sample_type}-{project}__{sample}__{genome}.tsv"
+    resources: cpus=1, mem_mb=4000, time_min=120 
+    shell:
+        """
+        python3 {params.count_script} {input} {output.counts} | tee {log}
+        python3 {params.summarize_script} {input} {output.region_summary} | tee -a {log}
+        """
+
 rule get_bigscape_db:
     output: directory("data/reference/bigscape")
     conda: "config/conda_yaml/bigscape.yaml"
