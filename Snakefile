@@ -1699,7 +1699,8 @@ rule reads_unirefLCA_mmseqs:
     log: "logs/reads_unirefLCA_mmseqs/{sample_type}-{sample}.log"
     resources:
         #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
-        mem_mb = 160000, cpus=48, time_min=20000
+        #mem_mb = 160000, cpus=48, time_min=20000
+        cpus=32, mem_mb=170000, time_min=19440
     shell:
         """
         export TMPDIR={params.tmp_dir}
@@ -1732,7 +1733,7 @@ rule reads_unirefLCA_mmseqs:
             -s 4 \
             --tax-lineage 1 \
             --threads {resources.cpus} \
-            --split-memory-limit 500G \
+            --split-memory-limit $((({resources.mem_mb} * 8/10) / 1024))G \
             2>&1 | tee -a {log}
 
             #{params.tmp_fwd_reads} {params.tmp_rev_reads} \
@@ -2264,7 +2265,7 @@ rule concoct:
         #bam = "/ssd/GLAMR/binning/bams/bams/{project}/{sample_type}/{sample}/*.bam" #changed just for Paul's coassembly
     benchmark: "benchmarks/concoct/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/concoct.yaml"
-    resources: cpus=16, mem_mb=150000, time_min=10080, mem_gb = 50 # standard samples
+    resources: cpus=24, mem_mb=150000, time_min=10080, mem_gb = 50 # standard samples
     #resources: cpus=24, mem_mb=170000, time_min=10080, mem_gb = 50 # coassembly
     #resources: cpus=32, mem_mb=1200000, time_min=18720, partition = "largemem" # XLcoassembly
     priority: 3
@@ -2858,7 +2859,7 @@ rule bakta_das_bins:
     output:
         dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}")
     params:
-        db = "data/reference/bakta/db"
+        db = "data/reference/bakta/db6"
     conda: "config/conda_yaml/bakta.yaml"
     log: "logs/bakta/{sample_type}-{project}__{sample}__{genome}.tsv"
     benchmark: "benchmarks/bakta/{sample_type}-{project}__{sample}__{genome}.tsv"
@@ -2866,6 +2867,7 @@ rule bakta_das_bins:
     shell:
         """
         bakta --db {params.db} \
+            --keep-contig-headers \
             --output {output.dir} \
             --threads {resources.cpus} \
             {input.genome} | tee {log}
@@ -2879,7 +2881,7 @@ rule bakta_generic:
     output:
         dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}")
     params:
-        db = "data/reference/bakta/db"
+        db = "data/reference/bakta/db6"
     conda: "config/conda_yaml/bakta.yaml"
     log: "logs/bakta/{sample_type}-{project}__{sample}__{genome}.tsv"
     benchmark: "benchmarks/bakta/{sample_type}-{project}__{sample}__{genome}.tsv"
@@ -2950,17 +2952,62 @@ rule antismash7:
             {params.genome} | tee {log}
         """
 
+rule antismash8_db_download:
+    output:
+        database_dir = directory("data/reference/antismash8")
+    singularity: "docker://eandersk/antismash8"
+    log: "logs/antismash8_db_download.txt"
+    benchmark: "benchmarks/antismash8_db_download.txt"
+    resources: cpus=4, mem_mb=10000, time_min=10000
+    shell:
+        """
+        pwd 
+        cd {current_dir}
+        pwd
+
+        download-antismash-databases --database-dir {output.database_dir} | tee {log}
+
+        #antismash --check-prereqs --database-dir {output.database_dir}
+        """
+
+rule antismash8:
+    input:
+        #dir = "data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}",
+        gff = "data/projects/{project}/{sample_type}/{sample}/bins/prodigal/{genome}.gff",
+        #genome = "data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}/{genome}.gbff",
+        bakta_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}"
+    output:
+        dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/antismash8/{genome}")
+    params:
+        db = "data/reference/antismash8",
+        genome = "data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}/{genome}.gbff"
+    singularity: "docker://eandersk/antismash8"
+    log: "logs/antismash8/{sample_type}-{project}__{sample}__{genome}.tsv"
+    benchmark: "benchmarks/antismash8/{sample_type}-{project}__{sample}__{genome}.tsv"
+    resources: cpus=16, mem_mb=10000, time_min=5000, 
+    shell:
+        """
+        antismash \
+            --cb-general --cb-knownclusters --cb-subclusters --asf --pfam2go --smcog-trees --cc-mibig --tfbs \
+            -t bacteria \
+            --databases {params.db} \
+            --genefinding-tool none \
+            --output-dir {output.dir} \
+            --cpus {resources.cpus} \
+            {params.genome} | tee {log}
+        """
+
 rule antismash_summary:
     input:
-        "data/projects/{project}/{sample_type}/{sample}/bins/antismash7/{genome}"
+        "data/projects/{project}/{sample_type}/{sample}/bins/antismash{version}/{genome}"
     output:
-        counts = "data/projects/{project}/{sample_type}/{sample}/bins/antismash7/{genome}/counts.tsv",
-        region_summary = "data/projects/{project}/{sample_type}/{sample}/bins/antismash7/{genome}/region_summary.tsv"
+        counts = "data/projects/{project}/{sample_type}/{sample}/bins/antismash{version}/summaries/{genome}-counts.tsv",
+        region_summary = "data/projects/{project}/{sample_type}/{sample}/bins/antismash{version}/summaries/{genome}-region_summary.tsv"
     params:
         count_script = "code/multismash/workflow/scripts/count_regions.py",
         summarize_script = "code/multismash/workflow/scripts/tabulate_regions.py"
-    log: "logs/antismash_summary/{sample_type}-{project}__{sample}__{genome}.tsv"
-    benchmark: "benchmarks/antismash_summary/{sample_type}-{project}__{sample}__{genome}.tsv"
+    log: "logs/antismash_summary/AS{version}-{sample_type}-{project}__{sample}__{genome}.tsv"
+    benchmark: "benchmarks/antismash_summary/AS{version}-{sample_type}-{project}__{sample}__{genome}.tsv"
     resources: cpus=1, mem_mb=4000, time_min=120 
     shell:
         """
@@ -3023,12 +3070,12 @@ rule bigscape:
 
 rule bakta_assembly:
     input:
-        genome = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.fa",
+        genome = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa",
         proteins = rules.prodigal.output.proteins
     output:
         dir = directory("data/omics/{sample_type}/{sample}/bakta_assembly")
     params:
-        db = "data/reference/bakta/db"
+        db = "data/reference/bakta/db6"
     conda: "config/conda_yaml/bakta.yaml"
     log: "logs/bakta_assembly/{sample_type}-{sample}.tsv"
     benchmark: "benchmarks/bakta_assembly/{sample_type}-{sample}.tsv"
@@ -3036,37 +3083,66 @@ rule bakta_assembly:
     shell:
         """
         bakta --db {params.db} \
+            --keep-contig-headers \
+            --meta \
+            --skip-plot \
             --proteins {input.proteins} \
             --output {output.dir} \
             --threads {resources.cpus} \
             {input.genome} | tee {log}
         """
 
-rule antismash_assembly:
+# rule antismash_assembly:
+#     input:
+#         #"data/omics/{sample_type}/{sample}/bakta_assembly",
+#         genome = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa",
+#         #gbk = "data/omics/{sample_type}/{sample}/genes/{sample}_GENES.gbk"
+#     output:
+#         dir = directory("data/omics/{sample_type}/{sample}/antismash_assembly")
+#     params:
+#         db = "data/reference/antismash",
+#         #genome = "data/omics/{sample_type}/{sample}/bakta_assembly/{sample}.gbff"
+#     conda: "config/conda_yaml/antismash.yaml"
+#     log: "logs/antismash_assembly/{sample_type}-{sample}.tsv"
+#     benchmark: "benchmarks/antismash_assembly/{sample_type}-{sample}.tsv"
+#     resources: cpus=8, mem_mb=90000, time_min=20000
+#     shell:
+#         """
+#         antismash \
+#             --cb-general --cb-knownclusters --cb-subclusters --asf --pfam2go --smcog-trees \
+#             --databases {params.db} \
+#             --genefinding-tool prodigal-m \
+#             --output-dir {output.dir} \
+#             --cpus {resources.cpus} \
+#             {input.genome} | tee {log}
+
+#             #--genefinding-tool none \
+#         """
+
+rule antismash8_assembly:
     input:
-        #"data/omics/{sample_type}/{sample}/bakta_assembly",
-        genome = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.fa",
+        "data/omics/{sample_type}/{sample}/bakta_assembly",
+        genome = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa",
         #gbk = "data/omics/{sample_type}/{sample}/genes/{sample}_GENES.gbk"
     output:
         dir = directory("data/omics/{sample_type}/{sample}/antismash_assembly")
     params:
-        db = "data/reference/antismash",
-        #genome = "data/omics/{sample_type}/{sample}/bakta_assembly/{sample}.gbff"
-    conda: "config/conda_yaml/antismash.yaml"
-    log: "logs/antismash_assembly/{sample_type}-{sample}.tsv"
-    benchmark: "benchmarks/antismash_assembly/{sample_type}-{sample}.tsv"
+        db = "data/reference/antismash8",
+        genome = "data/omics/{sample_type}/{sample}/bakta_assembly/{sample}.gbff"
+    singularity: "docker://eandersk/antismash8"
+    log: "logs/antismash8_assembly/{sample_type}__{sample}.tsv"
+    benchmark: "benchmarks/antismash8_assembly/{sample_type}-{sample}.tsv"
     resources: cpus=8, mem_mb=90000, time_min=20000
     shell:
         """
         antismash \
-            --cb-general --cb-knownclusters --cb-subclusters --asf --pfam2go --smcog-trees \
+            --cb-general --cb-knownclusters --cb-subclusters --asf --pfam2go --smcog-trees --cc-mibig --tfbs \
+            -t bacteria \
             --databases {params.db} \
-            --genefinding-tool prodigal-m \
+            --genefinding-tool none \
             --output-dir {output.dir} \
             --cpus {resources.cpus} \
-            {input.genome} | tee {log}
-
-            #--genefinding-tool none \
+            {params.genome} | tee {log}
         """
 
 rule ref_read_mapping:
