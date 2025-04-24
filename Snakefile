@@ -2956,7 +2956,7 @@ rule antismash7:
 rule antismash8_db_download:
     output:
         database_dir = directory("data/reference/antismash8")
-    singularity: "docker://eandersk/antismash8"
+    conda: "config/conda_yaml/antismash8.yaml"
     log: "logs/antismash8_db_download.txt"
     benchmark: "benchmarks/antismash8_db_download.txt"
     resources: cpus=4, mem_mb=10000, time_min=10000
@@ -2976,7 +2976,7 @@ rule antismash8_db_prep:
         database_dir = "data/reference/antismash8"
     output:
         database_prep = touch("data/reference/.antismash8_dbPrep")
-    singularity: "docker://eandersk/antismash8"
+    conda: "config/conda_yaml/antismash8.yaml"
     log: "logs/antismash8_db_prep.txt"
     benchmark: "benchmarks/antismash8_db_prep.txt"
     resources: cpus=4, mem_mb=10000, time_min=10000
@@ -2996,8 +2996,7 @@ rule antismash8:
     params:
         db = "data/reference/antismash8",
         genome = "data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}/{genome}.gbff"
-    singularity: "docker://eandersk/antismash8"
-    #conda: "antismash8"
+    conda: "config/conda_yaml/antismash8.yaml"
     log: "logs/antismash8/{sample_type}-{project}__{sample}__{genome}.tsv"
     benchmark: "benchmarks/antismash8/{sample_type}-{project}__{sample}__{genome}.tsv"
     resources: cpus=16, mem_mb=10000, time_min=5000, 
@@ -3151,7 +3150,6 @@ rule antismash8_assembly:
     params:
         db = "data/reference/antismash8_mibig4",
         genome = "data/omics/{sample_type}/{sample}/bakta_assembly/final.contigs.renamed.gbff"
-    #singularity: "docker://eandersk/antismash8"
     conda: "config/conda_yaml/antismash8.yaml"
     log: "logs/antismash8_assembly/{sample_type}__{sample}.tsv"
     benchmark: "benchmarks/antismash8_assembly/{sample_type}-{sample}.tsv"
