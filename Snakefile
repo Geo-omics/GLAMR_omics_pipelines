@@ -1218,7 +1218,7 @@ rule align_to_uniref:
     output:
         gene_uniref_alignment = "data/omics/{sample_type}/{sample}/{sample}_GENES.m8"
     params:
-        "--top 0.5 --threads 10 --query-cover 50 --strand both -f 6 qseqid qlen sseqid slen qstart qend sstart send evalue pident mismatch qcovhsp scovhsp"
+        "--top 0.5 --query-cover 50 --strand both -f 6 qseqid qlen sseqid slen qstart qend sstart send evalue pident mismatch qcovhsp scovhsp"
     conda: "config/conda_yaml/main.yaml"
     log: "logs/align_to_uniref/{sample_type}-{sample}_align_to_uniref.log"
     benchmark: "benchmarks/align_to_uniref/{sample_type}-{sample}_align_to_uniref.txt"
@@ -1228,6 +1228,7 @@ rule align_to_uniref:
         diamond blastx \
             -d {input.diamond_db} \
             -q {input.genes} \
+            --threads {resources.cpus} \
             -o {output.gene_uniref_alignment} \
             {params} 2>&1 | tee {log}
         """
@@ -2967,7 +2968,21 @@ rule antismash8_db_download:
 
         download-antismash-databases --database-dir {output.database_dir} | tee {log}
 
-        #antismash --check-prereqs --database-dir {output.database_dir}
+        #antismash --prepare-data --databases {output.database_dir}
+        """
+
+rule antismash8_db_prep:
+    input:
+        database_dir = "data/reference/antismash8"
+    output:
+        database_prep = touch("data/reference/.antismash8_dbPrep")
+    singularity: "docker://eandersk/antismash8"
+    log: "logs/antismash8_db_prep.txt"
+    benchmark: "benchmarks/antismash8_db_prep.txt"
+    resources: cpus=4, mem_mb=10000, time_min=10000
+    shell:
+        """
+        antismash --prepare-data --databases {input.database_dir} | tee {log}
         """
 
 rule antismash8:
@@ -2982,6 +2997,7 @@ rule antismash8:
         db = "data/reference/antismash8",
         genome = "data/projects/{project}/{sample_type}/{sample}/bins/bakta/{genome}/{genome}.gbff"
     singularity: "docker://eandersk/antismash8"
+    #conda: "antismash8"
     log: "logs/antismash8/{sample_type}-{project}__{sample}__{genome}.tsv"
     benchmark: "benchmarks/antismash8/{sample_type}-{project}__{sample}__{genome}.tsv"
     resources: cpus=16, mem_mb=10000, time_min=5000, 
@@ -3004,8 +3020,8 @@ rule antismash_summary:
         counts = "data/projects/{project}/{sample_type}/{sample}/bins/antismash{version}/summaries/{genome}-counts.tsv",
         region_summary = "data/projects/{project}/{sample_type}/{sample}/bins/antismash{version}/summaries/{genome}-region_summary.tsv"
     params:
-        count_script = "code/multismash/workflow/scripts/count_regions.py",
-        summarize_script = "code/multismash/workflow/scripts/tabulate_regions.py"
+        count_script = "code/multismash/workflow/scripts/count_regions_single.py",
+        summarize_script = "code/multismash/workflow/scripts/tabulate_regions_single.py"
     log: "logs/antismash_summary/AS{version}-{sample_type}-{project}__{sample}__{genome}.tsv"
     benchmark: "benchmarks/antismash_summary/AS{version}-{sample_type}-{project}__{sample}__{genome}.tsv"
     resources: cpus=1, mem_mb=4000, time_min=120 
@@ -3071,7 +3087,7 @@ rule bigscape:
 rule bakta_assembly:
     input:
         genome = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa",
-        proteins = rules.prodigal.output.proteins
+        prodigal = rules.prodigal.output.gbk
     output:
         dir = directory("data/omics/{sample_type}/{sample}/bakta_assembly")
     params:
@@ -3079,14 +3095,20 @@ rule bakta_assembly:
     conda: "config/conda_yaml/bakta.yaml"
     log: "logs/bakta_assembly/{sample_type}-{sample}.tsv"
     benchmark: "benchmarks/bakta_assembly/{sample_type}-{sample}.tsv"
-    resources: cpus=16, mem_mb=120000, time_min=10000, 
+    resources: cpus=32, mem_mb=120000, time_min=10000
+    priority: 4 
     shell:
         """
         bakta --db {params.db} \
             --keep-contig-headers \
+            --min-contig-length 1000 \
             --meta \
+            --skip-trna \
+            --skip-tmrna \
+            --skip-crispr \
+            --skip-pseudo \
             --skip-plot \
-            --proteins {input.proteins} \
+            --regions {input.prodigal} \
             --output {output.dir} \
             --threads {resources.cpus} \
             {input.genome} | tee {log}
@@ -3125,24 +3147,54 @@ rule antismash8_assembly:
         genome = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa",
         #gbk = "data/omics/{sample_type}/{sample}/genes/{sample}_GENES.gbk"
     output:
-        dir = directory("data/omics/{sample_type}/{sample}/antismash_assembly")
+        dir = directory("data/omics/{sample_type}/{sample}/antismash8_assembly")
     params:
-        db = "data/reference/antismash8",
-        genome = "data/omics/{sample_type}/{sample}/bakta_assembly/{sample}.gbff"
-    singularity: "docker://eandersk/antismash8"
+        db = "data/reference/antismash8_mibig4",
+        genome = "data/omics/{sample_type}/{sample}/bakta_assembly/final.contigs.renamed.gbff"
+    #singularity: "docker://eandersk/antismash8"
+    conda: "config/conda_yaml/antismash8.yaml"
     log: "logs/antismash8_assembly/{sample_type}__{sample}.tsv"
     benchmark: "benchmarks/antismash8_assembly/{sample_type}-{sample}.tsv"
     resources: cpus=8, mem_mb=90000, time_min=20000
+    priority: 5
     shell:
         """
         antismash \
             --cb-general --cb-knownclusters --cb-subclusters --asf --pfam2go --smcog-trees --cc-mibig --tfbs \
             -t bacteria \
             --databases {params.db} \
-            --genefinding-tool none \
             --output-dir {output.dir} \
             --cpus {resources.cpus} \
+            --genefinding-tool none \
+            --no-abort-on-invalid-records \
             {params.genome} | tee {log}
+
+            #--genefinding-tool error \
+            #--genefinding-gff3  \
+            #--genefinding-tool prodigal-m \
+            
+        """
+
+rule antismash_assembly_summary:
+    input:
+        "data/omics/{sample_type}/{sample}/antismash{version}_assembly"
+    output:
+        done = touch("data/omics/{sample_type}/{sample}/.done-antismash{version}_assembly_summary")
+    params:
+        count_script = "code/multismash/workflow/scripts/count_regions_single.py",
+        summarize_script = "code/multismash/workflow/scripts/tabulate_regions_single.py",
+        counts = "data/omics/{sample_type}/{sample}/antismash{version}_assembly/summaries/counts.tsv",
+        region_summary = "data/omics/{sample_type}/{sample}/antismash{version}_assembly/summaries/region_summary.tsv"
+    log: "logs/antismash_assembly_summary/AS{version}-{sample_type}-{sample}.tsv"
+    benchmark: "benchmarks/antismash_assembly_summary/AS{version}-{sample_type}-{sample}.tsv"
+    resources: cpus=1, mem_mb=4000, time_min=120 
+    priority: 6
+    shell:
+        """
+        mkdir -p $(dirname {params.counts})
+
+        python3 {params.count_script} {input} {params.counts} | tee {log}
+        python3 {params.summarize_script} {input} {params.region_summary} | tee -a {log}
         """
 
 rule ref_read_mapping:
