@@ -22,18 +22,12 @@ library(stringr)
 library(tibble)
 
 # the below arguments for processing from the command line
-#arguments <- docopt(doc)
+arguments <- docopt(doc)
 
 # uncomment the below arguments for testing
-arguments <- docopt(doc, args = "--input ~/amplicon_sequencing/amplicons --directory ~/amplicon_sequencing/data_test --quality 25")
+#arguments <- docopt(doc, args = "--input ~/amplicon_sequencing/amplicons --directory ~/amplicon_sequencing/data_test2 --quality 25")
 
 inPath <- arguments$input
-
-# /geomicro/data2/kiledal/GLAMR/data/projects/set_4/amplicons/samp_100/reads/raw_fwd_reads.fastq.gz
-# /geomicro/data2/kiledal/GLAMR/data/projects/set_4/amplicons/samp_100/detect_region/fwd_summary.tsv
-
-
-# samp_1/detect_region/fwd.txt
 
 file_list <- fs::dir_ls(path = inPath, recurse = TRUE) %>%
   data_frame(path = .) %>%
@@ -46,6 +40,36 @@ wide_file_list <- file_list %>%
   pivot_wider(id_cols = c("reads_dir", "sample_num"), names_from = dir, values_from = path) %>%
   mutate(filt_reads_fwd = str_glue("{reads_dir}/filt_reads/{sample_num}_F_filt.fastq.gz"),
          filt_reads_rev = str_glue("{reads_dir}/filt_reads/{sample_num}_R_filt.fastq.gz"))
+
+count <- 0
+
+for (i in seq_len(nrow(wide_file_list))) {
+  sample <- wide_file_list$sample_num[i]
+  path <- wide_file_list$reads_dir[i]
+
+  fwdScanPath <- file.path(path, paste0("samp_", sample), "detect_region", "fwd_summary.tsv")
+  revScanPath <- file.path(path, paste0("samp_", sample), "detect_region", "rev_summary.tsv")
+
+  fwdScan <- read.delim(fwdScanPath, header = TRUE, sep = "\t")
+  revScan <- read.delim(revScanPath, header = TRUE, sep = "\t")
+
+  if (fwdScan$seq_start_median[1] > fwdScan$seq_end_median[1] && revScan$seq_start_median[1] < revScan$seq_end_median[1]) {
+    print(paste0("Sample Number ", sample, " seems to have swapped forward and reverse reads"))
+    count <- count + 1
+
+    fwd_temp <- wide_file_list$fwd[i]
+    rev_temp <- wide_file_list$rev[i]
+    filt_fwd_temp <- wide_file_list$filt_reads_fwd[i]
+    filt_rev_temp <- wide_file_list$filt_reads_rev[i]
+
+    wide_file_list$fwd[i] <- rev_temp
+    wide_file_list$rev[i] <- fwd_temp
+    wide_file_list$filt_reads_fwd[i] <- filt_rev_temp
+    wide_file_list$filt_reads_rev[i] <- filt_fwd_temp
+  }
+}
+
+print(paste0(count, "/", nrow(wide_file_list), " of the samples are swapped"))
 
 forwardReads <- wide_file_list$fwd
 
@@ -71,8 +95,17 @@ base_dir <- dirname(dirname(forwardReads[3]))
 fwdScanSummary <- file.path(base_dir, "detect_region", "fwd_summary.tsv")
 revScanSummary <- file.path(base_dir, "detect_region", "rev_summary.tsv")
 
-fwd_summary <- read.delim(fwdScanSummary, header = TRUE, sep = "\t")
-rev_summary <- read.delim(revScanSummary, header = TRUE, sep = "\t")
+fwd_summary_t <- read.delim(fwdScanSummary, header = TRUE, sep = "\t")
+rev_summary_t <- read.delim(revScanSummary, header = TRUE, sep = "\t")
+
+if (fwd_summary_t$seq_start_median[1] > fwd_summary_t$seq_end_median[1]
+    && rev_summary_t$seq_start_median[1] < rev_summary_t$seq_end_median[1]) {
+      fwd_summary <- rev_summary_t
+      rev_summary <- fwd_summary_t
+} else {
+  fwd_summary <- fwd_summary_t
+  rev_summary <- rev_summary_t
+}
 
 # using weighted mean
 resultMeanFwd <- plotDataFwd %>%
@@ -287,7 +320,7 @@ seqtable <- makeSequenceTable(mergeReads)
 seqtable_nochimeras <- removeBimeraDenovo(seqtable, method="consensus", multithread=TRUE, verbose=TRUE)
 seqtable_nochimeras |>
   as.data.frame() |>
-  `colnames<-`(openssl::md5(colnames(seqtab.nochim))) |>
+  `colnames<-`(openssl::md5(colnames(seqtable_nochimeras))) |>
   write_tsv(str_glue("{arguments$directory}/asv_table.tsv"))
 
 # output representative sequences to fasta
