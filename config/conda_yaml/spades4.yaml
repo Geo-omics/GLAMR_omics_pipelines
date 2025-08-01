@@ -1,0 +1,8 @@
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - spades=4.0.0
+#  - pip:
+#    - git+https://github.com/bioinfomaticsCSU/MEC.git@ca734269c518d48e3a6088063961ccfff15da536

@@ -3,5 +3,4 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - gunc=1.0.6
-  - setuptools=80.9.0
+  - virsorter=2.2.4

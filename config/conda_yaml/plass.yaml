@@ -1,6 +1,6 @@
 channels:
-  - conda-forge
   - bioconda
+  - conda-forge  
   - defaults
 dependencies:
-  - bakta=1.11
+  - plass=4.687d7

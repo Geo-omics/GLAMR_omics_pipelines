@@ -1,6 +1,6 @@
 channels:
-  - conda-forge
   - bioconda
+  - conda-forge  
   - defaults
 dependencies:
-  - bakta=1.11
+  - metaeuk=7.bba0d80

@@ -1,0 +1,47 @@
+name: metadecoder
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - _libgcc_mutex
+  - _openmp_mutex
+  - bzip2
+  - c-ares
+  - ca-certificates
+  - certifi
+  - curl
+  - krb5
+  - ld_impl_linux-64
+  - libcurl
+  - libedit
+  - libev
+  - libffi
+  - libgcc-ng
+  - libgomp
+  - libnghttp2
+  - libssh2
+  - libstdcxx-ng
+  - libuuid
+  - ncurses
+  - openssl
+  - pip
+  - python
+  - readline
+  - samtools
+  - sqlite
+  - tk
+  - tzdata
+  - wheel
+  - xz
+  - zlib
+  - cupy
+  - pip:
+      - fastrlock
+      - joblib
+      - https://github.com/liu-congcong/MetaDecoder/releases/download/v1.0.13/metadecoder-1.0.13-py3-none-any.whl
+      - numpy
+      - scikit-learn
+      - scipy
+      - setuptools
+      - threadpoolctl
+prefix: /home/kiledal/miniconda3/envs/metadecoder

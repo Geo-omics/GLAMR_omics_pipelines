@@ -1,12 +1,12 @@
 channels:
-  - defaults
-  - bioconda
   - conda-forge
+  - bioconda
+  - defaults
 dependencies:
-  - bbmap=38.93
-  - spades=3.15.3
+  - bbmap=39.13
+  - spades=4.0.0
   - megahit=1.2.9
-  - diamond=2.0.14
+  - diamond=2.1.10
   - prodigal=2.6.3
   - perl-statistics-basic=1.6611
   - perl-sort-naturally=1.03

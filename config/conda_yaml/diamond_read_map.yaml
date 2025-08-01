@@ -3,4 +3,7 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - bakta=1.11
+  - samtools=1.21
+  - augustus=3.5.0
+  - diamond=2.1.9
+  - seqtk=1.4

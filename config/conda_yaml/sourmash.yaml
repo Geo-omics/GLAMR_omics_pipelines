@@ -1,6 +1,7 @@
 channels:
-  - defaults
-  - bioconda
   - conda-forge
+  - bioconda
+  - defaults
 dependencies:
   - sourmash=4.8.4
+  - sqlite=3.42.0

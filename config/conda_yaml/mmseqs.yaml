@@ -3,4 +3,4 @@ channels:
   - conda-forge  
   - defaults
 dependencies:
-  - mmseqs2=14.7e284
+  - mmseqs2=17.b804f

@@ -1,7 +1,7 @@
+name: antismash8
 channels:
   - conda-forge
   - bioconda
-  - defaults
+  - nodefaults
 dependencies:
-  - gunc=1.0.6
-  - setuptools=80.9.0
+  - antismash=8.0.1
