@@ -3,11 +3,12 @@
 'Standardize bins for each sample
 
 Usage:
-  standardize_bins.R --sample_dir=SAMPLE
+  standardize_bins.R --sample_dir=SAMPLE --contig_info=INFO
 
 Options:
   --sample_dir=DIR    The sample for which bins should be standardized
-  -h --help          Show this help screen.
+  --contig_info=INFO  Contig information from rename_contigs.R
+  -h --help           Show this help screen.
 ' -> doc
 
 library(docopt)
@@ -17,7 +18,8 @@ arguments <- docopt(doc)
 #print(arguments)
 
 # # for testing interactively
-arguments <- docopt(doc, args = c("--sample_dir=data/projects/2022_geomicro_JGI_CSP/metagenomes/fa88397911af2a92053e4ca8e7499894"))
+# arguments <- docopt(doc, args = c("--sample_dir=data/projects/set_55/metagenomes/samp_4332",
+#                                   "--contig_info=data/projects/set_55/metagenomes/samp_4332/assembly/megahit_noNORM/contigs_info.tsv"))
 #print(arguments)
 
 ###########################
@@ -26,51 +28,55 @@ arguments <- docopt(doc, args = c("--sample_dir=data/projects/2022_geomicro_JGI_
 
 
 
-library(metacoder)
+#library(metacoder)
 library(tidyverse)
 library(furrr)
 
 project_dir <- str_remove(arguments$sample_dir, "/metagenomes/.*") %>% unique()
 project <- project_dir %>% str_remove("data/projects/")
+sample <- arguments$sample_dir %>% str_remove_all(".*/")
+
 
 metabat_bins <- system(paste0("ls ",arguments$sample_dir,"/bins/METABAT2/*.fa"), intern = TRUE) %>% 
   data.frame(orig_bin_path = .) %>% 
-  mutate(sample = orig_bin_path %>% str_extract("(?<=metagenomes/).*(?=/bins/METABAT2/.*)"),
+  mutate(sample = sample,
          orig_bin_name_w_ext = orig_bin_path %>% str_remove(".*METABAT2/"),
          orig_bin_name = orig_bin_name_w_ext %>% str_remove("\\.[a-z]*$"),
          binner = "metabat2")
 
 concoct_bins <- system(paste0("ls ",arguments$sample_dir,"/bins/CONCOCT/output/fasta_bins/*.fa"), intern = TRUE) %>% 
   data.frame(orig_bin_path = .) %>% 
-  mutate(sample = orig_bin_path %>% str_extract("(?<=metagenomes/).*(?=/bins/CONCOCT/output/fasta_bins/.*)"),
+  mutate(sample = sample,
          orig_bin_name_w_ext = orig_bin_path %>% str_remove(".*fasta_bins/"),
          orig_bin_name = orig_bin_name_w_ext %>% str_remove("\\.[a-z]*$"), 
          binner = "concoct")
 
 maxbin_bins <- system(paste0("ls ",arguments$sample_dir,"/bins/maxbin/*.fasta"), intern = TRUE) %>% 
   data.frame(orig_bin_path = .) %>% 
-  mutate(sample = orig_bin_path %>% str_extract("(?<=metagenomes/).*(?=/bins/maxbin/.*)"),
+  mutate(sample = sample,
          orig_bin_name_w_ext = orig_bin_path %>% str_remove(".*maxbin/"),
          orig_bin_name = orig_bin_name_w_ext %>% str_remove("\\.[a-z]*$"), 
          binner = "maxbin")
 
 semibin_bins <- system(paste0("ls ",arguments$sample_dir,"/bins/semibin/output_bins/*.fa"), intern = TRUE) %>% 
   data.frame(orig_bin_path = .) %>% 
-  mutate(sample = orig_bin_path %>% str_extract("(?<=metagenomes/).*(?=/bins/semibin/output_bins/.*)"),
+  mutate(sample = sample,
          orig_bin_name_w_ext = orig_bin_path %>% str_remove(".*output_bins/"),
          orig_bin_name = orig_bin_name_w_ext %>% str_remove("\\.[a-z]*$"), 
          binner = "semibin")
 
-VAMB_bins <- system(paste0("ls ",arguments$sample_dir,"/bins/VAMB/bins/*.fna"), intern = TRUE) %>% 
+VAMB_bins <- c(system(paste0("ls ",arguments$sample_dir,"/bins/VAMB/bins/*.fna"), intern = TRUE),
+               system(paste0("ls ",arguments$sample_dir,"/bins/VAMB/bins/*/*.fna"), intern = TRUE) 
+               )%>% 
   data.frame(orig_bin_path = .) %>% 
-  mutate(sample = orig_bin_path %>% str_extract("(?<=metagenomes/).*(?=/bins/VAMB/.*)"),
-         orig_bin_name_w_ext = orig_bin_path %>% str_remove(".*VAMB/"),
+  mutate(sample = sample,
+         orig_bin_name_w_ext = orig_bin_path %>% basename(),
          orig_bin_name = orig_bin_name_w_ext %>% str_remove("\\.[a-z]*$"), 
          binner = "VAMB")
 
 metadecoder_bins <- system(paste0("ls ",arguments$sample_dir,"/bins/metadecoder/bins/*.fasta"), intern = TRUE) %>% 
   data.frame(orig_bin_path = .) %>% 
-  mutate(sample = orig_bin_path %>% str_extract("(?<=metagenomes/).*(?=/bins/metadecoder/.*)"),
+  mutate(sample = sample,
          orig_bin_name_w_ext = orig_bin_path %>% str_remove(".*metadecoder/bins/"),
          orig_bin_name = orig_bin_name_w_ext %>% str_remove("\\.[a-z]*$"), 
          binner = "metadecoder")
@@ -84,7 +90,7 @@ all_bins <- bind_rows(metabat_bins, concoct_bins, maxbin_bins, semibin_bins, VAM
          new_bin_name = glue::glue("{sample}_{binner}_{bin_num}"),
          per_sample_combined_path = glue::glue("{arguments$sample_dir}/bins/all_raw_bins/{new_bin_name}.fa"),
          all_combined_bin_path = glue::glue("{project_dir}/metagenomes/metagenome_bins/raw_combined_bins/{new_bin_name}.fa")) %>% 
-  write_tsv(paste0("results/bins/",project,"__",arguments$sample,"_bins.tsv"))
+  write_tsv(str_glue("{arguments$sample_dir}/bins/{sample}_bins.tsv"))
 
 
 # Check that all binners produced bins for all samples
@@ -96,14 +102,12 @@ binner_completion <- all_bins %>%
   group_by(sample) %>% 
   mutate(n_binners_complete = n()) %>% 
   pivot_wider(names_from = binner, values_from = complete) %>% 
-  write_tsv(paste0("results/bins/",arguments$sample,"_binner_completion.tsv"))
+  write_tsv(str_glue("{arguments$sample_dir}/bins/{sample}_binner_completion.tsv"))
 
 fully_binned_samples <- binner_completion %>% 
   filter(n_binners_complete == n_binners)
 
-contig_info_paths <- system(paste0("ls ",arguments$sample_dir,"/assembly/megahit/contigs_info.tsv"),intern = TRUE)
-
-contig_lengths <- map_df(contig_info_paths, read_tsv) %>% 
+contig_lengths <- read_tsv(arguments$contig_info) %>% 
   dplyr::rename(contig = "contig_id",
                 assembler_est_cov = "approx_cov")
 
@@ -135,7 +139,7 @@ bin_contigs <- map_dfr(all_bins$bin_num,get_bin_contigs) %>%
   left_join(contig_lengths)
 
 
-bin_contigs %>% write_rds(paste0("ls ",arguments$sample_dir,"/bins/contig_bins.rds"))
+bin_contigs %>% write_rds(paste0(arguments$sample_dir,"/bins/contig_bins.rds"))
 
 #bin_contigs <- read_rds("data/omics/metagenomes/metagenome_bins/contig_bins.rds")
 
@@ -143,7 +147,8 @@ bin_sizes <- bin_contigs %>%
   group_by(bin_num, new_bin_name) %>% 
   summarise(genome_length = sum(length), 
             mean_est_cov = mean(assembler_est_cov),
-            median_est_cov = median(assembler_est_cov))
+            median_est_cov = median(assembler_est_cov)) %>% 
+  write_tsv(paste0(arguments$sample_dir,"/bins/bins_prelim_info.tsv"))
 
 bad_bins_no_contigs <- bin_contigs %>% 
   select(contig, bin_num) %>% 
