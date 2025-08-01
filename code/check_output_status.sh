@@ -1,3 +1,3 @@
 #!/bin/bash
 
-singularity run docker://eandersk/r_microbiome /geomicro/data2/kiledal/GLAMR/code/update_output_status.R
+singularity run  --bind /geomicro:/geomicro,/nfs:/nfs docker://eandersk/r_microbiome ~/GLAMR/code/update_output_status.R
