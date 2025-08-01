@@ -7,10 +7,9 @@
 # This script is run daily via CRON on Alpena; a new log should only be produced when changes are identified.
 # Crontab entry: 30 0 * * * /bin/bash -c "singularity run docker://eandersk/r_microbiome /geomicro/data2/kiledal/GLAMR/code/check_import_status.R >> /geomicro/data2/kiledal/GLAMR/logs/check_import_status/$(date +\%Y\%m\%d).log 2>&1"
 
-message(str_glue("Started at {now()}"))
-
 # Requires tidyverse tools and unglue package. Typically run w/ Docker image with dependencies.
 suppressMessages(library(tidyverse))
+message(str_glue("Started at {now()}"))
 
 setwd("/geomicro/data2/kiledal/GLAMR")
 
@@ -85,7 +84,7 @@ log_changed = all.equal(most_recent_log, current_log)
 
 # If new log is different, move it to import log directory, otherwise delete
 
-if (!log_changed) {
+if (any(log_changed != TRUE)) {
   
   fs::file_move(str_glue('/tmp/{format(now(), "%Y%m%d")}_sample_status.tsv'), 
                 str_glue('data/import_logs/{format(now(), "%Y%m%d")}_sample_status.tsv'))
