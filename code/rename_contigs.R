@@ -39,10 +39,9 @@ if (!is.null(arguments$`--contigs`)) {
   contig_path <- arguments$i
 }
 
-rename_contigs <- function(contigs){
+rename_contigs <- function(contigs, renamed, info_tsv, contig_info_fp, sample){
   
-  sample <- str_remove(contigs, ".*metagenomes/") %>% str_remove("/assembly.*")
-  contig_info_fp <- paste0(dirname(contigs),"/contigs_info.tsv")
+  #sample <- str_remove(contigs, ".*metagenomes/") %>% str_remove("/assembly.*")
   
   contigs_df <- Biostrings::readDNAStringSet(contigs) %>% 
     data.frame(header = names(.),
@@ -68,8 +67,6 @@ rename_contigs <- function(contigs){
       select(contig_id, orig_id, flag, approx_cov, length) %>% 
       write_tsv(contig_info_fp)
     
-    out_path <- paste0(str_remove(contigs,"\\.fa"),".renamed.fa")
-    
   } else if(str_detect(contigs_df$header[1], "^NODE")){   # Check if metaSpades assembly
     contigs_df <- contigs_df %>% 
       separate(header, into = c("remove1","contig_num","remove2", "length", "remove3", "approx_cov"),sep = "_") %>% 
@@ -82,14 +79,16 @@ rename_contigs <- function(contigs){
     contig_info <- contigs_df %>% 
       select(contig_id, contig_num, approx_cov, length) %>% 
       write_tsv(contig_info_fp)
-  
-    out_path <- paste0(str_remove(contigs,"\\.fasta"),".renamed.fasta")
-    }
+    
+  }
   
   for_export <- Biostrings::DNAStringSet(contigs_df$seq)
   names(for_export) <- contigs_df$contig_id
   
-  Biostrings::writeXStringSet(for_export,out_path)
+  Biostrings::writeXStringSet(for_export,renamed)
 }
 
-rename_contigs(contig_path)
+rename_contigs(contigs = str_trim(contig_path),
+               renamed = str_trim(arguments$o),
+               contig_info_fp = str_trim(arguments$s),
+               sample= str_trim(arguments$p))
