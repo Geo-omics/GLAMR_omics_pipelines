@@ -10,7 +10,7 @@ library(googlesheets4)
 library(googledrive)
 library(DBI)
 
-conflicted::conflicts_prefer(dplyr::select(), dplyr::rename(), dplyr::filter(), dplyr::lag(), base::as.data.frame)
+conflicted::conflicts_prefer(dplyr::select(), dplyr::rename(), dplyr::filter(), dplyr::lag(), base::as.data.frame, readr::as.col_spec())
 
 # Open database connection
 pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "cayman.earth.lsa.umich.edu", port = "5432", user = "glamr_admin", password = "glamr2023")
@@ -46,6 +46,7 @@ as_id("https://docs.google.com/spreadsheets/d/1z2IajV0Ay1lRjH9d0ibNBuf8PY0IbtEz/
 ```{r}
 samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples",guess_max = 3000)
 studies <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "studiesdatasets",range = "A1:V1000")
+coassemblies <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "coassembly_groups",guess_max = 3000)
 defined_sites <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "sampling_sites") %>% filter(!is.na(lat))
 units_and_notes <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "metadata_units_and_notes")
 ```
@@ -68,12 +69,15 @@ cleaned_up_sample_table <- samples %>%
   mutate(across(c(part_microcyst,lon,nitrate,diss_microcyst, soluble_react_phosp, ammonia, urea, pH, tot_phos,wave_height, wind_speed, salinity, atmospheric_temp, particulate_cyl), ~as.numeric(.x))) %>% 
   filter(!is.na(SampleID))
 
-
 # Add GVHD samples 
 gvhd_samples <- googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/1jZLyocWDgjRKwjv0JgBQscLtgD2rIjkApoI2mjLGGqw/edit?gid=0#gid=0")
 
-combined_sample_table <- bind_rows(cleaned_up_sample_table, gvhd_samples)
+# Add coassemblies 
+coassemblies_clean <- coassemblies %>% 
+  mutate(sample_type = "metagenome") %>% 
+  select(SampleID = "group_id",description,sample_type, coassembly_samples = "samples", notes)
 
+combined_sample_table <- bind_rows(cleaned_up_sample_table, gvhd_samples,coassemblies_clean)
 
 # Write table to database
 sql('DROP VIEW public.bin_summary') %>% DBI::dbSendQuery(pg, .) # have to drop dependencies first
@@ -211,7 +215,7 @@ walk2(new_read_count_paths$path, new_read_count_paths$sample, read_tsv_to_pg)
 ```
 
 
-# UniRef mapping to contigs with Diamond
+# UniRef mapping to genes with Diamond
 ```{r}
 diamond_uniref_contig_mapping <- tbl(pg, "diamond_uniref_contig_mapping")
 
@@ -351,6 +355,147 @@ sql('CREATE INDEX read_mapping_to_uniref_uniref100_id ON public.read_mapping_to_
 sql('CREATE INDEX read_mapping_to_uniref_taxonomy ON public.read_mapping_to_uniref (taxonomy)') %>%  DBI::dbSendQuery(pg, .)
 ```
 
+
+#### Contig UniRef tophit summary from mmseqs2
+
+```{r}
+mmseqs_uniref_mapping <- tbl(pg, "contig_uniref_tophits")
+
+mapped_samples <- get_pg_table_samples(pg, "contig_uniref_tophits", "sample")
+
+# mapped_samples <- mmseqs_uniref_mapping %>% 
+#   select("sample") %>% 
+#   distinct() %>% 
+#   collect() %>% 
+#   pull("sample")
+
+uniref_read_mappings <- Sys.glob("data/omics/metagenomes/*/*_contig_tophit_report") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "data/omics/metagenomes/{sample}/{sample2}_contig_tophit_report",remove = FALSE)
+
+new_uniref_read_mappings <- uniref_read_mappings %>% 
+  filter(!sample %in% mapped_samples$sample,
+         str_detect(sample, "^samp_*")) %>%
+  mutate(fs::file_info(path))
+
+read_uniref_read_tophit_report <- function(path, sample_name){
+  cols <- c("target", "num_seqs_aligned", "unique_coverage_of_target", "target_coverage", "average_seq_identity", "taxonomy", "rank","tax_name", "lineage")
+  
+  report <- read_tsv(path,col_names = cols,show_col_types = FALSE) %>% 
+    mutate(uniref100_id = str_remove(target, "UniRef100_"),
+           sample = sample_name) %>% 
+    select(-c("rank","tax_name", "lineage"))
+  
+  
+  # # Only used when creating the table for the first time, for all subsequent additions, 
+  # # append = TRUE should be added as the field types are already established
+  # postgres_col_types = c(target = 'text',
+  #                           num_seqs_aligned = 'integer',
+  #                           unique_coverage_of_target = 'numeric',
+  #                           target_coverage = 'numeric',
+  #                           average_seq_identity = 'numeric',
+  #                           taxonomy = 'integer',
+  #                           uniref100_id = 'text',
+  #                           sample = 'text')
+
+  # First run to create table
+   # dbWriteTable(pg,"contig_uniref_tophits",report,overwrite = FALSE, field.types = postgres_col_types)
+  
+  dbWriteTable(pg,"contig_uniref_tophits",report,overwrite = FALSE, append = TRUE)
+  
+  return(NULL)
+}
+
+message("Dropping indices") # Much faster to drop indices and rebuild than to insert new rows leaving existing indices on
+
+pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "cayman.earth.lsa.umich.edu", port = "5432", user = "glamr_admin", password = "glamr2023")
+
+# For the indexes created by this script
+sql('DROP INDEX public.contig_uniref_tophits_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.contig_uniref_tophits_uniref100_id') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.contig_uniref_tophits_taxonomy') %>% DBI::dbSendQuery(pg, .)
+
+message("Loading new mapping results")
+walk2(new_uniref_read_mappings$path, new_uniref_read_mappings$sample, read_uniref_read_tophit_report,.progress = TRUE)
+
+message("Re-creating indices")
+sql('CREATE INDEX contig_uniref_tophits_sample ON public.contig_uniref_tophits (sample)') %>%  DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX contig_uniref_tophits_uniref100_id ON public.contig_uniref_tophits (uniref100_id)') %>%  DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX contig_uniref_tophits_taxonomy ON public.contig_uniref_tophits (taxonomy)') %>%  DBI::dbSendQuery(pg, .)
+```
+
+#### Contig UniRef tophits alignments from mmseqs2
+
+```{r}
+mmseqs_uniref_mapping <- tbl(pg, "contig_uniref_tophit_alignments")
+
+mapped_samples <- get_pg_table_samples(pg, "contig_uniref_tophit_alignments", "sample")
+
+# mapped_samples <- mmseqs_uniref_mapping %>% 
+#   select("sample") %>% 
+#   distinct() %>% 
+#   collect() %>% 
+#   pull("sample")
+
+uniref_read_mappings <- Sys.glob("data/omics/metagenomes/*/*_contig_tophit_aln") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "data/omics/metagenomes/{sample}/{sample2}_contig_tophit_aln",remove = FALSE)
+
+new_uniref_read_mappings <- uniref_read_mappings %>% 
+  filter(!sample %in% mapped_samples$sample,
+         str_detect(sample, "^samp_*")) %>%
+  mutate(fs::file_info(path))
+
+read_uniref_read_tophit_alignments <- function(path, sample_name){
+  cols <- c("contig","target", "percent_identity", "alignment_length", "num_mismatches", "num_gaps", "contig_start", "contig_end","target_start","target_end","e_value", "bit_score")
+  
+  report <- read_tsv(path,col_names = cols,show_col_types = FALSE) %>% 
+    mutate(uniref100_id = str_remove(target, "UniRef100_"),
+           sample = sample_name)
+  
+  
+  # # Only used when creating the table for the first time, for all subsequent additions, 
+  # # append = TRUE should be added as the field types are already established
+  # postgres_col_types = c(contig = "text",
+  #                        target = "text", 
+  #                        percent_identity = "numeric", 
+  #                        alignment_length ="int", 
+  #                        num_mismatches = "int", 
+  #                        num_gaps = "int", 
+  #                        contig_start = "int", 
+  #                        contig_end = "int",
+  #                        target_start = "int",
+  #                        target_end = "int",
+  #                        e_value = "numeric", 
+  #                        bit_score = "numeric")
+  # 
+  # # First run to create table
+  #  dbWriteTable(pg,"contig_uniref_tophit_alignments",report,overwrite = FALSE, field.types = postgres_col_types)
+  
+  dbWriteTable(pg,"contig_uniref_tophit_alignments",report,overwrite = FALSE, append = TRUE)
+  
+  return(NULL)
+}
+
+message("Dropping indices") # Much faster to drop indices and rebuild than to insert new rows leaving existing indices on
+
+pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "cayman.earth.lsa.umich.edu", port = "5432", user = "glamr_admin", password = "glamr2023")
+
+# For the indexes created by this script
+sql('DROP INDEX public.contig_uniref_tophit_alignments_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.contig_uniref_tophit_alignments_uniref100_id') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.contig_uniref_tophit_alignments_contig') %>% DBI::dbSendQuery(pg, .)
+
+message("Loading new contig tophit alignments")
+walk2(new_uniref_read_mappings$path, new_uniref_read_mappings$sample, read_uniref_read_tophit_alignments,.progress = TRUE)
+
+message("Re-creating indices")
+sql('CREATE INDEX contig_uniref_tophit_alignments_sample ON public.contig_uniref_tophit_alignments (sample)') %>%  DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX contig_uniref_tophit_alignments_uniref100_id ON public.contig_uniref_tophit_alignments (uniref100_id)') %>%  DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX contig_uniref_tophit_alignments_contig ON public.contig_uniref_tophit_alignments (contig)') %>%  DBI::dbSendQuery(pg, .)
+```
+
+
 #### Contig LCAs from mmseqs LCA on UniRef
 
 ```{r}
@@ -470,9 +615,9 @@ sql('CREATE INDEX "read_mapping_LCA_summary_genus" ON "read_mapping_LCA_summary"
 ```{r}
 # Get GTDB annotations that are already loaded into the database
 existing_gtdb_annotations <- tbl(pg, "GTDB") %>% 
-  collect() %>% 
-  mutate(sample = str_extract(bin, "samp_\\d+")) %>% 
-  relocate(bin, sample)
+  select(sample) %>% 
+  distinct() %>% 
+  collect() 
 
 # Find all GTDB summary tsvs
 GTDB_paths <- Sys.glob("data/omics/metagenomes/*/bins/GTDB/*.summary.tsv") %>% 
@@ -522,8 +667,9 @@ sql('CREATE INDEX "gtdb_sample" ON "GTDB" ("sample")') %>% DBI::dbSendQuery(pg, 
 ## CheckM
 ```{r}
 existing_checkM_summaries <- tbl(pg, "checkm") %>% 
-  collect() %>% 
-  relocate(bin, sample)
+  select(sample) %>% 
+  distinct() %>% 
+  collect() 
 
 checkm_paths <- Sys.glob("data/omics/metagenomes/*/bins/all_raw_bins/checkm.txt") %>% 
   data.frame(path = .) %>% 
@@ -568,9 +714,9 @@ sql('CREATE INDEX "checkm_sample" ON "checkm" ("sample")') %>% DBI::dbSendQuery(
 ```{r}
 # Get DREP results that are already loaded into the database
 existing_drep_annotations <- tbl(pg, "drep") %>% 
-  collect() %>% 
-  mutate(sample = str_extract(bin, "samp_\\d+")) %>% 
-  relocate(bin, sample)
+  select(sample) %>% 
+  distinct() %>% 
+  collect() 
 
 # Find all DREP results
 drep_paths <- Sys.glob("data/omics/metagenomes/*/bins/drep/data_tables/Cdb.csv") %>% 
@@ -581,7 +727,7 @@ drep_paths <- Sys.glob("data/omics/metagenomes/*/bins/drep/data_tables/Cdb.csv")
 # Filter list of summary tsvs to only those not already loaded into the database
 new_drep <- drep_paths %>% 
   filter(
-      #!sample %in% existing_drep_annotations$sample,
+      !sample %in% existing_drep_annotations$sample,
       (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_")))
 
 # Load an example summary tsv to get the column types
@@ -880,7 +1026,7 @@ new_drep_bin_abunds <- drep_bin_abunds %>%
 
 # Load an example summary tsv to get the column types
 abund_test <- read_tsv("data/omics/metagenomes/samp_447/bins/coverage_drep_bins.tsv") #%>% 
-column_types <- as.col_spec(abund_test)
+column_types <- readr::as.col_spec(abund_test)
 
 # First upload to establish the table
     # postgres_col_types = c(sample = "text",
@@ -918,7 +1064,7 @@ column_types <- as.col_spec(abund_test)
 read_drep_bin_abunds_to_pg <- function(path, sample) {
   print(sample)
   tryCatch({
-    read_tsv(path) %>%
+    read_tsv(path,show_col_types = FALSE) %>%
       mutate(sample = sample) %>% 
       rename(bin = "Genome",
              percent_abund = "Relative Abundance (%)",
@@ -949,7 +1095,7 @@ sql('DROP INDEX public.bin_abund_within_sample_bin') %>% DBI::dbSendQuery(pg, .)
 sql('DROP INDEX public.bin_abund_within_sample_sample') %>% DBI::dbSendQuery(pg, .)
 
 # Append new data
-walk2(new_drep_bin_abunds$path, new_drep_bin_abunds$sample, read_drep_bin_abunds_to_pg)
+walk2(new_drep_bin_abunds$path, new_drep_bin_abunds$sample, read_drep_bin_abunds_to_pg,.progress = TRUE)
 
 # Recreate indices
 sql('CREATE INDEX "bin_abund_within_sample_bin" ON "bin_abund_within_sample" ("bin")') %>% DBI::dbSendQuery(pg, .)
@@ -975,7 +1121,7 @@ new_contig_abunds <- contig_abunds %>%
 
 # Load an example summary tsv to get the column types
 abund_test <- read_tsv("data/omics/metagenomes/samp_447/samp_447_contig_abund.tsv") #%>% 
-column_types <- as.col_spec(drep_test)
+column_types <- readr::as.col_spec(drep_test)
 
 # First upload to establish the table
     # postgres_col_types = c(sample = "text",
@@ -1011,7 +1157,7 @@ column_types <- as.col_spec(drep_test)
 read_contig_abunds_to_pg <- function(path, sample) {
   print(sample)
   tryCatch({
-    read_tsv(path) %>%
+    read_tsv(path,show_col_types = FALSE) %>%
       mutate(sample = sample) %>% 
       rename(contig = "Contig",
              mean_depth = "Mean",
@@ -1041,7 +1187,7 @@ sql('DROP INDEX public.contig_abund_contig') %>% DBI::dbSendQuery(pg, .)
 sql('DROP INDEX public.contig_abund_sample') %>% DBI::dbSendQuery(pg, .)
 
 # Append new data
-walk2(new_contig_abunds$path, new_contig_abunds$sample, read_contig_abunds_to_pg)
+walk2(new_contig_abunds$path, new_contig_abunds$sample, read_contig_abunds_to_pg,.progress = TRUE)
 
 # Recreate indices
 sql('CREATE INDEX "contig_abund_contig" ON "contig_abund" ("contig")') %>% DBI::dbSendQuery(pg, .)
@@ -1414,10 +1560,19 @@ benchmark_tsvs <- Sys.glob("benchmarks/*/*.txt") %>%
   bind_cols(.,unglue::unglue_data(.$path,"benchmarks/{rule}/{filename}.txt")) %>% 
   mutate(sample = str_extract(filename, "(samp[_-]\\d+|GVHDsamp[_-]\\d+|coassembly[_-]\\d+)"),
          sample = str_replace(sample, "-","_")) %>% 
-  bind_cols(file.info(.$path)) 
+  bind_cols(file.info(.$path))
+
+benchmark_tsvs <- Sys.glob("benchmarks/*/*.tsv") %>% 
+  data.frame(path = .) %>% 
+  bind_cols(.,unglue::unglue_data(.$path,"benchmarks/{rule}/{filename}.tsv")) %>% 
+  mutate(sample = str_extract(filename, "(samp[_-]\\d+|GVHDsamp[_-]\\d+|coassembly[_-]\\d+)"),
+         sample = str_replace(sample, "-","_")) %>% 
+  bind_cols(file.info(.$path))
+
+benchmarks <- bind_rows(benchmark_txts, benchmark_tsvs)
 
 # Filter list of summary tsvs to only those not already loaded into the database
-new_benchmark_tsvs <- benchmark_tsvs %>% 
+new_benchmark_tsvs <- benchmarks %>% 
   anti_join(existing_benchmark_samples) %>% 
   filter(str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_"))
 
@@ -1466,8 +1621,8 @@ read_benchmarks_to_pg <- function(path, sample, rule) {
 
 # Load new summaries into the database
 # Drop existing indices [speeds up loading of new data]
-#sql('DROP INDEX public.benchmarks_sample') %>% DBI::dbSendQuery(pg, .)
-#sql('DROP INDEX public.benchmarks_rule') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.benchmarks_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.benchmarks_rule') %>% DBI::dbSendQuery(pg, .)
 
 pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "cayman.earth.lsa.umich.edu", port = "5432", user = "glamr_admin", password = "glamr2023")
 # Append new data
@@ -1565,6 +1720,110 @@ sql('CREATE INDEX "contig_blast_search_name" ON "contig_blast" ("search_name")')
 
 
 
+#### Antismash assembly
+##### Counts
+```{r}
+antismash_assembly_pg <- tbl(pg, "antismash_assembly_counts")
 
+antismash_assembly_samples <- get_pg_table_samples(pg, "antismash_assembly_counts", "sample")
+
+antismash_assembly_files <- Sys.glob("data/omics/metagenomes/*/antismash8_assembly/summaries/counts.tsv") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "data/omics/{sample_type}/{sample}/antismash8_assembly/summaries/counts.tsv",remove = FALSE)
+
+new_antismash_assembly_files <- antismash_assembly_files %>% 
+  filter(!sample %in% antismash_assembly_samples$sample,
+         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_")) %>% 
+  mutate(fs::file_info(path))
+
+#path = new_antismash_assembly_files$path[1]
+#sample_name = new_antismash_assembly_files$sample[1]
+read_antismash_counts <- function(path, sample_name){
+  
+  counts_df <- read_tsv(path,comment = "#") %>% 
+    mutate(sample = sample_name) %>% 
+    pivot_longer(-c(sample, record, total_count, description), names_to = "group", values_to = "count") %>% 
+    select(sample,group, count)
+  
+  
+  # # Only used when creating the table for the first time, for all subsequent additions,
+  # # append = TRUE should be added as the field types are already established
+  # postgres_col_types = c(sample = 'text',
+  #                        group = "text",
+  #                        count = 'integer')
+  # 
+  # #First run to create table
+  # dbWriteTable(pg,"antismash_assembly_counts",counts_df,overwrite = FALSE, field.types = postgres_col_types)
+
+  dbWriteTable(pg,"antismash_assembly_counts",counts_df,overwrite = FALSE, append = TRUE)
+  
+  return(NULL)
+}
+
+# For the indexes created by this script
+sql('DROP INDEX public.antismash_assembly_counts_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.antismash_assembly_counts_group') %>% DBI::dbSendQuery(pg, .)
+
+walk2(new_antismash_assembly_files$path, new_antismash_assembly_files$sample, read_antismash_counts,.progress = TRUE)
+
+sql('CREATE INDEX "antismash_assembly_counts_sample" ON "antismash_assembly_counts" ("sample")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "antismash_assembly_counts_group" ON "antismash_assembly_counts" ("group")') %>%  DBI::dbSendQuery(pg, .)
+```
+
+##### regions
+```{r}
+antismash_assembly_regions_pg <- tbl(pg, "antismash_assembly_regions")
+
+antismash_assembly_samples <- get_pg_table_samples(pg, "antismash_assembly_regions", "sample")
+
+antismash_assembly_files <- Sys.glob("data/omics/metagenomes/*/antismash8_assembly/summaries/region_summary.tsv") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "data/omics/{sample_type}/{sample}/antismash8_assembly/summaries/region_summary.tsv",remove = FALSE)
+
+new_antismash_assembly_files <- antismash_assembly_files %>% 
+  filter(!sample %in% antismash_assembly_samples$sample,
+         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_")) %>% 
+  mutate(fs::file_info(path))
+
+# path = new_antismash_assembly_files$path[1]
+# sample_name = new_antismash_assembly_files$sample[1]
+read_antismash_regions <- function(path, sample_name){
+  
+  regions_df <- read_tsv(path,comment = "#") %>% 
+    mutate(sample = sample_name) %>% 
+    relocate(sample) %>% 
+      dplyr::select(-file, -record_desc, contig = "record_id")
+  
+  
+  # # Only used when creating the table for the first time, for all subsequent additions,
+  # # append = TRUE should be added as the field types are already established
+  # postgres_col_types = c(sample = 'text',
+  #                        contig = "text",
+  #                        region = "integer",
+  #                        start = "bigint",
+  #                        end = "bigint",
+  #                        contig_edge = "boolean",
+  #                        product = "text",
+  #                        KCB_hit = "text",
+  #                        KCB_acc = "text",
+  #                        KCB_sim = "text")
+  # 
+  # #First run to create table
+  # dbWriteTable(pg,"antismash_assembly_regions",regions_df,overwrite = FALSE, field.types = postgres_col_types)
+
+  dbWriteTable(pg,"antismash_assembly_regions",regions_df,overwrite = FALSE, append = TRUE)
+  
+  return(NULL)
+}
+
+# For the indexes created by this script
+sql('DROP INDEX public.antismash_assembly_regions_sample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.antismash_assembly_regions_contig') %>% DBI::dbSendQuery(pg, .)
+
+walk2(new_antismash_assembly_files$path, new_antismash_assembly_files$sample, read_antismash_regions,.progress = TRUE)
+
+sql('CREATE INDEX "antismash_assembly_regions_sample" ON "antismash_assembly_regions" ("sample")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "antismash_assembly_regions_contig" ON "antismash_assembly_regions" ("contig")') %>%  DBI::dbSendQuery(pg, .)
+```
 
 
