@@ -1651,6 +1651,7 @@ rule bracken_metacodeR:
         output: "data/omics/{sample_type}/{sample}/kraken_fastp/{sample}_braken_metacodeR.pdf"
         resources: cpus=1, mem_mb=8000, time_min=60
         container: "docker://eandersk/r_microbiome"
+        priority: 3
         shell:
             """
             {input.script} \
@@ -1667,6 +1668,7 @@ rule contig_abund_metacodeR:
         output: "data/omics/{sample_type}/{sample}/{sample}_lca_abund_metacoder.pdf"
         resources: cpus=1, mem_mb=8000, time_min=60
         container: "docker://eandersk/r_microbiome"
+        priority: 3
         shell:
             """
             code/plot_contig_abund_uniref_LCA_single_sample.R \
@@ -1801,8 +1803,8 @@ rule contig_unirefLCA_mmseqs:
     log: "logs/contig_unirefLCA_mmseqs/{sample_type}-{sample}.log"
     resources:
         #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
-        #mem_mb = 160000, cpus=32, time_min=7200
-        mem_mb = 160000, cpus=32, time_min=500
+        mem_mb = 160000, cpus=32, time_min=7200
+        #mem_mb = 160000, cpus=32, time_min=500
     shell:
         """
         export TMPDIR={params.tmp_dir}
@@ -3153,7 +3155,7 @@ rule antismash8_assembly:
     conda: "config/conda_yaml/antismash8.yaml"
     log: "logs/antismash8_assembly/{sample_type}__{sample}.tsv"
     benchmark: "benchmarks/antismash8_assembly/{sample_type}-{sample}.tsv"
-    resources: cpus=8, mem_mb=90000, time_min=20000
+    resources: cpus=1, mem_mb=100000, time_min=14400
     priority: 5
     shell:
         """
@@ -3185,7 +3187,7 @@ rule antismash_assembly_summary:
         region_summary = "data/omics/{sample_type}/{sample}/antismash{version}_assembly/summaries/region_summary.tsv"
     log: "logs/antismash_assembly_summary/AS{version}-{sample_type}-{sample}.tsv"
     benchmark: "benchmarks/antismash_assembly_summary/AS{version}-{sample_type}-{sample}.tsv"
-    resources: cpus=1, mem_mb=4000, time_min=120 
+    resources: cpus=1, mem_mb=16000, time_min=120 
     priority: 6
     shell:
         """
