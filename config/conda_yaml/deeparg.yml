@@ -1,0 +1,13 @@
+name: deeparg_env
+channels: 
+    - conda-forge
+    - bioconda
+    - defaults 
+dependencies:
+    - diamond==0.9.24
+    - pip 
+    - deeparg==1.0.4
+    #-pip: 
+     #- install git+https://github.com/gaarangoa/deeparg.git 
+    # run separately in env deep_arg deeparg download_data -o /path/ example path /nfs/turbo/lsa-gdick2/geomicro/home/avidiaz/miniconda3/envs/deeparg/lib/python2.7/site-packages/deeparg
+    # if running on Naomy's profile the file path is AMR_naomy/deeparg/config 
