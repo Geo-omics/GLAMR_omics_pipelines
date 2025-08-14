@@ -19,14 +19,26 @@ arguments <- docopt(doc)
 
 file <- arguments$input
 
-# read and parses the domtblout file
-table <- read.table(file, header = FALSE, sep = "", comment.char = "#", fill = TRUE)
+# Read and parses the domtblout file: this is a hmmer human-readable table with
+# columns aligned by whitespace. The last column is text, sometimes multiple
+# words also separated by space. Have to specify exactly how many columns there
+# are for read.table not to make a mess (its parsing magic only looks at the
+# first five rows.)
+num_cols = max(count.fields(file))
+table <- read.table(
+    file,
+    header=FALSE,
+    sep="",
+    comment.char="#",
+    fill=TRUE,
+    col.names=paste0('V', seq_len(num_cols)),
+)
 
 # combines the description columns
 table$description <- apply(table[, 16:ncol(table)], 1, paste, collapse = " ")
 
 # combines the description column with the rest of the columns and names each column
-table <- table[, c(1:15, 22)]
+table <- table[, c(1:15, ncol(table))]
 colnames(table) <- c("target_name", "target_acc", "query_name", "acc", "hmm_from", "hmm_to", "align_from", "align_to", 
                      "env_from", "env_to", "modlen", "strand", "evalue", "score", "bias", "description")
 
