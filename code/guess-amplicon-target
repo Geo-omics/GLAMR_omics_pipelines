@@ -76,11 +76,13 @@ def check_paired_end(fwd, rev):
     if fwd['gene'] == rev['gene']:
         gene = fwd['gene']
     else:
+        gene = None
         errors.append('gene disagreement')
 
     if fwd['tax_group'] == rev['tax_group']:
         tax_group = fwd['tax_group']
     else:
+        tax_group = None
         errors.append('tax_group disagreement')
 
     # checking seq start/end:
@@ -144,11 +146,11 @@ def check_paired_end(fwd, rev):
         overlap = 0.0
 
     output = {
-        'tax_group': tax_group,
-        'gene': gene,
+        'tax_group': tax_group or '',
+        'gene': gene or '',
         'regions': ','.join(regions),
         'overlap': f'{overlap:.2%}',
-        'gap': '' if gap is None else gap,
+        'gap': '' if gap is None else str(gap),
         'is_reversed': 'reversed' if dir_rev else '',
         'got_error': 'error' if errors else '',
     }
