@@ -1,15 +1,13 @@
 #!/usr/bin/env Rscript
 
-'Summarizing the tblout results of a nhmmscan and identifying the gene region
+'Summarizing the tblout results of a nhmmscan
 
 Usage: 
-  summarize_and_identify_gene.R --input FILE [--output OUTPUT] [--directory DIRECTORY] [--fasta FILE]
+  summarize_hmmscan.R --input FILE [--output OUTPUT]
 
 Options:
   -i --input=<N>        Space delimited table of domain hits
   -o --output=<N>       Output Directory to save the summary of the hmmscan. Defaults to input basename + tsv.
-  -d --directory=<N>    Output Directory to save the summary of the hmmscan
-  -f --fasta=<N>        Fasta file associated with the input table
   -h --help             Show this screen
 ' -> doc
 
@@ -19,11 +17,7 @@ library(tidyverse)
 # the below arguments for processing from the command line
 arguments <- docopt(doc)
 
-# uncomment the below arguments for testing
-#arguments <- docopt(doc, args = "--input data/omics/amplicons/samp_832/detect_region/fwd.txt --directory data/omics/amplicons/samp_832/detect_region/summary_fwd")
-
 file <- arguments$input
-#fs::dir_create(path = arguments$directory)
 
 # read and parses the domtblout file
 table <- read.table(file, header = FALSE, sep = "", comment.char = "#", fill = TRUE)
@@ -74,95 +68,3 @@ if (is.null(arguments$output)) {
 }
 
 write_tsv(summarized_table,tsv_path)
-
-
-# gene_regions <- c("V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9")
-# 
-# for (i in gene_regions) {
-#   base_path <- stringr::str_glue("{arguments$directory}/16S")
-#   fs::dir_create(file.path(base_path, i))
-# }
-# 
-# for (i in gene_regions) {
-#   base_path <- stringr::str_glue("{arguments$directory}/18S")
-#   fs::dir_create(file.path(base_path, i))
-# }
-# 
-# if(str_detect(summarized_table[1, "gene"], "16S")) {
-#   
-#   if (str_detect(summarized_table[1, "tax_group"], "mito")) {
-#     fs::dir_create(stringr::str_glue("{arguments$directory}/16S/mito"))
-#     fasta_output_path <- file.path(stringr::str_glue("{arguments$directory}/16S/mito"))
-#     full_fasta_output_path <- file.path(fasta_output_path, basename(arguments$fasta))
-#     file.copy(from = arguments$fasta, to = full_fasta_output_path, overwrite = TRUE)
-#   }
-#   else { # the bac and arc tax groups
-#     summary_table_w_region <- summarized_table[1,] %>%
-#       mutate(region = case_when(hmm_start_median < 100 ~ "V1",
-#                                 hmm_start_median < 400 ~ "V2",
-#                                 hmm_start_median < 500 ~ "V3",
-#                                 hmm_start_median < 800 ~ "V4",
-#                                 hmm_start_median < 900 ~ "V5",
-#                                 hmm_start_median < 1100 ~ "V6",
-#                                 hmm_start_median < 1200 ~ "V7",
-#                                 hmm_start_median < 1300 ~ "V8",
-#                                 .default = "V9"))
-#     
-#     fasta_output_path <- file.path(stringr::str_glue("{arguments$directory}/16S"), summary_table_w_region[1, "region"])
-#     full_fasta_output_path <- file.path(fasta_output_path, basename(arguments$fasta))
-#     file.copy(from = arguments$fasta, to = full_fasta_output_path, overwrite = TRUE)
-#   }
-# }
-# 
-# if(str_detect(summarized_table[1, "gene"], "18S")) {
-#   
-#   summary_table_w_region <- summarized_table[1,] %>%
-#     mutate(region = case_when(hmm_start_median < 100 ~ "V1",
-#                               hmm_start_median < 300 ~ "V2",
-#                               hmm_start_median < 600 ~ "V3",
-#                               hmm_start_median < 800 ~ "V4",
-#                               hmm_start_median < 1100 ~ "V5",
-#                               hmm_start_median < 1350 ~ "V6",
-#                               hmm_start_median < 1500 ~ "V7",
-#                               hmm_start_median < 1650 ~ "V8",
-#                               .default = "V9"))
-#   
-#   fasta_output_path <- file.path(stringr::str_glue("{arguments$directory}/18S"), summary_table_w_region[1, "region"])
-#   full_fasta_output_path <- file.path(fasta_output_path, basename(arguments$fasta))
-#   file.copy(from = arguments$fasta, to = full_fasta_output_path, overwrite = TRUE)
-# }
-# 
-# if (str_detect(summarized_table[1, "gene"], "12S")) {
-#   fs::dir_create(stringr::str_glue("{arguments$directory}/12S"))
-#   fasta_output_path <- file.path(stringr::str_glue("{arguments$directory}/12S"))
-#   full_fasta_output_path <- file.path(fasta_output_path, basename(arguments$fasta))
-#   file.copy(from = arguments$fasta, to = full_fasta_output_path, overwrite = TRUE)
-# }
-# 
-# if (str_detect(summarized_table[1, "gene"], "5S")) {
-#   fs::dir_create(stringr::str_glue("{arguments$directory}/5S"))
-#   fasta_output_path <- file.path(stringr::str_glue("{arguments$directory}/5S"))
-#   full_fasta_output_path <- file.path(fasta_output_path, basename(arguments$fasta))
-#   file.copy(from = arguments$fasta, to = full_fasta_output_path, overwrite = TRUE)
-# }
-# 
-# if (str_detect(summarized_table[1, "gene"], "5.8S")) {
-#   fs::dir_create(stringr::str_glue("{arguments$directory}/5_8S"))
-#   fasta_output_path <- file.path(stringr::str_glue("{arguments$directory}/5_8S"))
-#   full_fasta_output_path <- file.path(fasta_output_path, basename(arguments$fasta))
-#   file.copy(from = arguments$fasta, to = full_fasta_output_path, overwrite = TRUE)
-# }
-# 
-# if (str_detect(summarized_table[1, "gene"], "23S")) {
-#   fs::dir_create(stringr::str_glue("{arguments$directory}/23S"))
-#   fasta_output_path <- file.path(stringr::str_glue("{arguments$directory}/23S"))
-#   full_fasta_output_path <- file.path(fasta_output_path, basename(arguments$fasta))
-#   file.copy(from = arguments$fasta, to = full_fasta_output_path, overwrite = TRUE)
-# }
-# 
-# if (str_detect(summarized_table[1, "gene"], "28S")) {
-#   fs::dir_create(stringr::str_glue("{arguments$directory}/28S"))
-#   fasta_output_path <- file.path(stringr::str_glue("{arguments$directory}/28S"))
-#   full_fasta_output_path <- file.path(fasta_output_path, basename(arguments$fasta))
-#   file.copy(from = arguments$fasta, to = full_fasta_output_path, overwrite = TRUE)
-# }
