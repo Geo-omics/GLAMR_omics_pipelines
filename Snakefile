@@ -3380,6 +3380,20 @@ rule amplicon_hmm_summarize:
         ./code/summarize_hmmscan.R --input {input.hmm_tbl_rev} --output {output.hmm_tbl_summary_rev}
         """
 
+rule amplicon_guess_target:
+    input:
+        hmm_tbl_summary_fwd = "data/omics/{sample_type}/{sample}/detect_region/fwd_summary.tsv",
+        hmm_tbl_summary_rev = "data/omics/{sample_type}/{sample}/detect_region/rev_summary.tsv"
+    output:
+        target_info = "data/omics/{sample_type}/{sample}/detect_region/target_info.txt"
+    resources: cpus=1, mem_mb=100, time_min=1
+    benchmark: "benchmarks/amplicon_guess_target/{sample_type}_{sample}.txt"
+    container: "docker://eandersk/r_microbiome"
+    shell:
+        """
+        ./code/guess-amplicon-target  --output {output.target_info} {input.hmm_tbl_summary_fwd} {input.hmm_tbl_summary_rev}
+        """
+
 rule deeparg_ls: #this rule is using LS mode and annotated genes  
     input:
         genes="data/omics/{sample_type}/{sample}/genes/{sample}_GENES.fna"  # For sets 35, 41, 42

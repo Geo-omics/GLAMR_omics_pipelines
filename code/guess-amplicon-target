@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""
+Guess the amplicon target based on summaries of hmmscan
+"""
+import argparse
+
+from amplicon_regions import coordinates
+
+
+# read directions
+FWD = 'fwd'
+REV = 'rev'
+
+
+argp = argparse.ArgumentParser(description=__doc__)
+argp.add_argument(
+    'summary',
+    nargs='+',
+    type=argparse.FileType(),
+    help='One or more paths to summarized nhmmscan results, as made by the '
+         'summarize_nhscan script.  For paired-end sequencing two files should'
+         'be provided, the first being for the forward reads and the second '
+         'for the reverse reads.',
+)
+argp.add_argument(
+    '--output',
+    help='Path to output file.  If missing, then output will be printed to '
+         'stdout',
+)
+
+args = argp.parse_args()
+
+
+def get_summary(ifile):
+    """
+    Parse summary file
+
+    ifile: file handle, opened for reading
+    """
+    head = ifile.readline().rstrip('\n').split('\t')
+    line = ifile.readline().rstrip('\n')
+    row = {}
+    for colname, value in zip(head, line.split('\t')):
+        if colname == 'n_seqs' or colname.endswith('_median'):
+            try:
+                value = int(value)
+            except ValueError:
+                try:
+                    value = float(value)
+                except Exception as e:
+                    argp.error(f'failed parsing: {e} {line=}')
+            except Exception as e:
+                argp.error(f'failed parsing: {e} {line=}')
+        row[colname] = value
+    return row
+
+
+def check_paired_end(fwd, rev):
+    MIN_N_SEQS = 500
+    MAX_E_VAL = 1e-40
+    MIN_SCORE = 160
+
+    errors = []
+    regions = {}
+
+    for data in (fwd, rev):
+        if data['n_seqs'] < MIN_N_SEQS:
+            errors.append(f'too low: {data["direction"]}: {data["n_seqs"]=}')
+        if data['e_value_median'] > MAX_E_VAL:
+            errors.append(f'too high: {data["direction"]}: '
+                          f'{data["e_value_median"]=}')
+        if data['score_median'] < MIN_SCORE:
+            errors.append(f'too low: {data["direction"]}: '
+                          f'{data["score_median"]=}')
+
+    if fwd['gene'] == rev['gene']:
+        gene = fwd['gene']
+    else:
+        errors.append('gene disagreement')
+
+    if fwd['tax_group'] == rev['tax_group']:
+        tax_group = fwd['tax_group']
+    else:
+        errors.append('tax_group disagreement')
+
+    # checking seq start/end:
+    fwd_is_fwd = fwd['seq_start_median'] < fwd['seq_end_median']
+    rev_is_rev = rev['seq_start_median'] > rev['seq_end_median']
+
+    dir_rev = False
+    if fwd_is_fwd and rev_is_rev:
+        # all is in order
+        pass
+    elif not fwd_is_fwd and not rev_is_rev:
+        # directions got mixed up -- make a note, but is not really an error
+        dir_rev = True
+    else:
+        # what a mess
+        errors.append('seq start/end and read directions messed up!')
+
+    fwd_sta = fwd['hmm_start_median']
+    fwd_end = fwd['hmm_end_median']
+    rev_sta = rev['hmm_start_median']
+    rev_end = rev['hmm_end_median']
+
+    if fwd_sta > fwd_end:
+        errors.append('bad fwd coords (start must come before end)')
+    if rev_sta > rev_end:
+        errors.append('bad rev coords (start must come before end)')
+
+    if fwd_end < rev_sta or rev_end < fwd_sta:
+        errors.append('fwd and rev read do not overlap')
+
+    # detect regions
+    regions = []
+    found_all_check = False
+    for region, (start, end) in coordinates.get(gene, {}).items():
+        fwd_miss = fwd_end < start or end < fwd_sta
+        rev_miss = rev_end < start or end < rev_sta
+        if fwd_miss and rev_miss:
+            # total miss
+            if regions:
+                found_all_check = True
+            pass
+        else:
+            if found_all_check:
+                # assuming reference region coordinates are in order, we've got
+                # here after hitting a region and subsequently missing another
+                # and then hitting one again.  This should not happen.
+                raise RuntimeError('logic bug')
+            # counting any sort of overlap as hitting the region
+            regions.append(region)
+
+    # Part 3 -- final aggragation and output
+
+    # calculate overlap/gap
+    single_cov = (min(fwd_sta, rev_sta), max(fwd_end, rev_end))
+    both_cov = (max(fwd_sta, rev_sta), min(fwd_end, rev_end))
+    if both_cov[0] <= both_cov[1]:
+        gap = None
+        overlap = (both_cov[1] - both_cov[0]) / (single_cov[1] - single_cov[0])
+    else:
+        gap = both_cov[0] - both_cov[1]
+        overlap = 0.0
+
+    output = {
+        'tax_group': tax_group,
+        'gene': gene,
+        'regions': ','.join(regions),
+        'overlap': f'{overlap:.2%}',
+        'gap': '' if gap is None else gap,
+        'is_reversed': 'reversed' if dir_rev else '',
+        'got_error': 'error' if errors else '',
+    }
+    outlines = ['\t'.join(output.keys()) + '\n']
+    outlines.append('\t'.join(output.values()) + '\n')
+    for err in errors:
+        outlines.append(f'# [ERROR] {err}\n')
+    outtxt = ''.join(outlines)
+
+    if args.output:
+        with open(args.output, 'w') as ofile:
+            ofile.write(outtxt)
+    else:
+        print(outtxt, end='')
+
+
+# MAIN
+if len(args.summary) == 2:
+    fwd_data = get_summary(args.summary[0])
+    fwd_data['direction'] = FWD
+    rev_data = get_summary(args.summary[1])
+    rev_data['direction'] = REV
+else:
+    argp.error('expecting two input files.  Processing single-end sequencing '
+               'data is not implemented.')
+
+
+# Part 2 -- checks and balances
+check_paired_end(fwd_data, rev_data)
