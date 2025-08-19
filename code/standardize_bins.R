@@ -18,8 +18,8 @@ arguments <- docopt(doc)
 #print(arguments)
 
 # # for testing interactively
-# arguments <- docopt(doc, args = c("--sample_dir=data/projects/set_55/metagenomes/samp_4332",
-#                                   "--contig_info=data/projects/set_55/metagenomes/samp_4332/assembly/megahit_noNORM/contigs_info.tsv"))
+ # arguments <- docopt(doc, args = c("--sample_dir=data/projects/coassembly_20/metagenomes/coassembly_20",
+ #                                   "--contig_info=data/projects/coassembly_20/metagenomes/coassembly_20/assembly/megahit_noNORM/contigs_info.tsv"))
 #print(arguments)
 
 ###########################
@@ -65,6 +65,13 @@ semibin_bins <- system(paste0("ls ",arguments$sample_dir,"/bins/semibin/output_b
          orig_bin_name = orig_bin_name_w_ext %>% str_remove("\\.[a-z]*$"), 
          binner = "semibin")
 
+semibin2_bins <- system(paste0("ls ",arguments$sample_dir,"/bins/semibin2/output_bins/*.fa"), intern = TRUE) %>% 
+  data.frame(orig_bin_path = .) %>% 
+  mutate(sample = sample,
+         orig_bin_name_w_ext = orig_bin_path %>% str_remove(".*output_bins/"),
+         orig_bin_name = orig_bin_name_w_ext %>% str_remove("\\.[a-z]*$"), 
+         binner = "semibin2")
+
 VAMB_bins <- c(system(paste0("ls ",arguments$sample_dir,"/bins/VAMB/bins/*.fna"), intern = TRUE),
                system(paste0("ls ",arguments$sample_dir,"/bins/VAMB/bins/*/*.fna"), intern = TRUE) 
                )%>% 
@@ -82,7 +89,7 @@ metadecoder_bins <- system(paste0("ls ",arguments$sample_dir,"/bins/metadecoder/
          binner = "metadecoder")
 
 
-all_bins <- bind_rows(metabat_bins, concoct_bins, maxbin_bins, semibin_bins, VAMB_bins, metadecoder_bins) %>% 
+all_bins <- bind_rows(metabat_bins, concoct_bins, maxbin_bins, semibin_bins, VAMB_bins, metadecoder_bins,semibin2_bins) %>% 
   filter(sample != "coassembly") %>% 
   mutate(create_time = file.mtime(orig_bin_path)) %>% 
   arrange(create_time) %>% 

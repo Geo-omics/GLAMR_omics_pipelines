@@ -2172,11 +2172,13 @@ rule map_to_contigs:
     resources: cpus=32, mem_mb=150000, time_min=7200, disk_mb=500000, scratch_disk_mb = 1000000
     shell:
         """
+        #ulimit -u 1000000 # Increase the number of open files to avoid errors
+
         # Was running out of space on GL when using the local /tmp drives on each node, so use the /scratch space instead
         export TMPDIR={output.bam_dir}/coverm_tmp
         
         # Different tmp dir if running on lab servers
-        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/
+        #[[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/
         
         # Ensure directory exists
         mkdir -p $TMPDIR
@@ -2187,6 +2189,9 @@ rule map_to_contigs:
             -t {resources.cpus} \
             --mapper {params.mapper} \
             -o {output.bam_dir} 
+
+        #mkdir -p {output.bam_dir}
+        #rsync -av -P kiledal@greatlakes-xfer.arc-ts.umich.edu:/scratch/gdick_root/gdick2/kiledal/GLAMR/binning/bams/{wildcards.project}/{wildcards.sample_type}/{wildcards.sample} /scratch/gdick_root/gdick2/kiledal/GLAMR/binning/bams/{wildcards.project}/{wildcards.sample_type}
         """
 
 
@@ -2387,8 +2392,9 @@ rule semibin:
     conda: "config/conda_yaml/semibin.yaml"
     benchmark: "benchmarks/semibin/{sample_type}-{project}__{sample}.txt"
     log: "logs/semibin/{sample_type}-{project}__{sample}.log"
-    resources: cpus=16, mem_mb=170000, time_min=2880, mem_gb = 50 # standard samples
+    #resources: cpus=16, mem_mb=170000, time_min=2880, mem_gb = 50 # standard samples
     #resources: cpus=32, mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
+    resources: cpus=32, mem_mb=700000, time_min=2880, partition = "largemem" # coassembly on our servers
     priority: 3
     shell:
         r"""
@@ -2403,6 +2409,39 @@ rule semibin:
             -o {output.out_dir} | tee {log}
 
             #  --environment mouse_gut ## can only be used for single sample binning
+
+        # Fix permissions on outputs (by default only readable by owner)
+        find {output.out_dir} -type f -exec chmod g+r,o+r {{}} \; -o -type d -exec chmod g+rx,o+rx {{}} \;
+        """
+
+rule semibin2:
+    input:
+        #"data/reference/semibin/.gtdb_downloaded",
+        ref_db = "data/reference/semibin/gtdb",
+        contigs = rules.rename_contigs.output.contigs,
+        #bam_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bam"
+        bam_dir = config["binning_bam_dir"]
+    output:
+        out_dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/semibin2"),
+        done = touch("data/projects/{project}/{sample_type}/{sample}/bins/semibin2/.done")
+    params:
+    conda: "config/conda_yaml/semibin2.yaml"
+    benchmark: "benchmarks/semibin2/{sample_type}-{project}__{sample}.txt"
+    log: "logs/semibin2/{sample_type}-{project}__{sample}.log"
+    resources: cpus=36, mem_mb=170000, time_min=2880 # standard samples
+    #resources: cpus=32, mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
+    #resources: cpus=32, mem_mb=700000, time_min=2880, partition = "largemem" # coassembly on our servers
+    priority: 3
+    shell:
+        """
+        WORK_DIR=$PWD
+
+        SemiBin2 single_easy_bin \
+            --threads {resources.cpus} \
+            --compression none \
+            -i {input.contigs} \
+            -b {input.bam_dir}/*.bam \
+            -o {output.out_dir} | tee {log}
 
         # Fix permissions on outputs (by default only readable by owner)
         find {output.out_dir} -type f -exec chmod g+r,o+r {{}} \; -o -type d -exec chmod g+rx,o+rx {{}} \;
@@ -2492,7 +2531,7 @@ rule standardize_bins:
         "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/.done", 
         "data/projects/{project}/{sample_type}/{sample}/bins/VAMB",
         "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/.done",
-        script = "code/standardize_bins.R",
+        script = ancient("code/standardize_bins.R"),
         #contig_info = "data/projects/{project}/{sample_type}/{sample}/assembly/megahit_noNORM/contigs_info.tsv"
         assembly = rules.rename_contigs.output.contigs,
         contig_info = rules.rename_contigs.output.contig_info
@@ -2528,6 +2567,29 @@ rule checkm_new_per_sample:
     shell:
         """
         checkm lineage_wf --tab_table -f {output.results} -x fa -t {resources.cpus} {params.in_dir} {params.out_dir}
+        """
+
+rule checkm2:
+    input: "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/.bins_linked"
+    output:
+        results = directory("data/projects/{project}/{sample_type}/{sample}/bins/checkm2")
+    params:
+        in_dir = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins",
+        database = "data/references/",
+        #out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/checkm2"
+    benchmark: "benchmarks/checkm2/{sample_type}-{project}__{sample}.txt"
+    conda: "config/conda_yaml/checkm2.yaml"
+    resources: cpus=16, mem_mb=80000, time_min=7200
+    priority: 4
+    shell:
+        """
+        # Database can be dowloaded with checkm2 database --download --path {{path}}
+
+        checkm2 predict \
+            --threads {resources.cpus} \
+            --input {params.in_dir} \
+            --database_path {params.database} \
+            --output-directory {output.results}
         """
 
 
@@ -3927,3 +3989,31 @@ rule genomad:
             {output.genomad_dir} \
             {params.db_path} | tee {log}
         """
+
+rule gutsmash:
+    input:
+        "data/omics/{sample_type}/{sample}/bakta_assembly",
+        genome = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa",
+    output:
+        dir = directory("data/omics/{sample_type}/{sample}/gutsmash_assembly")
+    params:
+        db = "data/reference/antismash8_mibig4",
+        genome = "data/omics/{sample_type}/{sample}/bakta_assembly/final.contigs.renamed.gbff"
+    singularity: "docker://nmendozam/gutsmash"
+    log: "logs/gutsmash/{sample_type}__{sample}.tsv"
+    benchmark: "benchmarks/gutsmash/{sample_type}-{sample}.tsv"
+    resources: cpus=1, mem_mb=100000, time_min=14400
+    shell:
+        """
+        run_gutsmash.py \
+            --minimal \
+            --cb-knownclusters \
+            --enable-genefunctions \
+            --cpus {resources.cpus} \
+            --output-dir {output.dir} \
+            {params.genome} | tee {log}
+        """
+
+
+
+        

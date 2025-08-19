@@ -1,0 +1,7 @@
+name: semibin
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - semibin=2.2.0
