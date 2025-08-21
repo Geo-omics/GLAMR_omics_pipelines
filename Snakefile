@@ -2391,7 +2391,7 @@ rule semibin:
     #resources: cpus=32, mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
     priority: 3
     shell:
-        """
+        r"""
         WORK_DIR=$PWD
 
         SemiBin \
