@@ -89,13 +89,13 @@ def check_paired_end(fwd, rev):
     fwd_is_fwd = fwd['seq_start_median'] < fwd['seq_end_median']
     rev_is_rev = rev['seq_start_median'] > rev['seq_end_median']
 
-    dir_rev = False
+    swapped = False
     if fwd_is_fwd and rev_is_rev:
         # all is in order
         pass
     elif not fwd_is_fwd and not rev_is_rev:
         # directions got mixed up -- make a note, but is not really an error
-        dir_rev = True
+        swapped = True
     else:
         # what a mess
         errors.append('seq start/end and read directions messed up!')
@@ -151,7 +151,7 @@ def check_paired_end(fwd, rev):
         'regions': ','.join(regions),
         'overlap': f'{overlap:.2%}',
         'gap': '' if gap is None else str(gap),
-        'is_reversed': 'reversed' if dir_rev else '',
+        'dirs_swapped': 'swapped' if swapped else '',
         'got_error': 'error' if errors else '',
     }
     outlines = ['\t'.join(output.keys()) + '\n']
