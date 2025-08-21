@@ -3394,6 +3394,64 @@ rule amplicon_guess_target:
         ./code/guess-amplicon-target  --output {output.target_info} {input.hmm_tbl_summary_fwd} {input.hmm_tbl_summary_rev}
         """
 
+def target_info_files(wc):
+    """
+    input function for amplicon_dispatch
+
+    Collects target info files for each amplicon sample in given dataset.
+    """
+    project_base = Path("data/projects/") / wc.dataset / 'amplicons'
+    omics_base = Path("data/omics/amplicon")
+    ret = []
+    for i in project_base.glob("samp_*"):
+        ret.append(omics_base / i.name / 'detect_region' / 'target_info.txt')
+    return ret
+
+
+checkpoint amplicon_dispatch:
+    input:
+        target_info_files
+    output:
+        directory("data/projects/{dataset}/amplicon_analysis")
+    shell:
+        """
+        ./code/amplicon-dispatch --outdir {output} --data-root ./data {wildcards.dataset}
+        """
+
+rule amplicon_dada2_target:
+    input:
+        path = "data/projects/{dataset}/amplicon_analysis/sample_info.{target}"
+    output:
+        directory("data/projects/{dataset}/amplicon_analysis/dada2.{target}")
+    shell:
+        """
+        ./code/ampliconTrunc.R --quality 25 --outdir {output} {input.path}
+        """
+
+def dada2_output_dirs(wc):
+    """
+    input function: get the dada2 output directories
+
+    These are derived from the names of the dada2 job description files (made
+    by amplicon_dispatch rule) by replacing the "sample_info" prefix with "dada2"
+    """
+    PREFIX = 'sample_info.'
+    base = Path(checkpoints.amplicon_dispatch.get(**wc).output[0])
+    return [
+        str(base / f'dada2.{i.name.removeprefix(PREFIX)}')
+        for i in base.glob(f'{PREFIX}*')
+    ]
+
+rule amplicon_pipeline_dataset:
+    input:
+        dada2_output_dirs
+    output:
+        "data/projects/{dataset}/amplicon_pipeline_done"
+    shell:
+        """
+        echo {input} >> {output}
+        """
+
 rule deeparg_ls: #this rule is using LS mode and annotated genes  
     input:
         genes="data/omics/{sample_type}/{sample}/genes/{sample}_GENES.fna"  # For sets 35, 41, 42
