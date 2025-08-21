@@ -73,10 +73,5 @@ summarized_table <- table %>%
                           .default = NA_character_)) %>%  # NA when no match
   arrange(desc(n_seqs)) # sort table by number of seqs
 
-if (is.null(arguments$output)) {
-  tsv_path <- stringr::str_glue("{fs::path_ext_remove(arguments$input)}_summary.tsv")
-} else {
-  tsv_path <- arguments$output
-}
 
-write_tsv(summarized_table,tsv_path)
+write_tsv(summarized_table, arguments$output %||% stdout())
