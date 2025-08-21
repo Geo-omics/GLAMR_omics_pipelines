@@ -17,6 +17,9 @@ library(tidyverse)
 # the below arguments for processing from the command line
 arguments <- docopt(doc)
 
+COLUMNS <- c("target_name", "target_acc", "query_name", "acc", "hmm_from", "hmm_to", "align_from", "align_to",
+             "env_from", "env_to", "modlen", "strand", "evalue", "score", "bias", "description")
+
 file <- arguments$input
 
 # Read and parses the domtblout file: this is a hmmer human-readable table with
@@ -24,23 +27,29 @@ file <- arguments$input
 # words also separated by space. Have to specify exactly how many columns there
 # are for read.table not to make a mess (its parsing magic only looks at the
 # first five rows.)
-num_cols = max(count.fields(file))
-table <- read.table(
-    file,
-    header=FALSE,
-    sep="",
-    comment.char="#",
-    fill=TRUE,
-    col.names=paste0('V', seq_len(num_cols)),
-)
+num_cols_all_rows = count.fields(file)
+if (is.null(num_cols_all_rows)) {
+    # no hits  / file parsing failed and would keep failing with read.table()
+    # so create empty table
+    table = data.frame(matrix(ncol=length(COLUMNS), nrow=0))
+} else {
+    table <- read.table(
+        file,
+        header=FALSE,
+        sep="",
+        comment.char="#",
+        fill=TRUE,
+        col.names=paste0('V', seq_len(max(num_cols_all_rows))),
+    )
 
-# combines the description columns
-table$description <- apply(table[, 16:ncol(table)], 1, paste, collapse = " ")
+    # combines the description columns
+    table$description <- apply(table[, 16:ncol(table)], 1, paste, collapse = " ")
 
-# combines the description column with the rest of the columns and names each column
-table <- table[, c(1:15, ncol(table))]
-colnames(table) <- c("target_name", "target_acc", "query_name", "acc", "hmm_from", "hmm_to", "align_from", "align_to", 
-                     "env_from", "env_to", "modlen", "strand", "evalue", "score", "bias", "description")
+    # combines the description column with the rest of the columns and names each column
+    table <- table[, c(1:15, ncol(table))]
+}
+
+colnames(table) <- COLUMNS
 
 summarized_table <- table %>%
   group_by(query_name) %>% # group by original sequence to find which model best matches
