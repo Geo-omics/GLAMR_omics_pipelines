@@ -1,5 +1,5 @@
 coordinates = {
-    '16S_rRNA': {
+    ('bacteria', '16S_rRNA'): {
         # result from find_16S_regions_in_hmm()
         'V1': (69, 93),
         'V2': (132, 240),

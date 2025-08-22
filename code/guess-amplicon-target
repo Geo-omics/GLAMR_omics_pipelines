@@ -145,7 +145,8 @@ def check_paired_end(fwd, rev):
         regions = []
         missed_via_gap = []
         in_gap_temp = []
-        for region, (start, end) in coordinates.get(gene, {}).items():
+        region_data = coordinates.get((tax_group, gene), {})
+        for region, (start, end) in region_data.items():
             fwd_miss = fwd_end < start or end < fwd_sta
             rev_miss = rev_end < start or end < rev_sta
             if fwd_miss and rev_miss:
