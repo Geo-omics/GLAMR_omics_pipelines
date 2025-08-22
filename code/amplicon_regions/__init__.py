@@ -12,3 +12,17 @@ coordinates = {
         'V9': (1427, 1457),
     },
 }
+
+
+# consistency check at module load time
+for key, regions in coordinates.items():
+    cur = 0
+    for name, (start, end) in regions.items():
+        if end <= start:
+            raise ValueError('start must be smaller than end')
+        if start <= cur:
+            raise ValueError(
+                'regions must be listed in increasing coordinates and not '
+                'overlap'
+            )
+        cur = end
