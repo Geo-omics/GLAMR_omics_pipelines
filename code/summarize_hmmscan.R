@@ -42,11 +42,14 @@ if (is.null(num_cols_all_rows)) {
         col.names=paste0('V', seq_len(max(num_cols_all_rows))),
     )
 
-    # combines the description columns
-    table$description <- apply(table[, 16:ncol(table)], 1, paste, collapse = " ")
+    if (ncol(table) > 16) {
+        # some descriptions are multiple words
+        # combines the description columns
+        table$description <- apply(table[, 16:ncol(table)], 1, paste, collapse = " ")
 
-    # combines the description column with the rest of the columns and names each column
-    table <- table[, c(1:15, ncol(table))]
+        # remove the per-word columns
+        table <- table[, c(1:15, ncol(table))]
+    }
 }
 
 colnames(table) <- COLUMNS
