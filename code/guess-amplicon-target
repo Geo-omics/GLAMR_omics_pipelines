@@ -63,12 +63,13 @@ def get_summary(ifile):
 
 
 def check_paired_end(fwd, rev):
-    MIN_N_SEQS = 500
+    MIN_N_SEQS = 100
     MAX_E_VAL = 1e-40
     MIN_SCORE = 160
 
     errors = []
     no_hits = False
+    critical = False
 
     for data in (fwd, rev):
         if NO_HITS in data:
@@ -81,6 +82,7 @@ def check_paired_end(fwd, rev):
                 f'too low: {data["direction"]}: n_seqs={data["n_seqs"]}'
             )
         if data['e_value_median'] > MAX_E_VAL:
+            critical = True
             errors.append(
                 f'too high: {data["direction"]}: e_value_median='
                 f'{data["e_value_median"]}'
@@ -188,7 +190,10 @@ def check_paired_end(fwd, rev):
         'got_error': 'error' if errors else '',
     }
     outlines = ['\t'.join(output.keys()) + '\n']
-    outlines.append('\t'.join(output.values()) + '\n')
+    if critical:
+        errors.append(f'[withheld guess] {output}')
+    else:
+        outlines.append('\t'.join(output.values()) + '\n')
     for err in errors:
         outlines.append(f'# [ERROR] {err}\n')
     outtxt = ''.join(outlines)

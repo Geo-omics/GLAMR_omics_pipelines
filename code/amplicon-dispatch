@@ -37,27 +37,31 @@ argp.add_argument(
 )
 argp.add_argument(
     '--outdir',
-    default='./',
-    help='Output directory.  Defaults to the current working directory.'
+    help='Output directory.  If this is missing, then a summary is written to '
+         'stdout for testing purposes.',
 )
 argp.add_argument(
-    '--data-root',
-    default='data/',
-    help='Path to the data directory.  Defaults to ./data',
+    '--glamr-root',
+    default='./',
+    help='Path to the GLAMR root directory.  Defaults to ./',
 )
 args = argp.parse_args()
 
 
-root = Path(args.data_root)
+root = Path(args.glamr_root)
 if not root.is_dir():
     argp.error(f'not a directory: {root}')
+
+
+NO_TARGET_INFO = object()
 
 
 def get_sample_info_log():
     """ collect info from omics pipeline import log """
     try:
-        import_log = \
-            sorted((root / 'import_logs').glob('*_sample_status.tsv'))[-1]
+        import_log = sorted(
+            (root / 'data' / 'import_logs').glob('*_sample_status.tsv')
+        )[-1]
     except Exception as e:
         argp.error(f'Failed finding import log: {e.__class__.__name__}: {e}')
 
@@ -79,14 +83,14 @@ def get_sample_info_log():
 
             # check sample dir
             try:
-                sample_dir = root / Path(row['sample_dir']).relative_to('data')
+                sample_dir = Path(row['sample_dir'])
             except ValueError as e:
                 argp.error(f'failed parsing sample_dir: {e}\n{row=}')
 
             # get paths to fastq files
             fwd = Path(row['raw_reads_fp'])
             try:
-                fwd = root / fwd.relative_to('data')
+                fwd = root / fwd
             except ValueError as e:
                 argp.error(f'unexpected path: {e}\n{row=}')
 
@@ -100,8 +104,8 @@ def get_sample_info_log():
             data.append({
                 'sample_id': row['SampleID'],
                 'sample_dir': sample_dir,
-                'fwd_fastq': fwd,
-                'rev_fastq': rev,
+                'fwd_fastq': fwd.relative_to(root),
+                'rev_fastq': rev.relative_to(root),
             })
     print('[OK]')
 
@@ -110,13 +114,14 @@ def get_sample_info_log():
 
 def get_sample_info():
     """ get sample info from filesystem """
-    base = root / 'projects' / args.dataset / 'amplicons'
+    base = root / 'data' / 'projects' / args.dataset / 'amplicons'
     absroot = root.resolve()
     if not base.is_dir():
         argp.error(f'no such directory: {base}')
     data = []
     for sampdir in base.glob('samp_*'):
-        sampdir = sampdir.resolve().relative_to(absroot.parent)
+        # resolve the symlink but stay relative to root
+        sampdir = sampdir.resolve().relative_to(absroot)
         data.append({
             'sample_id': sampdir.name,
             'sample_dir': sampdir,
@@ -126,132 +131,182 @@ def get_sample_info():
     return data
 
 
+def get_target_info_sample(sample_info):
+    sample_id = sample_info['sample_id']
+    detect_region_dir = root / sample_info['sample_dir'] / 'detect_region'
+    if not detect_region_dir.is_dir():
+        print(f'{sample_id}: not a directory: {detect_region_dir=}')
+        return NO_TARGET_INFO
+
+    if args.test_mode:
+        # in test mode generate target info from nhmmscan output
+        tmpd = None
+        script_dir = Path(__file__).resolve().parent
+        try:
+            sum_fwd = detect_region_dir / 'fwd_summary.tsv'
+            sum_rev = detect_region_dir / 'rev_summary.tsv'
+
+            if not sum_fwd.is_file or not sum_rev.is_file():
+                tmpd = TemporaryDirectory()
+                tmp = Path(tmpd.name)
+                hmm_fwd = detect_region_dir / 'fwd.txt'
+                hmm_rev = detect_region_dir / 'rev.txt'
+                sum_fwd = tmp / 'fwd_summary.tsv'
+                sum_rev = tmp / 'rev_summary.tsv'
+                sum_script = script_dir / SUMMARIZE_HMMSCAN_SCRIPT
+                run(
+                    [sum_script, '--input', hmm_fwd, '--output', sum_fwd],
+                    capture_output=True,
+                    check=True,
+                    cwd=tmp,
+                )
+                run(
+                    [sum_script, '--input', hmm_rev, '--output', sum_fwd],
+                    capture_output=True,
+                    check=True,
+                    cwd=tmp,
+                )
+
+            guess_script = script_dir / GUESS_TARGET_SCRIPT
+            proc = run(
+                [guess_script, str(sum_fwd), str(sum_rev)],
+                capture_output=True,
+                check=True,
+                cwd=tmp if tmpd else None,
+            )
+        except CalledProcessError as e:
+            print(e.stderr.decode(), file=sys.stderr)
+            print(f'{sample_info=}', file=sys.stderr)
+            argp.error(f'ERROR calling {e}')
+        finally:
+            if tmpd:
+                tmpd.cleanup()
+
+        return proc.stdout.decode()
+    else:
+        try:
+            return (detect_region_dir / 'target_info.txt').read_text()
+        except FileNotFoundError:
+            return NO_TARGET_INFO
+
+
 def get_target_info(data):
     """ detect amplicon target genes and regions """
 
     for sample_info in data:
-        sample_id = sample_info['sample_id']
-        detect_region_dir = sample_info['sample_dir'] / 'detect_region'
-        if not detect_region_dir.is_dir():
-            print(f'{sample_id}: not a directory: {detect_region_dir=}')
-            continue
-
-        if args.test_mode:
-            # in test mode generate target info from nhmmscan output
-            tmpd = None
-            script_dir = Path(__file__).resolve().parent
-            try:
-                sum_fwd = detect_region_dir / 'fwd_summary.tsv'
-                sum_rev = detect_region_dir / 'rev_summary.tsv'
-
-                if not sum_fwd.is_file or not sum_rev.is_file():
-                    tmpd = TemporaryDirectory()
-                    tmp = Path(tmpd.name)
-                    hmm_fwd = detect_region_dir / 'fwd.txt'
-                    hmm_rev = detect_region_dir / 'rev.txt'
-                    sum_fwd = tmp / 'fwd_summary.tsv'
-                    sum_rev = tmp / 'rev_summary.tsv'
-                    sum_script = script_dir / SUMMARIZE_HMMSCAN_SCRIPT
-                    run(
-                        [sum_script, '--input', hmm_fwd, '--output', sum_fwd],
-                        capture_output=True,
-                        check=True,
-                        cwd=tmp,
-                    )
-                    run(
-                        [sum_script, '--input', hmm_rev, '--output', sum_fwd],
-                        capture_output=True,
-                        check=True,
-                        cwd=tmp,
-                    )
-
-                guess_script = script_dir / GUESS_TARGET_SCRIPT
-                proc = run(
-                    [guess_script, str(sum_fwd), str(sum_rev)],
-                    capture_output=True,
-                    check=True,
-                    cwd=tmp if tmpd else None,
-                )
-            except CalledProcessError as e:
-                print(e.stderr.decode(), file=sys.stderr)
-                argp.error(f'ERROR calling {e}')
-            finally:
-                if tmpd:
-                    tmpd.cleanup()
-
-            info_txt = proc.stdout.decode()
+        info_txt = get_target_info_sample(sample_info)
+        if info_txt == NO_TARGET_INFO:
+            sample_info['tax_group'] = NO_TARGET_INFO
+            sample_info['gene'] = NO_TARGET_INFO
+            sample_info['regions'] = NO_TARGET_INFO
         else:
-            info_txt = (detect_region_dir / 'target_info.txt').read_text()
+            try:
+                header, row, *errors = info_txt.splitlines()
+            except Exception as e:
+                argp.error(
+                    f'expected two lines of target info txt: {e}'
+                )
 
-        try:
-            header, row, *errors = info_txt.splitlines()
-        except Exception as e:
-            argp.error(f'expected two lines of stdout from {proc}: {e}')
-
-        target_data = dict(zip(
-            header.rstrip('\n').split('\t'),
-            row.rstrip('\n').split('\t'),
-            strict=True,
-        ))
-        cols = ['tax_group', 'gene', 'regions', 'dirs_swapped', 'got_error']
-        for key in cols:
-            sample_info[key] = target_data[key]
+            target_data = dict(zip(
+                header.rstrip('\n').split('\t'),
+                row.rstrip('\n').split('\t'),
+                strict=True,
+            ))
+            cols = ['tax_group', 'gene', 'regions', 'dirs_swapped',
+                    'got_error']
+            for key in cols:
+                sample_info[key] = target_data[key]
 
 
-def find_mode(data):
+def find_modes(data):
+    MODE_THRESHOLD = 0.05  # bins >=5% stand on their own
     TARGET_KEYS = ('tax_group', 'gene', 'regions')
     targets = Counter((
         tuple((i[k] for k in TARGET_KEYS))
         for i in data
     )).most_common()
 
-    winner, winner_count = targets[0]
+    modes = []
+    refuse = []
 
-    for trgt, count in targets:
-        print(f'{count:>4} x {" // ".join(trgt)}')
+    for target, count in targets:
+        target_data = [
+            i for i in data
+            if tuple((i[k] for k in TARGET_KEYS)) == target
+        ]
+        if count >= len(data) * MODE_THRESHOLD:
+            modes.append((target, target_data))
+            mark = '[mode]'
+            notice = ''
+        else:
+            if len(modes) == 1:
+                # just add these to the majority
+                modes[0][1].extend(target_data)
+                mark = ''
+                notice = ''
+            else:
+                refuse += target_data
+                mark = ''
+                notice = '    *** ambiguous target guess -- manual curation'
+        if target == ('', '', ''):
+            target = 'UNKNOWN_TARGET'
+        elif target == (NO_TARGET_INFO, NO_TARGET_INFO, NO_TARGET_INFO):
+            target = 'MISSING_TARGET_INFO'
+        else:
+            target = ' // '.join(target)
+        print(f'{mark:>6}{count:>4} x {target}{notice}')
+    return modes, refuse
 
-    if winner_count <= len(data) / 2:
-        argp.error('there is no clear target !!!')
 
-    if bad_count := len(data) - winner_count:
-        print(f'Discarding {bad_count} samples with bad amplicon targets.')
-
-    # return only good sample's info
-    return winner, [
-        i for i in data
-        if tuple((i[k] for k in TARGET_KEYS)) == winner
-    ]
-
-
-def dispatch(winner, data):
+def dispatch(data):
     """
     List the samples to be analyzed together in one dada2 run
     """
-    tax_group, gene, regions = winner
-    target_str = f'{tax_group}-{gene}-{regions.replace(",", "-")}'
-
-    final_outdir = Path(args.outdir)
-    if keep_outdir := final_outdir.is_dir():
-        outdir = final_outdir
-    else:
-        tmpd = TemporaryDirectory(
-            prefix=final_outdir.name + '.tmp.',
-            dir=final_outdir.parent,
-            delete=False,
-        )
-        outdir = Path(tmpd.name)
+    if args.outdir:
+        final_outdir = Path(args.outdir)
+        if keep_outdir := final_outdir.is_dir():
+            outdir = final_outdir
+        else:
+            tmpd = TemporaryDirectory(
+                prefix=final_outdir.name + '.tmp.',
+                dir=final_outdir.parent,
+                delete=False,
+            )
+            outdir = Path(tmpd.name)
 
     columns = [
         'sample_id', 'sample_dir', 'dirs_swapped', 'fwd_fastq', 'rev_fastq',
     ]
-    outfile = outdir / f'sample_info.{target_str}'
-    with outfile.open('w') as ofile:
-        for row in data:
-            ofile.write('\t'.join(str(row[i]) for i in columns))
-            ofile.write('\n')
-    print(f'{len(data)} records written to {outfile}')
-    if not keep_outdir:
-        outdir.rename(final_outdir)
+
+    modes, refuse = find_modes(data)
+    for (tax_group, gene, regions), data in modes:
+        if tax_group == gene == regions == '':
+            target_str = 'UNKNOWN_TARGET'
+        elif tax_group == gene == regions == NO_TARGET_INFO:
+            target_str = 'MISSING_TARGET_INFO'
+        else:
+            target_str = f'{tax_group}-{gene}-{regions.replace(",", "-")}'
+
+        if args.outdir:
+            outfilename = outdir / f'sample_info.{target_str}'
+            with open(outfilename, 'w') as ofile:
+                for row in data:
+                    print(*(row.get(i, '???') for i in columns),
+                          sep='\t', file=ofile)
+            print(f'{len(data)} records written to {outfilename}')
+
+    if refuse:
+        if args.outdir:
+            outfilename = outdir / 'sample_info.UNCERTAIN_TARGETS'
+            with open(outfilename, 'w') as ofile:
+                for row in refuse:
+                    print(*(row[i] for i in columns), sep='\t', file=ofile)
+            print(f'{len(refuse)} records written to {outfilename}')
+
+    if args.outdir:
+        if not keep_outdir:
+            # make output available atomically if all went well
+            outdir.rename(final_outdir)
 
 
 # MAIN
@@ -260,9 +315,7 @@ if data:
     print(f'Found info on {len(data)} samples')
 else:
     argp.error('No samples found')
-print('Guessing amplicon targets... ', end='', flush=True)
+print('Collecting amplicon target info... ', end='', flush=True)
 get_target_info(data)
-print('[OK]')
-winner, data = find_mode(data)
-if not args.test_mode:
-    dispatch(winner, data)
+print(f'{len(data)}  [OK]')
+dispatch(data)

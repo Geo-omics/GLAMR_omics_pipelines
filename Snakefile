@@ -3415,7 +3415,7 @@ checkpoint amplicon_dispatch:
         directory("data/projects/{dataset}/amplicon_analysis")
     shell:
         """
-        ./code/amplicon-dispatch --outdir {output} --data-root ./data {wildcards.dataset}
+        ./code/amplicon-dispatch --outdir {output} {wildcards.dataset}
         """
 
 rule amplicon_dada2_target:
