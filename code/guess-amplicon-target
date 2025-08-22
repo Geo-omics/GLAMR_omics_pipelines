@@ -30,6 +30,8 @@ argp.add_argument(
 
 args = argp.parse_args()
 
+NO_HITS = object()
+
 
 def get_summary(ifile):
     """
@@ -39,6 +41,11 @@ def get_summary(ifile):
     """
     head = ifile.readline().rstrip('\n').split('\t')
     line = ifile.readline().rstrip('\n')
+
+    if not line:
+        # no hits at all
+        return {NO_HITS: True}
+
     row = {}
     for colname, value in zip(head, line.split('\t')):
         if colname == 'n_seqs' or colname.endswith('_median'):
@@ -61,95 +68,120 @@ def check_paired_end(fwd, rev):
     MIN_SCORE = 160
 
     errors = []
-    regions = {}
+    no_hits = False
 
     for data in (fwd, rev):
+        if NO_HITS in data:
+            errors.append(f'no hits: {data["direction"]}')
+            no_hits = True
+            continue
+
         if data['n_seqs'] < MIN_N_SEQS:
-            errors.append(f'too low: {data["direction"]}: {data["n_seqs"]=}')
+            errors.append(
+                f'too low: {data["direction"]}: n_seqs={data["n_seqs"]}'
+            )
         if data['e_value_median'] > MAX_E_VAL:
-            errors.append(f'too high: {data["direction"]}: '
-                          f'{data["e_value_median"]=}')
+            errors.append(
+                f'too high: {data["direction"]}: e_value_median='
+                f'{data["e_value_median"]}'
+            )
         if data['score_median'] < MIN_SCORE:
-            errors.append(f'too low: {data["direction"]}: '
-                          f'{data["score_median"]=}')
+            errors.append(
+                f'too low: {data["direction"]}: score_median='
+                f'{data["score_median"]}'
+            )
 
-    if fwd['gene'] == rev['gene']:
-        gene = fwd['gene']
-    else:
-        gene = None
-        errors.append('gene disagreement')
-
-    if fwd['tax_group'] == rev['tax_group']:
-        tax_group = fwd['tax_group']
-    else:
+    if no_hits:
         tax_group = None
-        errors.append('tax_group disagreement')
-
-    # checking seq start/end:
-    fwd_is_fwd = fwd['seq_start_median'] < fwd['seq_end_median']
-    rev_is_rev = rev['seq_start_median'] > rev['seq_end_median']
-
-    swapped = False
-    if fwd_is_fwd and rev_is_rev:
-        # all is in order
-        pass
-    elif not fwd_is_fwd and not rev_is_rev:
-        # directions got mixed up -- make a note, but is not really an error
-        swapped = True
-    else:
-        # what a mess
-        errors.append('seq start/end and read directions messed up!')
-
-    fwd_sta = fwd['hmm_start_median']
-    fwd_end = fwd['hmm_end_median']
-    rev_sta = rev['hmm_start_median']
-    rev_end = rev['hmm_end_median']
-
-    if fwd_sta > fwd_end:
-        errors.append('bad fwd coords (start must come before end)')
-    if rev_sta > rev_end:
-        errors.append('bad rev coords (start must come before end)')
-
-    if fwd_end < rev_sta or rev_end < fwd_sta:
-        errors.append('fwd and rev read do not overlap')
-
-    # detect regions
-    regions = []
-    found_all_check = False
-    for region, (start, end) in coordinates.get(gene, {}).items():
-        fwd_miss = fwd_end < start or end < fwd_sta
-        rev_miss = rev_end < start or end < rev_sta
-        if fwd_miss and rev_miss:
-            # total miss
-            if regions:
-                found_all_check = True
-            pass
-        else:
-            if found_all_check:
-                # assuming reference region coordinates are in order, we've got
-                # here after hitting a region and subsequently missing another
-                # and then hitting one again.  This should not happen.
-                raise RuntimeError('logic bug')
-            # counting any sort of overlap as hitting the region
-            regions.append(region)
-
-    # Part 3 -- final aggragation and output
-
-    # calculate overlap/gap
-    single_cov = (min(fwd_sta, rev_sta), max(fwd_end, rev_end))
-    both_cov = (max(fwd_sta, rev_sta), min(fwd_end, rev_end))
-    if both_cov[0] <= both_cov[1]:
+        gene = None
+        regions = []
+        overlap = None
         gap = None
-        overlap = (both_cov[1] - both_cov[0]) / (single_cov[1] - single_cov[0])
+        swapped = None
     else:
-        gap = both_cov[0] - both_cov[1]
-        overlap = 0.0
+        # Below analysis only makes sense if we've got hits for both read
+        # directions
+        if fwd['gene'] == rev['gene']:
+            gene = fwd['gene']
+        else:
+            gene = None
+            errors.append('gene disagreement')
+
+        if fwd['tax_group'] == rev['tax_group']:
+            tax_group = fwd['tax_group']
+        else:
+            tax_group = None
+            errors.append('tax_group disagreement')
+
+        # checking seq start/end:
+        fwd_is_fwd = fwd['seq_start_median'] < fwd['seq_end_median']
+        rev_is_rev = rev['seq_start_median'] > rev['seq_end_median']
+
+        swapped = False
+        if fwd_is_fwd and rev_is_rev:
+            # all is in order
+            pass
+        elif not fwd_is_fwd and not rev_is_rev:
+            # directions got mixed up -- make a note, but is not an error
+            swapped = True
+        else:
+            # what a mess
+            errors.append('seq start/end and read directions messed up!')
+
+        fwd_sta = fwd['hmm_start_median']
+        fwd_end = fwd['hmm_end_median']
+        rev_sta = rev['hmm_start_median']
+        rev_end = rev['hmm_end_median']
+
+        if fwd_sta > fwd_end:
+            errors.append('bad fwd coords (start must come before end)')
+        if rev_sta > rev_end:
+            errors.append('bad rev coords (start must come before end)')
+
+        if fwd_end < rev_sta or rev_end < fwd_sta:
+            errors.append('fwd and rev reads do not overlap')
+
+        # detect regions
+        regions = []
+        missed_via_gap = []
+        in_gap_temp = []
+        for region, (start, end) in coordinates.get(gene, {}).items():
+            fwd_miss = fwd_end < start or end < fwd_sta
+            rev_miss = rev_end < start or end < rev_sta
+            if fwd_miss and rev_miss:
+                # total miss
+                if regions:
+                    in_gap_temp.append(region)
+                pass
+            else:
+                if in_gap_temp:
+                    regions += in_gap_temp
+                    missed_via_gap += in_gap_temp
+                    in_gap_temp = []
+
+                # counting any sort of overlap as hitting the region
+                regions.append(region)
+
+        # calculate overlap/gap
+        single_cov = (min(fwd_sta, rev_sta), max(fwd_end, rev_end))
+        both_cov = (max(fwd_sta, rev_sta), min(fwd_end, rev_end))
+        if both_cov[0] <= both_cov[1]:
+            gap = None
+            overlap = (both_cov[1] - both_cov[0]) / (single_cov[1] - single_cov[0])  # noqa:E501`
+        else:
+            gap = both_cov[0] - both_cov[1]
+            overlap = 0.0
+
+        if missed_via_gap:
+            errors.append(f'regions in gap: {",".join(missed_via_gap)}')
+            if not gap:
+                raise RuntimeError('logic bug, missing a region implies a gap')
 
     output = {
         'tax_group': tax_group or '',
         'gene': gene or '',
         'regions': ','.join(regions),
-        'overlap': f'{overlap:.2%}',
+        'overlap': '' if overlap is None else f'{overlap:.2%}',
         'gap': '' if gap is None else str(gap),
         'dirs_swapped': 'swapped' if swapped else '',
         'got_error': 'error' if errors else '',
