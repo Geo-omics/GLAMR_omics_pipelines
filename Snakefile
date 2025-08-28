@@ -3401,7 +3401,7 @@ def target_info_files(wc):
     Collects target info files for each amplicon sample in given dataset.
     """
     project_base = Path("data/projects/") / wc.dataset / 'amplicons'
-    omics_base = Path("data/omics/amplicon")
+    omics_base = Path("data/omics/amplicons")
     ret = []
     for i in project_base.glob("samp_*"):
         ret.append(omics_base / i.name / 'detect_region' / 'target_info.txt')
