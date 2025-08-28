@@ -3,7 +3,7 @@
 Run DADA2 on amplicon sequences of given dataset to obtain ASVs and abundance
 """
 import argparse
-from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from subprocess import CalledProcessError, run
 import sys
@@ -19,8 +19,11 @@ SUMMARIZE_HMMSCAN_SCRIPT = './summarize_hmmscan.R'
 
 argp = argparse.ArgumentParser(description=__doc__)
 argp.add_argument(
-    'dataset',
-    help='The dataset to process.',
+    'project_directory',
+    help='The project directory, usually data/projects/<dataset> where the '
+         'last component of the given path is interpreted as the dataset ID.  '
+         'This directory is expected to contain an "amplicon" subdirectory '
+         'that in turn contains one subdirectory per sample.',
 )
 argp.add_argument(
     '--test-mode',
@@ -36,21 +39,33 @@ argp.add_argument(
     'snakemake run amplicon pipeline should use the default.',
 )
 argp.add_argument(
-    '--outdir',
-    help='Output directory.  If this is missing, then a summary is written to '
-         'stdout for testing purposes.',
+    '--out-targets',
+    default='./amplicon_target_assignments.tsv',
+    help='Path to output sample listing file.  This is a tab-separated table '
+         'listing samples with amplicon targets and paths to raw reads.',
 )
 argp.add_argument(
-    '--glamr-root',
-    default='./',
-    help='Path to the GLAMR root directory.  Defaults to ./',
+    '--out-samples',
+    default='./sample_files.tsv',
+    help='Path to output sample listing file.  This is a tab-separated table '
+         'listing samples with amplicon targets and paths to raw reads.',
+)
+argp.add_argument(
+    '--out-details',
+    default=None,
+    help='Path to output detailed amplicon target information file.'
 )
 args = argp.parse_args()
 
 
-root = Path(args.glamr_root)
-if not root.is_dir():
-    argp.error(f'not a directory: {root}')
+# assuming proj dir is like data/project/set_xx and data/import_logs exists
+proj_dir = Path(args.project_directory)
+if not proj_dir.is_dir():
+    argp.error(f'no such directory: {proj_dir}')
+if proj_dir.parts[-3:-1] != ('data', 'projects'):
+    # not like path/to/data/projects/set_nn
+    print('[WARNING] non-standard project directory', file=sys.stderr)
+root = proj_dir.parent.parent.parent  # the GLAMR root directory
 
 
 NO_TARGET_INFO = object()
@@ -58,10 +73,9 @@ NO_TARGET_INFO = object()
 
 def get_sample_info_log():
     """ collect info from omics pipeline import log """
+    import_log_dir = Path(args.project_directory).parent.parent / 'import_logs'
     try:
-        import_log = sorted(
-            (root / 'data' / 'import_logs').glob('*_sample_status.tsv')
-        )[-1]
+        import_log = sorted(import_log_dir.glob('*_sample_status.tsv'))[-1]
     except Exception as e:
         argp.error(f'Failed finding import log: {e.__class__.__name__}: {e}')
 
@@ -114,7 +128,7 @@ def get_sample_info_log():
 
 def get_sample_info():
     """ get sample info from filesystem """
-    base = root / 'data' / 'projects' / args.dataset / 'amplicons'
+    base = proj_dir / 'amplicons'
     absroot = root.resolve()
     if not base.is_dir():
         argp.error(f'no such directory: {base}')
@@ -132,6 +146,7 @@ def get_sample_info():
 
 
 def get_target_info_sample(sample_info):
+    """ helper for get_target_info() """
     sample_id = sample_info['sample_id']
     detect_region_dir = root / sample_info['sample_dir'] / 'detect_region'
     if not detect_region_dir.is_dir():
@@ -218,95 +233,84 @@ def get_target_info(data):
                 sample_info[key] = target_data[key]
 
 
-def find_modes(data):
-    MODE_THRESHOLD = 0.05  # bins >=5% stand on their own
-    TARGET_KEYS = ('tax_group', 'gene', 'regions')
-    targets = Counter((
-        tuple((i[k] for k in TARGET_KEYS))
-        for i in data
-    )).most_common()
-
-    modes = []
-    refuse = []
-
-    for target, count in targets:
-        target_data = [
-            i for i in data
-            if tuple((i[k] for k in TARGET_KEYS)) == target
-        ]
-        if count >= len(data) * MODE_THRESHOLD:
-            modes.append((target, target_data))
-            mark = '[mode]'
-            notice = ''
-        else:
-            if len(modes) == 1:
-                # just add these to the majority
-                modes[0][1].extend(target_data)
-                mark = ''
-                notice = ''
-            else:
-                refuse += target_data
-                mark = ''
-                notice = '    *** ambiguous target guess -- manual curation'
-        if target == ('', '', ''):
-            target = 'UNKNOWN_TARGET'
-        elif target == (NO_TARGET_INFO, NO_TARGET_INFO, NO_TARGET_INFO):
-            target = 'MISSING_TARGET_INFO'
-        else:
-            target = ' // '.join(target)
-        print(f'{mark:>6}{count:>4} x {target}{notice}')
-    return modes, refuse
-
-
 def dispatch(data):
     """
-    List the samples to be analyzed together in one dada2 run
+    Write target assignemnt file and sample file listing.
+
+    These are the two inputs, to be consumed by the dada2 pipeline script.  A
+    backup of an existing assignment file is preserved to allow to make
+    comparisons.
     """
-    if args.outdir:
-        final_outdir = Path(args.outdir)
-        if keep_outdir := final_outdir.is_dir():
-            outdir = final_outdir
-        else:
-            tmpd = TemporaryDirectory(
-                prefix=final_outdir.name + '.tmp.',
-                dir=final_outdir.parent,
-                delete=False,
-            )
-            outdir = Path(tmpd.name)
+    # 1. assign target designation
+    for sample_data in data:
+        tax_group = sample_data['tax_group']
+        gene = sample_data['gene']
+        regions = sample_data['regions']
 
-    columns = [
-        'sample_id', 'sample_dir', 'dirs_swapped', 'fwd_fastq', 'rev_fastq',
-    ]
-
-    modes, refuse = find_modes(data)
-    for (tax_group, gene, regions), data in modes:
         if tax_group == gene == regions == '':
-            target_str = 'UNKNOWN_TARGET'
+            # detection failed due to the reads not being similar enough to any
+            # of the models
+            target = 'UNKNOWN'
         elif tax_group == gene == regions == NO_TARGET_INFO:
-            target_str = 'MISSING_TARGET_INFO'
+            # detection failed for technical reasons, e.g. intermediate
+            # pipeline steps failed
+            target = 'NO_INFO'
         else:
-            target_str = f'{tax_group}-{gene}-{regions.replace(",", "-")}'
+            target = f'{tax_group}-{gene}-{regions.replace(",", "-")}'
 
-        if args.outdir:
-            outfilename = outdir / f'sample_info.{target_str}'
-            with open(outfilename, 'w') as ofile:
-                for row in data:
-                    print(*(row.get(i, '???') for i in columns),
-                          sep='\t', file=ofile)
-            print(f'{len(data)} records written to {outfilename}')
+        sample_data['target'] = target
 
-    if refuse:
-        if args.outdir:
-            outfilename = outdir / 'sample_info.UNCERTAIN_TARGETS'
-            with open(outfilename, 'w') as ofile:
-                for row in refuse:
-                    print(*(row[i] for i in columns), sep='\t', file=ofile)
-            print(f'{len(refuse)} records written to {outfilename}')
+    # 2. make backup of old file
+    if (old := Path(args.out_targets)).is_file():
+        mtime = datetime.fromtimestamp(old.stat().st_mtime).isoformat()
+        backup = old.with_name(old.name + '.' + mtime)
+        old.rename(backup)
 
-    if args.outdir:
-        if not keep_outdir:
-            # make output available atomically if all went well
-            outdir.rename(final_outdir)
+    # 3. write target assignment file
+    write_output(
+        args.out_targets,
+        data,
+        columns=['sample_id', 'target', 'override'],
+        order_by=('target', 'sample_id'),
+    )
+
+    # 4. write sample files listing
+    write_output(
+        args.out_samples,
+        data,
+        columns=[
+            'sample_id', 'swapped', 'sample_dir', 'fwd_fastq', 'rev_fastq'
+        ],
+        order_by=('sample_id',),
+    )
+
+
+def write_output(file, data, columns, order_by=None):
+    """ write an output file """
+    def sortkey(row):
+        key = []
+        if order_by is None:
+            return None
+        for item in order_by:
+            if order_by == 'sample_id':
+                try:
+                    snum = int(row['sample_id'].removeprefix('samp_'))
+                except ValueError:
+                    snum = row['sample_id']
+                key.append(snum)
+            else:
+                key.append(row[item])
+        return key
+
+    with open(file, 'w') as ofile:
+        ofile.write('\t'.join(columns))
+        ofile.write('\n')
+        for row in sorted(data, key=sortkey if order_by else None):
+            row = [row.get(i) for i in columns]
+            row = ['' if i is None else str(i) for i in row]
+            ofile.write('\t'.join(row))
+            ofile.write('\n')
+    print(f'Wrote {len(data)} records to {file}')
 
 
 # MAIN
@@ -318,4 +322,12 @@ else:
 print('Collecting amplicon target info... ', end='', flush=True)
 get_target_info(data)
 print(f'{len(data)}  [OK]')
+if args.out_details:
+    # TODO: get me more info bits from hmm summary
+    write_output(
+        args.out_details,
+        data,
+        columns=['sample_id', 'dirs_swapped', 'tax_group', 'gene', 'regions'],
+        order_by=('tax_group', 'gene', 'regions', 'sample_id'),
+    )
 dispatch(data)

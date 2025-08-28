@@ -3407,40 +3407,97 @@ def target_info_files(wc):
         ret.append(omics_base / i.name / 'detect_region' / 'target_info.txt')
     return ret
 
-
 checkpoint amplicon_dispatch:
     input:
         target_info_files
     output:
-        directory("data/projects/{dataset}/amplicon_analysis")
+        targets="data/projects/{dataset}/amplicon_target_assignments.tsv",
+        samples="data/projects/{dataset}/sample_info.tsv",
+        details="data/projects/{dataset}/target_detail_info.tsv"
+    params:
+        project_dir = subpath(output.targets, parent=True)
     shell:
         """
-        ./code/amplicon-dispatch --outdir {output} {wildcards.dataset}
+        ./code/amplicon-dispatch \
+            --out-targets {output.targets} \
+            --out-samples {output.samples} \
+            --out-details {output.details} \
+            {params.project_dir}
         """
+
+def get_target_assignments(wc):
+    return checkpoints.amplicon_dispatch.get(**wc).output.targets
+
+def get_sample_file_listing(wc):
+    return checkpoints.amplicon_dispatch.get(**wc).output.samples
 
 rule amplicon_dada2_target:
     input:
-        path = "data/projects/{dataset}/amplicon_analysis/sample_info.{target}"
+        targets=get_target_assignments,
+        samples=get_sample_file_listing
     output:
-        directory("data/projects/{dataset}/amplicon_analysis/dada2.{target}")
+        directory("data/projects/{dataset}/dada2.{target}.results")
     shell:
         """
-        ./code/ampliconTrunc.R --quality 25 --outdir {output} {input.path}
+        ./code/ampliconTrunc.R \
+            --quality 25 \
+            --outdir {output} \
+            --targets {input.targets} \
+            --samples {input.samples} \
+            {wildcards.target}
         """
 
 def dada2_output_dirs(wc):
     """
     input function: get the dada2 output directories
 
-    These are derived from the names of the dada2 job description files (made
-    by amplicon_dispatch rule) by replacing the "sample_info" prefix with "dada2"
+    Derives output directory names from the distinct target (from first column)
+    in sample listing.
+
+    This will also check for missing target assignments and may raise a
+    RuntimeError prompting to manually curate the target assignment file.
     """
-    PREFIX = 'sample_info.'
-    base = Path(checkpoints.amplicon_dispatch.get(**wc).output[0])
-    return [
-        str(base / f'dada2.{i.name.removeprefix(PREFIX)}')
-        for i in base.glob(f'{PREFIX}*')
-    ]
+    assignments = Path(checkpoints.amplicon_dispatch.get(**wc).output.targets)
+    with assignments.open() as ifile:
+        targets = set()
+        skip_count = 0
+        bad_count = 0
+        for line in ifile:
+            line = line.rstrip('\n')
+            if line.startswith('#') or not line:
+                continue
+
+            # The parsing below tolerates a bit, since the file may be manually
+            # edited, require two fields, override is an optional third field,
+            # ignore anything beyond that (could be used for a comment)
+            sample, target, *override = line.split(maxsplit=3)
+
+            if sample == 'sample_id' and target == 'target':
+                # header line
+                continue
+
+            override = override[0] if override else ''
+            target = override or target
+
+            if target == 'SKIP':
+                skip_count += 1
+                continue
+            elif target in ('UNKNOWN', 'NO_INFO'):
+                bad_count += 1
+            elif not target:
+                raise RuntimeError(f'empty target? {line=}')
+            else:
+                targets.add(target)
+
+    if bad_count:
+        raise RuntimeError(
+            f'There are {bad_count} samples that do not have an amplicon '
+            f'target assigned.  Manual curation required:\n  {assignments}'
+        )
+    if skip_count:
+        print(f'NOTE: {skip_count} samples got excluded from analysis')
+
+    return [str(assignments.parent / f'dada2.{i}.results') for i in targets]
 
 rule amplicon_pipeline_dataset:
     input:

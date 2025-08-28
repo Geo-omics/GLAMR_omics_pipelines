@@ -3,16 +3,23 @@
 'Using dada2 with amplicon sequencing data
 
 Usage:
-  amplicon_quality_with_trunc.R [--outdir <PATH>] --quality <N> <sample_listing>
+  amplicon_quality_with_trunc.R [--glamr-root <PATH>] --quality <N> --outdir <PATH> --targets <PATH> --samples <PATH> <target>
 
 The positional argument <sample_listing> is the path to a file made by the
 amplicon-dispatch script.
 
 Options:
   -h --help             Show this screen
-  --outdir=<N>          Output Directory to save the filter and trim files,
+  --outdir <PATH>       Output Directory to save the filter and trim files,
                         quality plots, seqtab.nochim, representative sequences,
                         tracking read numbers
+  --targets <PATH>      Path to amplicon target assignment listing as produced
+                        by the amplicon-dispatch script.
+  --samples <PATH>      Path to the samples and files listing as produced by
+                        the amplicon-dispatch script.
+  --glamr-root <PATH>   GLAMR root directory, certain paths read from the other
+                        input files will be interpreted as relative to this root directory
+                        [default: ./]
   -q --quality=<N>      Quality threshold
 ' -> doc
 
@@ -26,21 +33,55 @@ library(tidyr)
 library(stringr)
 library(tibble)
 
-arguments <- docopt(doc)
+args <- docopt(doc)
+
+assignments <- read.delim(
+    args$targets,
+    sep='',
+    header=TRUE,
+    col.names=c('sample_id', 'target', 'override'),
+    fill=TRUE,
+) %>% tibble() %>%
+    mutate(assigned=if_else(override == "", target, override, missing=target)) %>%
+    filter(assigned == args$target)
+
+if (nrow(assignments) == 0) {
+    stop('no samples where assigned to given target')
+}
+
 
 wide_file_list <- read.delim(
-    arguments$sample_listing,
+    args$samples,
     sep='\t',
-    header=FALSE,
-    col.names=c('sample', 'sample_dir', 'swapped', 'fwd', 'rev'),
+    header=TRUE,
+    col.names=c('sample_id', 'swapped', 'sample_dir', 'fwd', 'rev'),
 ) %>% tibble() %>%
-      mutate(filt_reads_fwd=str_glue('{arguments$outdir}/filtered/{sample}_fwd.fastq.gz')) %>%
-      mutate(filt_reads_rev=str_glue('{arguments$outdir}/filtered/{sample}_rev.fastq.gz'))
+    semi_join(assignments, by=join_by('sample_id')) %>%
+    mutate(filt_reads_fwd=str_glue('{args$outdir}/filtered/{sample_id}_fwd.fastq.gz')) %>%
+    mutate(filt_reads_rev=str_glue('{args$outdir}/filtered/{sample_id}_rev.fastq.gz')) %>%
+    # below: paste glamr_root and paths, but respect absolute paths in data,
+    # make some effort to avoid double slashes
+    mutate(sample_dir=if_else(str_starts(sample_dir, '/'),
+                              sample_dir,
+                              file.path(str_remove(args$glamr_root, '/$'), sample_dir))
+    ) %>%
+    mutate(fwd=if_else(str_starts(sample_dir, '/'),
+                              fwd,
+                              file.path(str_remove(args$glamr_root, '/$'), fwd))
+    ) %>%
+    mutate(rev=if_else(str_starts(sample_dir, '/'),
+                              rev,
+                              file.path(str_remove(args$glamr_root, '/$'), rev))
+    )
+
+if (nrow(assignments) != nrow(wide_file_list)) {
+    stop('the sample file listing is missing rows for some samples??')
+}
 
 count <- 0
 
 for (i in seq_len(nrow(wide_file_list))) {
-  sample <- wide_file_list$sample[i]
+  sample <- wide_file_list$sample_id[i]
   path <- wide_file_list$sample_dir[i]
 
   fwdScanPath <- file.path(path, "detect_region", "fwd_summary.tsv")
@@ -71,19 +112,19 @@ forwardReads <- wide_file_list$fwd
 reverseReads <- wide_file_list$rev
 
 # extract sample names
-namesOfSamples <- wide_file_list$sample
+namesOfSamples <- wide_file_list$sample_id
 
-fs::dir_create(path = arguments$outdir)
+fs::dir_create(path = args$outdir)
 
 # visualize and save quality of forward and reverse reads
 (forwardPlot <- plotQualityProfile(forwardReads[1:2]))
 plotDataFwd <- forwardPlot$data
-ggsave(filename = str_glue("{arguments$outdir}/forward_quality_plot.pdf"),
+ggsave(filename = str_glue("{args$outdir}/forward_quality_plot.pdf"),
        plot = forwardPlot, width = 5, height = 3, scale = 2)
 
 (reversePlot <- plotQualityProfile(reverseReads[1:2]))
 plotDataRev <- reversePlot$data
-ggsave(filename = str_glue("{arguments$outdir}/reverse_quality_plot.pdf"),
+ggsave(filename = str_glue("{args$outdir}/reverse_quality_plot.pdf"),
        plot = reversePlot, width = 5, height = 3, scale = 2)
 
 base_dir <- dirname(dirname(forwardReads[3]))
@@ -113,7 +154,7 @@ resultMeanRev <- plotDataRev %>%
   mutate(mean = sum(Score * Count) / sum(Count)) %>%
   slice_max(Count, with_ties = FALSE)
 
-threshold <- arguments$quality
+threshold <- args$quality
 
 # fwd_last is meant to be the location on the hmm model that the forward read ends reading
 # fwd_first is meant to be the location on the hmm model that the forward read starts reading
@@ -286,7 +327,7 @@ out <- filterAndTrim(forwardReads, filtAndTrimForward, reverseReads, filtAndTrim
 out |>
   as.data.frame() |>
   rownames_to_column("file") |>
-  write_tsv(str_glue("{arguments$outdir}/filt_and_trim.tsv"))
+  write_tsv(str_glue("{args$outdir}/filt_and_trim.tsv"))
 
 # learning errors
 errorForward <- learnErrors(filtAndTrimForward, multithread=TRUE)
@@ -294,11 +335,11 @@ errorReverse <- learnErrors(filtAndTrimReverse, multithread=TRUE)
 
 # saving errors to an rds file
 errors <- list(errorForward, errorReverse)
-write_rds(errors, str_glue("{arguments$outdir}/errors.rds"))
+write_rds(errors, str_glue("{args$outdir}/errors.rds"))
 
 # saving the forward error plot to a file
 forwardErrorPlot <- plotErrors(errorForward, nominalQ=TRUE)
-ggsave(filename = str_glue("{arguments$outdir}/forward_error_plot.pdf"),
+ggsave(filename = str_glue("{args$outdir}/forward_error_plot.pdf"),
        plot = forwardErrorPlot, width = 5, height = 3, scale = 2)
 
 # sample inference
@@ -316,13 +357,13 @@ seqtable_nochimeras <- removeBimeraDenovo(seqtable, method="consensus", multithr
 seqtable_nochimeras |>
   as.data.frame() |>
   `colnames<-`(openssl::md5(colnames(seqtable_nochimeras))) |>
-  write_tsv(str_glue("{arguments$outdir}/asv_table.tsv"))
+  write_tsv(str_glue("{args$outdir}/asv_table.tsv"))
 
 # output representative sequences to fasta
 headers <- openssl::md5(colnames(seqtable_nochimeras))
 Biostrings::DNAStringSet(colnames(seqtable_nochimeras)) |>
   `names<-`(headers) |>
-  Biostrings::writeXStringSet(str_glue("{arguments$outdir}/rep_seqs.fasta"))
+  Biostrings::writeXStringSet(str_glue("{args$outdir}/rep_seqs.fasta"))
 
 # track reads through pipelines
 getN <- function(x) sum(getUniques(x))
@@ -333,5 +374,5 @@ rownames(track) <- namesOfSamples
 # track reads saved to .tsv file
 track |>
   as.data.frame() |>
-  rownames_to_column("sample") |>
-  write_tsv(str_glue("{arguments$outdir}/track_read_counts.tsv"))
+  rownames_to_column("sample_id") |>
+  write_tsv(str_glue("{args$outdir}/track_read_counts.tsv"))
