@@ -570,6 +570,33 @@ rule remove_contaminants_fastp_no_dedup:
             2>&1 | tee -a {log}
         """
 
+rule ribodetector:
+    input:
+        decon_fwd = "data/omics/{sample_type}/{sample}/reads/noDedup_decon_fwd_reads_fastp.fastq.gz",
+        decon_rev = "data/omics/{sample_type}/{sample}/reads/noDedup_decon_rev_reads_fastp.fastq.gz"
+    output:
+        ribo_removed_fwd = "data/omics/{sample_type}/{sample}/reads/ribodeplete_noDedup_decon_fwd_reads_fastp.fastq.gz",
+        ribo_removed_rev = "data/omics/{sample_type}/{sample}/reads/ribodeplete_noDedup_decon_rev_reads_fastp.fastq.gz",
+        ribo_fwd = "data/omics/{sample_type}/{sample}/reads/ribo_only_fwd_reads_fastp.fastq.gz",
+        ribo_rev = "data/omics/{sample_type}/{sample}/reads/ribo_only_rev_reads_fastp.fastq.gz"
+    params:
+    conda: "config/conda_yaml/ribodetector.yaml"
+    log: "logs/ribodetector/{sample_type}-{sample}.log"
+    benchmark:
+        "benchmarks/ribodetector/{sample_type}-{sample}.txt"
+    resources: cpus = 24, mem_mb = 120000, time_min = 2880, gpu_mem_gb = 12, partition = "gpu", gpu = 1
+    shell:
+        """
+        ribodetector \
+            -t {resouces.cpus} \
+            -i {input.decon_fwd} {input.decon_rev} \
+            -m {resources.gpu_mem_gb} \
+            -e rrna \
+            --chunk_size 256 \
+            -r {output.ribo_fwd} {output.ribo_rev} \
+            -o {ouptput.ribo_removed_fwd} {ouptput.ribo_removed_rev} 2>&1 | tee -a {log}
+        """
+
 rule make_read_blastdb:
     input: 
         decon_fwd = "data/omics/metagenomes/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
@@ -2392,9 +2419,9 @@ rule semibin:
     conda: "config/conda_yaml/semibin.yaml"
     benchmark: "benchmarks/semibin/{sample_type}-{project}__{sample}.txt"
     log: "logs/semibin/{sample_type}-{project}__{sample}.log"
-    #resources: cpus=16, mem_mb=170000, time_min=2880, mem_gb = 50 # standard samples
+    resources: cpus=16, mem_mb=170000, time_min=2880, mem_gb = 50 # standard samples
     #resources: cpus=32, mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
-    resources: cpus=32, mem_mb=700000, time_min=2880, partition = "largemem" # coassembly on our servers
+    #resources: cpus=32, mem_mb=700000, time_min=2880, partition = "largemem" # coassembly on our servers
     priority: 3
     shell:
         r"""
@@ -2575,7 +2602,7 @@ rule checkm2:
         results = directory("data/projects/{project}/{sample_type}/{sample}/bins/checkm2")
     params:
         in_dir = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins",
-        database = "data/references/",
+        database = "data/reference/checkm2/CheckM2_database/uniref100.KO.1.dmnd",
         #out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/checkm2"
     benchmark: "benchmarks/checkm2/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/checkm2.yaml"
