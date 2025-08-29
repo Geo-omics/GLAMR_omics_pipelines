@@ -1,6 +1,6 @@
 .Rproj.user
 .Rhistory
-.RData
+*.RData
 .Ruserdata
 .snakemake
 code/MEC/
@@ -33,3 +33,14 @@ data/omics/metatranscriptomes/**
 data/reference/**
 data/sample_metadata/**
 data/environment/**
+data/projects/**
+.secrets
+micromamba/
+tmp/
+results/**
+*.dmp
+data/import_logs/**
+.DS_Store
+runplan
+ToMOVE_culture_collection_figures/**
+*.log
