@@ -3,12 +3,18 @@
 Run DADA2 on amplicon sequences of given dataset to obtain ASVs and abundance
 """
 import argparse
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from subprocess import CalledProcessError, run
 import sys
 from tempfile import TemporaryDirectory
 
+SINGLE_MODE_THRESHOLT = 0.8
+""" If there is only a single assigned target (besides UNKNOWN or NO_INFO) and
+the proportion of samples with this definite target is larger than this
+thresholt, then all samples will be automatically assigned to this (mode)
+target. """
 
 GUESS_TARGET_SCRIPT = './guess-amplicon-target'
 """ helper script, path relative to this script """
@@ -16,6 +22,11 @@ GUESS_TARGET_SCRIPT = './guess-amplicon-target'
 SUMMARIZE_HMMSCAN_SCRIPT = './summarize_hmmscan.R'
 """ helper script, path relative to this script """
 
+DEFAULT_OUT_TARGETS = 'amplicon_target_assignments.tsv'
+DEFAULT_OUT_SAMPLES = 'sample_files.tsv'
+
+UNKNOWN = 'UNKNOWN'
+NO_INFO = 'NO_INFO'
 
 argp = argparse.ArgumentParser(description=__doc__)
 argp.add_argument(
@@ -28,7 +39,10 @@ argp.add_argument(
 argp.add_argument(
     '--test-mode',
     action='store_true',
-    help='Run script in test mode.  In test mode...',
+    help='Run script in test mode.  Normally this script depends on '
+         'target_info.txt files present for each samples.  In test mode the '
+         'script will try to run the necessary machinery to (temporarily) '
+         'generate such files as needed.',
 )
 argp.add_argument(
     '--use-import-log',
@@ -40,18 +54,24 @@ argp.add_argument(
 )
 argp.add_argument(
     '--out-targets',
-    default='./amplicon_target_assignments.tsv',
-    help='Path to output sample listing file.  This is a tab-separated table '
-         'listing samples with amplicon targets and paths to raw reads.',
+    metavar='<path>',
+    default=DEFAULT_OUT_TARGETS,
+    help='Path to output sample listing file.  This will a tab-separated table'
+         ' listing samples and their amplicon targets.  The file should '
+         'normally be reviewed and amended for correctness and completeness.'
+         f'Defaults to "{DEFAULT_OUT_TARGETS}"',
 )
 argp.add_argument(
     '--out-samples',
+    metavar='<path>',
     default='./sample_files.tsv',
-    help='Path to output sample listing file.  This is a tab-separated table '
-         'listing samples with amplicon targets and paths to raw reads.',
+    help='Path to output sample listing file.  This will be a tab-separated '
+         'table listing samples with their paths to raw reads.  '
+         f'Defaults to "{DEFAULT_OUT_SAMPLES}"',
 )
 argp.add_argument(
     '--out-details',
+    metavar='<path>',
     default=None,
     help='Path to output detailed amplicon target information file.'
 )
@@ -146,7 +166,11 @@ def get_sample_info():
 
 
 def get_target_info_sample(sample_info):
-    """ helper for get_target_info() """
+    """
+    Helper for get_target_info()
+
+    Collect the target data for one sample.  Test mode is implemented here.
+    """
     sample_id = sample_info['sample_id']
     detect_region_dir = root / sample_info['sample_dir'] / 'detect_region'
     if not detect_region_dir.is_dir():
@@ -161,6 +185,7 @@ def get_target_info_sample(sample_info):
             sum_fwd = detect_region_dir / 'fwd_summary.tsv'
             sum_rev = detect_region_dir / 'rev_summary.tsv'
 
+            proc_hmm_fwd = proc_hmm_rev = None
             if not sum_fwd.is_file or not sum_rev.is_file():
                 tmpd = TemporaryDirectory()
                 tmp = Path(tmpd.name)
@@ -169,35 +194,53 @@ def get_target_info_sample(sample_info):
                 sum_fwd = tmp / 'fwd_summary.tsv'
                 sum_rev = tmp / 'rev_summary.tsv'
                 sum_script = script_dir / SUMMARIZE_HMMSCAN_SCRIPT
-                run(
+                proc_hmm_fwd = run(
                     [sum_script, '--input', hmm_fwd, '--output', sum_fwd],
                     capture_output=True,
                     check=True,
                     cwd=tmp,
                 )
-                run(
-                    [sum_script, '--input', hmm_rev, '--output', sum_fwd],
+                proc_hmm_rev = run(
+                    [sum_script, '--input', hmm_rev, '--output', sum_rev],
                     capture_output=True,
                     check=True,
                     cwd=tmp,
                 )
 
             guess_script = script_dir / GUESS_TARGET_SCRIPT
-            proc = run(
+            proc_guess = run(
                 [guess_script, str(sum_fwd), str(sum_rev)],
                 capture_output=True,
                 check=True,
                 cwd=tmp if tmpd else None,
             )
         except CalledProcessError as e:
-            print(e.stderr.decode(), file=sys.stderr)
-            print(f'{sample_info=}', file=sys.stderr)
-            argp.error(f'ERROR calling {e}')
+            msg = [f'called {e.cmd[0]} // returncode: {e.returncode}']
+            msg.append(f'  cmd line: {e.cmd}')
+            msg.append(f'  stdout:\n{e.stdout.decode()}')
+            msg.append(f'  stderr:\n{e.stderr.decode()}')
+            for i in (proc_hmm_fwd, proc_hmm_rev):
+                if i is not None:
+                    msg.append(
+                        f'Also ran {i.args[0]}: returncode: {i.returncode}'
+                    )
+                    msg.append(f'  cmd line: {i.args}')
+                    if i.returncode:
+                        msg.append(f'  stdout:\n{i.stdout.decode()}')
+                        msg.append(f'  stderr:\n{i.stderr.decode()}')
+            if tmpd:
+                msg.append(f'Temporary directory listing: {tmpd.name}')
+                for i in tmp.iterdir():
+                    msg.append(f'  {i}')
+
+            msg.append(f'{sample_info=}')
+            print('', *(f'  [EE] {i}' for i in msg), sep='\n', file=sys.stderr)
+            argp.error(f'ERROR calling external script: {e}')
         finally:
             if tmpd:
                 tmpd.cleanup()
 
-        return proc.stdout.decode()
+        return proc_guess.stdout.decode()
     else:
         try:
             return (detect_region_dir / 'target_info.txt').read_text()
@@ -206,7 +249,7 @@ def get_target_info_sample(sample_info):
 
 
 def get_target_info(data):
-    """ detect amplicon target genes and regions """
+    """ Collect and add amplicon target information to data """
 
     for sample_info in data:
         info_txt = get_target_info_sample(sample_info)
@@ -219,27 +262,35 @@ def get_target_info(data):
                 header, row, *errors = info_txt.splitlines()
             except Exception as e:
                 argp.error(
-                    f'expected two lines of target info txt: {e}'
+                    f'expected two or more lines of target info txt: {e}'
                 )
 
-            target_data = dict(zip(
-                header.rstrip('\n').split('\t'),
-                row.rstrip('\n').split('\t'),
-                strict=True,
-            ))
-            cols = ['tax_group', 'gene', 'regions', 'dirs_swapped',
-                    'got_error']
-            for key in cols:
-                sample_info[key] = target_data[key]
+            if row.startswith('#'):
+                # no hits, indicate target unknown
+                sample_info['tax_group'] = ''
+                sample_info['gene'] = ''
+                sample_info['regions'] = ''
+                sample_info['got_error'] = True
+            else:
+                items = zip(
+                    header.rstrip('\n').split('\t'),
+                    row.rstrip('\n').split('\t'),
+                    strict=True,
+                )
+                for key, value in items:
+                    sample_info[key] = value
+                if errors:
+                    # TODO: improve error reporting
+                    sample_info['got_errors'] = True
 
 
 def dispatch(data):
     """
-    Write target assignemnt file and sample file listing.
+    Write target assignment file and sample file listing.
 
-    These are the two inputs, to be consumed by the dada2 pipeline script.  A
-    backup of an existing assignment file is preserved to allow to make
-    comparisons.
+    These teo output files are meant to be consumed by the dada2 pipeline
+    script.  A backup of an existing assignment file is preserved to allow to
+    make comparisons.
     """
     # 1. assign target designation
     for sample_data in data:
@@ -250,15 +301,35 @@ def dispatch(data):
         if tax_group == gene == regions == '':
             # detection failed due to the reads not being similar enough to any
             # of the models
-            target = 'UNKNOWN'
+            target = UNKNOWN
         elif tax_group == gene == regions == NO_TARGET_INFO:
             # detection failed for technical reasons, e.g. intermediate
-            # pipeline steps failed
-            target = 'NO_INFO'
+            # pipeline steps failed or relevant data missing
+            target = NO_INFO
         else:
             target = f'{tax_group}-{gene}-{regions.replace(",", "-")}'
 
         sample_data['target'] = target
+
+    stats = Counter((i['target'] for i in data))
+    print('Target stats:',
+          *(f' {v:>4} x {k}' for k, v in sorted(stats.items())),
+          sep='\n')
+
+    # 2. single mode detection
+    real_targets = [i for i in stats if i not in (NO_INFO, UNKNOWN)]
+    if len(real_targets) == 1:
+        # single mode
+        mode = real_targets[0]
+        if stats[mode] / len(data) >= SINGLE_MODE_THRESHOLT:
+            override_count = 0
+            for sample_data in data:
+                if sample_data['target'] != mode:
+                    sample_data['override'] = mode
+                    override_count += 1
+            if override_count:
+                print(f'[NOTICE] Single target mode detected - overriding '
+                      f'{override_count} stray samples to {mode}')
 
     # 2. make backup of old file
     if (old := Path(args.out_targets)).is_file():
