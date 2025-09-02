@@ -68,6 +68,7 @@ def check_paired_end(fwd, rev):
     MIN_SCORE = 160
 
     errors = []
+    infos = []
     no_hits = False
     critical = False
 
@@ -141,7 +142,7 @@ def check_paired_end(fwd, rev):
             errors.append('bad rev coords (start must come before end)')
 
         if fwd_end < rev_sta or rev_end < fwd_sta:
-            errors.append('fwd and rev reads do not overlap')
+            infos.append('fwd and rev reads do not overlap')
 
         # detect regions
         regions = []
@@ -176,9 +177,19 @@ def check_paired_end(fwd, rev):
             overlap = 0.0
 
         if missed_via_gap:
-            errors.append(f'regions in gap: {",".join(missed_via_gap)}')
+            infos.append(f'regions in gap: {",".join(missed_via_gap)}')
             if not gap:
                 raise RuntimeError('logic bug, missing a region implies a gap')
+
+    if tax_group and gene:
+        # info below only makes sense if hits agree on the gene and tax_group
+        infos.append(f'n_seqs={data["n_seqs"]}')
+        infos.append(f'fwd_start={fwd_sta}')
+        infos.append(f'fwd_end={fwd_end}')
+        infos.append(f'rev_start={rev_sta}')
+        infos.append(f'rev_end={rev_end}')
+        infos.append(f'eval={data["e_value_median"]}')
+        infos.append(f'score={data["score_median"]}')
 
     output = {
         'tax_group': tax_group or '',
@@ -187,15 +198,17 @@ def check_paired_end(fwd, rev):
         'overlap': '' if overlap is None else f'{overlap:.2%}',
         'gap': '' if gap is None else str(gap),
         'dirs_swapped': 'swapped' if swapped else '',
-        'got_error': 'error' if errors else '',
     }
     outlines = ['\t'.join(output.keys()) + '\n']
     if critical:
-        errors.append(f'[withheld guess] {output}')
+        errors = [f'[withheld guess] {output}'] + errors
     else:
         outlines.append('\t'.join(output.values()) + '\n')
     for err in errors:
         outlines.append(f'# [ERROR] {err}\n')
+    for info in infos:
+        outlines.append(f'# [INFO] {info}\n')
+
     outtxt = ''.join(outlines)
 
     if args.output:

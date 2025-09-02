@@ -6,6 +6,7 @@ import argparse
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+import re
 from subprocess import CalledProcessError, run
 import sys
 from tempfile import TemporaryDirectory
@@ -251,6 +252,7 @@ def get_target_info_sample(sample_info):
 def get_target_info(data):
     """ Collect and add amplicon target information to data """
 
+    info_pat = re.compile(r'^# \[INFO\] (?P<key>[^=]+)=(?P<value>.*)$')
     for sample_info in data:
         info_txt = get_target_info_sample(sample_info)
         if info_txt == NO_TARGET_INFO:
@@ -258,30 +260,41 @@ def get_target_info(data):
             sample_info['gene'] = NO_TARGET_INFO
             sample_info['regions'] = NO_TARGET_INFO
         else:
+            info_txt = info_txt.splitlines()
             try:
-                header, row, *errors = info_txt.splitlines()
-            except Exception as e:
-                argp.error(
-                    f'expected two or more lines of target info txt: {e}'
-                )
+                header = info_txt[0]
+            except KeyError:
+                argp.error('target info txt is empty?')
 
-            if row.startswith('#'):
+            if info_txt[1].startswith('#'):
                 # no hits, indicate target unknown
                 sample_info['tax_group'] = ''
                 sample_info['gene'] = ''
                 sample_info['regions'] = ''
                 sample_info['got_error'] = True
+                rest = info_txt[1:]
             else:
+                # second line is row with target guess
                 items = zip(
                     header.rstrip('\n').split('\t'),
-                    row.rstrip('\n').split('\t'),
+                    info_txt[1].rstrip('\n').split('\t'),
                     strict=True,
                 )
                 for key, value in items:
                     sample_info[key] = value
-                if errors:
+                rest = info_txt[2:]
+
+            for line in rest:
+                if '[ERROR]' in line:
                     # TODO: improve error reporting
-                    sample_info['got_errors'] = True
+                    sample_info['errors'] = True
+                    break
+
+            info = {}
+            for line in rest:
+                if m := info_pat.match(line):
+                    info[m.group('key')] = m.group('value')
+            sample_info['info'] = info
 
 
 def dispatch(data):
@@ -393,12 +406,26 @@ else:
 print('Collecting amplicon target info... ', end='', flush=True)
 get_target_info(data)
 print(f'{len(data)}  [OK]')
+
+dispatch(data)
+
 if args.out_details:
     # TODO: get me more info bits from hmm summary
+    rows = []
+    cols = ['sample_id', 'error'] + [i for i in data[0]['info'].keys()]
+    extra_cols = ['tax_group', 'gene', 'regions']
+    for i in data:
+        row = i.get('info', {})
+        row['sample_id'] = i['sample_id']
+        row['errors'] = '(EE)' if i.get('errors') else ''
+
+        for k in extra_cols:
+            row[k] = i[k]
+        rows.append(row)
+
     write_output(
         args.out_details,
-        data,
-        columns=['sample_id', 'dirs_swapped', 'tax_group', 'gene', 'regions'],
+        rows,
+        columns=cols + extra_cols,
         order_by=('tax_group', 'gene', 'regions', 'sample_id'),
     )
-dispatch(data)
