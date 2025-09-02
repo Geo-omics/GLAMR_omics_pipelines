@@ -184,12 +184,18 @@ def check_paired_end(fwd, rev):
     if tax_group and gene:
         # info below only makes sense if hits agree on the gene and tax_group
         infos.append(f'n_seqs={data["n_seqs"]}')
-        infos.append(f'fwd_start={fwd_sta}')
-        infos.append(f'fwd_end={fwd_end}')
-        infos.append(f'rev_start={rev_sta}')
-        infos.append(f'rev_end={rev_end}')
-        infos.append(f'eval={data["e_value_median"]}')
-        infos.append(f'score={data["score_median"]}')
+        if swapped:
+            infos.append(f'fwd_start={rev_sta:.0f}')
+            infos.append(f'fwd_end={rev_end:.0f}')
+            infos.append(f'rev_start={fwd_sta:.0f}')
+            infos.append(f'rev_end={fwd_end:.0f}')
+        else:
+            infos.append(f'fwd_start={fwd_sta:.0f}')
+            infos.append(f'fwd_end={fwd_end:.0f}')
+            infos.append(f'rev_start={rev_sta:.0f}')
+            infos.append(f'rev_end={rev_end:.0f}')
+        infos.append(f'eval={data["e_value_median"]:.1g}')
+        infos.append(f'score={data["score_median"]:.0f}')
 
     output = {
         'tax_group': tax_group or '',

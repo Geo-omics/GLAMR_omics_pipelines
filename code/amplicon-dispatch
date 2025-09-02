@@ -259,6 +259,7 @@ def get_target_info(data):
             sample_info['tax_group'] = NO_TARGET_INFO
             sample_info['gene'] = NO_TARGET_INFO
             sample_info['regions'] = NO_TARGET_INFO
+            sample_info['info'] = {}
         else:
             info_txt = info_txt.splitlines()
             try:
@@ -412,20 +413,25 @@ dispatch(data)
 if args.out_details:
     # TODO: get me more info bits from hmm summary
     rows = []
-    cols = ['sample_id', 'error'] + [i for i in data[0]['info'].keys()]
-    extra_cols = ['tax_group', 'gene', 'regions']
+    first_cols = ['sample_id', 'errors']
+    cols = []
+    extra_cols = ['dirs_swapped', 'target']
     for i in data:
         row = i.get('info', {})
+        # auto-detect info columns
+        for k in row:
+            if k not in cols:
+                cols.append(k)
         row['sample_id'] = i['sample_id']
         row['errors'] = '(EE)' if i.get('errors') else ''
 
         for k in extra_cols:
-            row[k] = i[k]
+            row[k] = i.get(k, '')
         rows.append(row)
 
     write_output(
         args.out_details,
         rows,
-        columns=cols + extra_cols,
-        order_by=('tax_group', 'gene', 'regions', 'sample_id'),
+        columns=first_cols + cols + extra_cols,
+        order_by=('target', 'sample_id'),
     )
