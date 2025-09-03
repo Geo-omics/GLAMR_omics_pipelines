@@ -63,33 +63,44 @@ def get_summary(ifile):
 
 
 def check_paired_end(fwd, rev):
-    MIN_N_SEQS = 100
+    """
+    Check data and write to output file
+    """
+    # Thresholds.  These values are the limits where the top hmm summary pick
+    # still seems to give a good guess
+    MIN_N_SEQS = 200
     MAX_E_VAL = 1e-40
-    MIN_SCORE = 160
+    MIN_SCORE = 128
 
+    critical = []
     errors = []
     infos = []
     no_hits = False
-    critical = False
 
+    n_seqs = []
+    e_val = []
+    score = []
     for data in (fwd, rev):
         if NO_HITS in data:
-            errors.append(f'no hits: {data["direction"]}')
+            critical.append(f'no hits: {data["direction"]}')
             no_hits = True
             continue
 
+        n_seqs.append(data['n_seqs'])
+        e_val.append(data['e_value_median'])
+        score.append(data['score_median'])
+
         if data['n_seqs'] < MIN_N_SEQS:
-            errors.append(
+            critical.append(
                 f'too low: {data["direction"]}: n_seqs={data["n_seqs"]}'
             )
         if data['e_value_median'] > MAX_E_VAL:
-            critical = True
-            errors.append(
+            critical.append(
                 f'too high: {data["direction"]}: e_value_median='
                 f'{data["e_value_median"]}'
             )
         if data['score_median'] < MIN_SCORE:
-            errors.append(
+            critical.append(
                 f'too low: {data["direction"]}: score_median='
                 f'{data["score_median"]}'
             )
@@ -101,20 +112,21 @@ def check_paired_end(fwd, rev):
         overlap = None
         gap = None
         swapped = None
+        n_seqs = 0
     else:
+        n_seqs = min(n_seqs)
+        e_val = max(e_val)
+        score = min(score)
+
         # Below analysis only makes sense if we've got hits for both read
         # directions
-        if fwd['gene'] == rev['gene']:
+        if (fwd['tax_group'], fwd['gene']) == (rev['tax_group'], rev['gene']):
             gene = fwd['gene']
-        else:
-            gene = None
-            errors.append('gene disagreement')
-
-        if fwd['tax_group'] == rev['tax_group']:
             tax_group = fwd['tax_group']
         else:
+            gene = None
             tax_group = None
-            errors.append('tax_group disagreement')
+            critical.append('gene disagreement between fwd and rev')
 
         # checking seq start/end:
         fwd_is_fwd = fwd['seq_start_median'] < fwd['seq_end_median']
@@ -181,21 +193,32 @@ def check_paired_end(fwd, rev):
             if not gap:
                 raise RuntimeError('logic bug, missing a region implies a gap')
 
-    if tax_group and gene:
-        # info below only makes sense if hits agree on the gene and tax_group
-        infos.append(f'n_seqs={data["n_seqs"]}')
-        if swapped:
-            infos.append(f'fwd_start={rev_sta:.0f}')
-            infos.append(f'fwd_end={rev_end:.0f}')
-            infos.append(f'rev_start={fwd_sta:.0f}')
-            infos.append(f'rev_end={fwd_end:.0f}')
-        else:
-            infos.append(f'fwd_start={fwd_sta:.0f}')
-            infos.append(f'fwd_end={fwd_end:.0f}')
-            infos.append(f'rev_start={rev_sta:.0f}')
-            infos.append(f'rev_end={rev_end:.0f}')
-        infos.append(f'eval={data["e_value_median"]:.1g}')
-        infos.append(f'score={data["score_median"]:.0f}')
+    infos.append(f'n_seqs={n_seqs}')
+
+    if not no_hits:
+        infos.append(f'eval={e_val:.1g}')
+        infos.append(f'score={score:.0f}')
+        if tax_group and gene:
+            # info below only makes sense if hits agree on the gene and
+            # tax_group
+            if swapped:
+                infos.append(f'fwd_start={rev_sta:.0f}')
+                infos.append(f'fwd_end={rev_end:.0f}')
+                infos.append(f'rev_start={fwd_sta:.0f}')
+                infos.append(f'rev_end={fwd_end:.0f}')
+            else:
+                infos.append(f'fwd_start={fwd_sta:.0f}')
+                infos.append(f'fwd_end={fwd_end:.0f}')
+                infos.append(f'rev_start={rev_sta:.0f}')
+                infos.append(f'rev_end={rev_end:.0f}')
+        if critical:
+            if tax_group and gene:
+                infos.append(f'tax/gene={tax_group}/{gene}')
+            else:
+                infos.append(
+                    f'tax/gene={fwd["tax_group"]}/{fwd["gene"]}'
+                    f'<->{rev["tax_group"]}/{rev["gene"]}'
+                )
 
     output = {
         'tax_group': tax_group or '',
@@ -207,7 +230,7 @@ def check_paired_end(fwd, rev):
     }
     outlines = ['\t'.join(output.keys()) + '\n']
     if critical:
-        errors = [f'[withheld guess] {output}'] + errors
+        errors = critical + [f'[withheld guess] {output}'] + errors
     else:
         outlines.append('\t'.join(output.values()) + '\n')
     for err in errors:

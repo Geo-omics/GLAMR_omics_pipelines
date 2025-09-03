@@ -11,6 +11,27 @@ REGIONS = {
         'V8': (1235, 1286),
         'V9': (1427, 1457),
     },
+    # mito 16S:
+    # from set_15:
+    #       16S AR start:848
+    #       16S BR end:1474
+    ('mitochondria', '16S_rRNA'): {
+        'AR_BR': (840, 1480),
+    },
+    ('archaea', '16S_rRNA'): ('bacteria', '16S_rRNA'),  # TODO
+    ('eukaryote', '18S_rRNA'): {
+        # adapted from glamr_data_management repository
+        # per lit. F04/R22 cover V1-V2
+        # FIXME
+        'V1': (40, 199),  # SSU_F04 starts at 30, end uncertain
+        'V2': (200, 420),  # start uncertain, SSU_R22 ends at 435
+        'V3': (500, 699),  # start < 600
+        'V4': (700, 899),  # start < 800
+        'V5': (1000, 1199),  # start < 1100
+        'V6': (1300, 1399),  # start < 1350
+        'V7': (1400, 1599),  # start < 1500
+        'V8': (1600, 1699),  # start < 1650
+    },
 }
 
 
