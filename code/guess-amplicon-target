@@ -4,7 +4,7 @@ Guess the amplicon target based on summaries of hmmscan
 """
 import argparse
 
-from amplicon_regions import coordinates
+from amplicon_regions import models
 
 
 # read directions
@@ -18,15 +18,15 @@ argp.add_argument(
     nargs='+',
     type=argparse.FileType(),
     help='One or more paths to summarized nhmmscan results, as made by the '
-         'summarize_nhscan script.  For paired-end sequencing two files should'
-         'be provided, the first being for the forward reads and the second '
-         'for the reverse reads.',
+         'amplicon_hmm_summarize script.  For paired-end sequencing two files '
+         'should be provided, the first being for the forward reads and the '
+         'second for the reverse reads.',
 )
 argp.add_argument(
     '--stats',
     type=argparse.FileType(),
-    help='fastq statistics file as made with seqkit stats from original fastq '
-         'files',
+    help='fastq statistics file as made with "seqkit stats -a" from raw '
+         'fastq files',
 )
 argp.add_argument(
     '--output',
@@ -103,10 +103,9 @@ def check_paired_end(fwd, rev):
     # Thresholds.  These values are the limits where the top hmm summary pick
     # still seems to give a good guess
     MIN_N_SEQS = 200
-    MAX_E_VAL = 1e-40
-    MIN_SCORE = 128
+    MAX_E_VAL = 1e-27
+    MIN_SCORE = 105
 
-    critical = []
     errors = []
     infos = []
     no_hits = False
@@ -114,9 +113,11 @@ def check_paired_end(fwd, rev):
     n_seqs = []
     e_val = []
     score = []
+
     for data in (fwd, rev):
+        print(f'BORK {data=}')
         if NO_HITS in data:
-            critical.append(f'no hits: {data["direction"]}')
+            errors.append(f'no hits: {data["direction"]}')
             no_hits = True
             continue
 
@@ -125,23 +126,22 @@ def check_paired_end(fwd, rev):
         score.append(data['score_median'])
 
         if data['n_seqs'] < MIN_N_SEQS:
-            critical.append(
+            errors.append(
                 f'too low: {data["direction"]}: n_seqs={data["n_seqs"]}'
             )
         if data['e_value_median'] > MAX_E_VAL:
-            critical.append(
+            errors.append(
                 f'too high: {data["direction"]}: e_value_median='
                 f'{data["e_value_median"]}'
             )
         if data['score_median'] < MIN_SCORE:
-            critical.append(
+            errors.append(
                 f'too low: {data["direction"]}: score_median='
                 f'{data["score_median"]}'
             )
 
     if no_hits:
-        tax_group = None
-        gene = None
+        hmm_model = None
         regions = []
         overlap = None
         gap = None
@@ -154,13 +154,15 @@ def check_paired_end(fwd, rev):
 
         # Below analysis only makes sense if we've got hits for both read
         # directions
-        if (fwd['tax_group'], fwd['gene']) == (rev['tax_group'], rev['gene']):
-            gene = fwd['gene']
-            tax_group = fwd['tax_group']
+        if fwd['hmm_model'] == rev['hmm_model']:
+            try:
+                hmm_model = models[fwd['hmm_model']]
+            except KeyError as e:
+                argp.error(f'unknown hmm model: {e}')
         else:
-            gene = None
-            tax_group = None
-            critical.append('gene disagreement between fwd and rev')
+            hmm_model = None
+            errors.append(f'hmm_model mismatch: fwd: {fwd["hmm_model"]}')
+            errors.append(f'hmm_model mismatch: rev: {rev["hmm_model"]}')
 
         # checking seq start/end:
         fwd_is_fwd = fwd['seq_start_median'] < fwd['seq_end_median']
@@ -191,26 +193,7 @@ def check_paired_end(fwd, rev):
             infos.append('fwd and rev reads do not overlap')
 
         # detect regions
-        regions = []
-        missed_via_gap = []
-        in_gap_temp = []
-        region_data = coordinates.get((tax_group, gene), {})
-        for region, (start, end) in region_data.items():
-            fwd_miss = fwd_end < start or end < fwd_sta
-            rev_miss = rev_end < start or end < rev_sta
-            if fwd_miss and rev_miss:
-                # total miss
-                if regions:
-                    in_gap_temp.append(region)
-                pass
-            else:
-                if in_gap_temp:
-                    regions += in_gap_temp
-                    missed_via_gap += in_gap_temp
-                    in_gap_temp = []
-
-                # counting any sort of overlap as hitting the region
-                regions.append(region)
+        regions = hmm_model.get_regions(fwd_sta, rev_end)
 
         # calculate overlap/gap
         single_cov = (min(fwd_sta, rev_sta), max(fwd_end, rev_end))
@@ -222,19 +205,20 @@ def check_paired_end(fwd, rev):
             gap = both_cov[0] - both_cov[1]
             overlap = 0.0
 
-        if missed_via_gap:
-            infos.append(f'regions in gap: {",".join(missed_via_gap)}')
-            if not gap:
-                raise RuntimeError('logic bug, missing a region implies a gap')
+        # check for primer content
+        fwd_primers, rev_primers = hmm_model.contains_primers(fwd_sta, rev_end)
+        if fwd_primers:
+            infos.append(f'fwd_primers={fwd_primers}')
+        if rev_primers:
+            infos.append(f'rev_primers={rev_primers}')
 
     infos.append(f'n_seqs={n_seqs}')
 
     if not no_hits:
         infos.append(f'eval={e_val:.1g}')
         infos.append(f'score={score:.0f}')
-        if tax_group and gene:
-            # info below only makes sense if hits agree on the gene and
-            # tax_group
+        if hmm_model is not None:
+            # info below only makes sense if hits agree on hmm model
             if swapped:
                 infos.append(f'fwd_start={rev_sta:.0f}')
                 infos.append(f'fwd_end={rev_end:.0f}')
@@ -245,26 +229,17 @@ def check_paired_end(fwd, rev):
                 infos.append(f'fwd_end={fwd_end:.0f}')
                 infos.append(f'rev_start={rev_sta:.0f}')
                 infos.append(f'rev_end={rev_end:.0f}')
-        if critical:
-            if tax_group and gene:
-                infos.append(f'tax/gene={tax_group}/{gene}')
-            else:
-                infos.append(
-                    f'tax/gene={fwd["tax_group"]}/{fwd["gene"]}'
-                    f'<->{rev["tax_group"]}/{rev["gene"]}'
-                )
 
     output = {
-        'tax_group': tax_group or '',
-        'gene': gene or '',
+        'hmm_model': 'no_hit' if hmm_model is None else hmm_model.name,
         'regions': ','.join(regions),
         'overlap': '' if overlap is None else f'{overlap:.2%}',
         'gap': '' if gap is None else str(gap),
         'dirs_swapped': 'swapped' if swapped else '',
     }
     outlines = ['\t'.join(output.keys()) + '\n']
-    if critical:
-        errors = critical + [f'[withheld guess] {output}'] + errors
+    if errors:
+        errors = [f'[withheld guess] {output}'] + errors
     else:
         outlines.append('\t'.join(output.values()) + '\n')
     for err in errors:
