@@ -6,6 +6,9 @@ class HMM:
         if not name:
             raise ValueError('name must be supplied')
 
+        if not isinstance(name, str):
+            raise TypeError('name must be a str')
+
         self.name = name
         if regions is None:
             regions = {}
