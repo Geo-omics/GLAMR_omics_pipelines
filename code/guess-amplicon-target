@@ -23,6 +23,12 @@ argp.add_argument(
          'for the reverse reads.',
 )
 argp.add_argument(
+    '--stats',
+    type=argparse.FileType(),
+    help='fastq statistics file as made with seqkit stats from original fastq '
+         'files',
+)
+argp.add_argument(
     '--output',
     help='Path to output file.  If missing, then output will be printed to '
          'stdout',
@@ -60,6 +66,34 @@ def get_summary(ifile):
                 argp.error(f'failed parsing: {e} {line=}')
         row[colname] = value
     return row
+
+
+def get_lengths(stats_file):
+    """
+    Get length from stats file
+
+    Assume first row is forward data and second row reverse.  Get the
+    max_length as nominal read length.
+    """
+    try:
+        header, fwdline, revline = (line.rstrip('\n') for line in stats_file)
+    except Exception as e:
+        argp.error(
+            f'Failed reading/parsing stats file: {e.__class__.__name__}: {e}'
+        )
+    try:
+        colidx = header.split('\t').index('max_len')
+    except ValueError:
+        argp.error('failed parsing header')
+
+    try:
+        fwdlen = int(fwdline.split('\t')[colidx])
+        revlen = int(revline.split('\t')[colidx])
+    except Exception as e:
+        argp.error(
+            f'Failed parsing length data: {e.__class__.__name__}: {e}'
+        )
+    return fwdlen, revlen
 
 
 def check_paired_end(fwd, rev):
@@ -257,6 +291,7 @@ else:
     argp.error('expecting two input files.  Processing single-end sequencing '
                'data is not implemented.')
 
+fwd_data['seq_len'], rev_data['seq_len'] = get_lengths(args.stats)
 
 # Part 2 -- checks and balances
 check_paired_end(fwd_data, rev_data)

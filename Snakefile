@@ -3443,13 +3443,28 @@ rule amplicon_hmm:
         """
         mkdir -p $(dirname {output.hmm_tbl_fwd})
 
-        seqkit head -n 1000 {input.fastq_fwd} | 
-            seqkit fq2fa | 
+        seqkit head -n 1000 {input.fastq_fwd} |
+            seqkit fq2fa |
             nhmmscan --cpu {resources.cpus} --tblout {output.hmm_tbl_fwd} {params.amplicon_hmm_db} - > {output.full_out_fwd} &&
         
-        seqkit head -n 1000 {input.fastq_rev} | 
-            seqkit fq2fa | 
+        seqkit head -n 1000 {input.fastq_rev} |
+            seqkit fq2fa |
             nhmmscan --cpu {resources.cpus} --tblout {output.hmm_tbl_rev} {params.amplicon_hmm_db} - > {output.full_out_rev}
+        """
+
+rule amplicon_stats:
+    input:
+        fastq_fwd = rules.amplicon_hmm.input.fastq_fwd,
+        fastq_rev = rules.amplicon_hmm.input.fastq_rev
+    output:
+        stats = "data/omics/{sample_type}/{sample}/detect_region/stats.csv"
+    resources: cpus=1, mem_mb=1000, time_min=10
+    benchmark: "benchmarks/amplicon_stats/{sample_type}_{sample}.txt"
+    log: "logs/amplicon_stats/{sample_type}_{sample}.log"
+    container: "docker://eandersk/r_microbiome"
+    shell:
+        """
+        seqkit stats -T {input.fastq_fwd} {input.fastq_rev} > {output.stats}
         """
 
 rule amplicon_hmm_summarize:
@@ -3472,7 +3487,8 @@ rule amplicon_hmm_summarize:
 rule amplicon_guess_target:
     input:
         hmm_tbl_summary_fwd = "data/omics/{sample_type}/{sample}/detect_region/fwd_summary.tsv",
-        hmm_tbl_summary_rev = "data/omics/{sample_type}/{sample}/detect_region/rev_summary.tsv"
+        hmm_tbl_summary_rev = "data/omics/{sample_type}/{sample}/detect_region/rev_summary.tsv",
+        stats = rules.amplicon_stats.output.stats
     output:
         target_info = "data/omics/{sample_type}/{sample}/detect_region/target_info.txt"
     resources: cpus=1, mem_mb=100, time_min=1
@@ -3480,7 +3496,7 @@ rule amplicon_guess_target:
     container: "docker://eandersk/r_microbiome"
     shell:
         """
-        ./code/guess-amplicon-target  --output {output.target_info} {input.hmm_tbl_summary_fwd} {input.hmm_tbl_summary_rev}
+        ./code/guess-amplicon-target  --output {output.target_info} --stats {input.stats} {input.hmm_tbl_summary_fwd} {input.hmm_tbl_summary_rev}
         """
 
 def target_info_files(wc):
