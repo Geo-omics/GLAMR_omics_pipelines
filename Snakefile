@@ -3464,19 +3464,19 @@ rule amplicon_stats:
     container: "docker://eandersk/r_microbiome"
     shell:
         """
-        seqkit stats -T {input.fastq_fwd} {input.fastq_rev} > {output.stats}
+        seqkit stats -a -T {input.fastq_fwd} {input.fastq_rev} > {output.stats}
         """
 
-rule amplicon_hmm_summarize:
+rule amplicon_hmm_summarize_a:
     input:
-        hmm_tbl_fwd = "data/omics/{sample_type}/{sample}/detect_region/fwd.txt",
-        hmm_tbl_rev = "data/omics/{sample_type}/{sample}/detect_region/rev.txt"
+        hmm_tbl_fwd = rules.amplicon_hmm.output.hmm_tbl_fwd,
+        hmm_tbl_rev = rules.amplicon_hmm.output.hmm_tbl_rev,
     output:
         hmm_tbl_summary_fwd = "data/omics/{sample_type}/{sample}/detect_region/fwd_summary.tsv",
         hmm_tbl_summary_rev = "data/omics/{sample_type}/{sample}/detect_region/rev_summary.tsv"
     resources: cpus=1, mem_mb=10000, time_min=500
-    benchmark: "benchmarks/amplicon_hmm_summarize/{sample_type}_{sample}.txt"
-    log: "logs/amplicon_hmm_summarize/{sample_type}_{sample}.log"
+    benchmark: "benchmarks/amplicon_hmm_summarize_a/{sample_type}_{sample}.txt"
+    log: "logs/amplicon_hmm_summarize_a/{sample_type}_{sample}.log"
     container: "docker://eandersk/r_microbiome"
     shell:
         """
@@ -3484,19 +3484,40 @@ rule amplicon_hmm_summarize:
         ./code/summarize_hmmscan.R --input {input.hmm_tbl_rev} --output {output.hmm_tbl_summary_rev}
         """
 
+rule amplicon_hmm_summarize_b:
+    input:
+        hmm_tbl_fwd = rules.amplicon_hmm.output.hmm_tbl_fwd,
+        hmm_tbl_rev = rules.amplicon_hmm.output.hmm_tbl_rev,
+    output:
+        hmm_tbl_summary_fwd = "data/omics/{sample_type}/{sample}/detect_region/fwd_summary.txt",
+        hmm_tbl_summary_rev = "data/omics/{sample_type}/{sample}/detect_region/rev_summary.txt"
+    resources: cpus=1, mem_mb=100, time_min=1
+    benchmark: "benchmarks/amplicon_hmm_summarize_b/{sample_type}_{sample}.txt"
+    log: "logs/amplicon_hmm_summarize_b/{sample_type}_{sample}.log"
+    shell:
+        """
+        ./code/amplicon-hmm-summarize {input.hmm_tbl_fwd} > {output.hmm_tbl_summary_fwd}
+        ./code/amplicon-hmm-summarize {input.hmm_tbl_rev} > {output.hmm_tbl_summary_rev}
+        """
+
 rule amplicon_guess_target:
     input:
-        hmm_tbl_summary_fwd = "data/omics/{sample_type}/{sample}/detect_region/fwd_summary.tsv",
-        hmm_tbl_summary_rev = "data/omics/{sample_type}/{sample}/detect_region/rev_summary.tsv",
+        hmm_tbl_summary_fwd = rules.amplicon_hmm_summarize_b.output.hmm_tbl_summary_fwd,
+        hmm_tbl_summary_rev = rules.amplicon_hmm_summarize_b.output.hmm_tbl_summary_rev,
         stats = rules.amplicon_stats.output.stats
     output:
         target_info = "data/omics/{sample_type}/{sample}/detect_region/target_info.txt"
     resources: cpus=1, mem_mb=100, time_min=1
     benchmark: "benchmarks/amplicon_guess_target/{sample_type}_{sample}.txt"
+    log: "logs/amplicon_guess_target/{sample_type}_{sample}.log"
     container: "docker://eandersk/r_microbiome"
     shell:
         """
-        ./code/guess-amplicon-target  --output {output.target_info} --stats {input.stats} {input.hmm_tbl_summary_fwd} {input.hmm_tbl_summary_rev}
+        PYTHONPATH=code python -m amplicon.guess_target \
+            --stats {input.stats} \
+            {input.hmm_tbl_summary_fwd} \
+            {input.hmm_tbl_summary_rev} \
+            > {output.target_info}
         """
 
 def target_info_files(wc):
@@ -3512,22 +3533,34 @@ def target_info_files(wc):
         ret.append(omics_base / i.name / 'detect_region' / 'target_info.txt')
     return ret
 
-checkpoint amplicon_dispatch:
+rule amplicon_collect_target_guesses:
     input:
         target_info_files
     output:
+        target_tab="data/projects/{dataset}/target_info.tsv"
+    params:
+        project_dir = subpath(output.target_tab, parent=True)
+    shell:
+        """
+        export PYTHONPATH=code
+        python3 -m amplicon.tabulate_targets {params.project_dir} > {output.target_tab}
+        """
+
+checkpoint amplicon_dispatch:
+    input:
+        rules.amplicon_collect_target_guesses.output
+    output:
         targets="data/projects/{dataset}/amplicon_target_assignments.tsv",
-        samples="data/projects/{dataset}/sample_info.tsv",
-        details="data/projects/{dataset}/target_detail_info.tsv"
+        samples="data/projects/{dataset}/amplicon_sample_info.tsv",
     params:
         project_dir = subpath(output.targets, parent=True)
     shell:
         """
-        ./code/amplicon-dispatch \
+        PYTHONPATH=code python -m amplicon.dispatch \
             --out-targets {output.targets} \
             --out-samples {output.samples} \
-            --out-details {output.details} \
-            {params.project_dir}
+            {params.project_dir} \
+            {input}
         """
 
 def get_target_assignments(wc):
