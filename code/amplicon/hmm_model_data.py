@@ -18,8 +18,10 @@ HMM_MODEL_DATA = {
             'fwd': {
                 '515F': (505, 523),
                 '357F': (338, 354),
+                # '341F': (?, ?)
             },
             'rev': {
+                '806R': (777, 796),
                 '926R': (899, 916),
             },
         },
@@ -33,6 +35,14 @@ HMM_MODEL_DATA = {
         'regions': {
             'AR_BR': (840, 1480),
         },
+        'primers': {
+            'fwd': {
+                '16Sar': (848, 867),
+            },
+            'rev': {
+                '16Sbr-H': (1453, 1474),
+            },
+        },
     },
     '16S_rRNA_arc': {
         'length': 1477,
@@ -42,8 +52,8 @@ HMM_MODEL_DATA = {
             # adapted from glamr_data_management repository
             # per lit. F04/R22 cover V1-V2
             # FIXME
-            'V1': (40, 199),  # SSU_F04 starts at 30, end uncertain
-            'V2': (200, 420),  # start uncertain, SSU_R22 ends at 435
+            'V1': (51, 199),  # SSU_F04 starts at 30, end uncertain
+            'V2': (200, 416),  # start uncertain, SSU_R22 ends at 435
             'V3': (500, 699),  # start < 600
             'V4': (700, 899),  # start < 800
             'V5': (1000, 1199),  # start < 1100
@@ -51,9 +61,25 @@ HMM_MODEL_DATA = {
             'V7': (1400, 1599),  # start < 1500
             'V8': (1600, 1699),  # start < 1650
         },
+        'primers': {
+            'fwd': {
+                'SSU_F04': (30, 50),
+            },
+            'rev': {
+                'SSU_R22': (417, 435),
+            },
+        },
         'length': 1851,
     },
     '12S_rRNA_mito': {
         'length': 947,
     },
+    '23S_rRNA_bac': {'length': 2906},
+    '23S_rRNA_arc': {'length': 2978},
+    '28S_rRNA_euk': {'length': 3729},
+    '5S_rRNA_arc': {},
+    '5_8S_rRNA_arc': {},
+    '5S_rRNA_bac': {},
+    '5S_rRNA_euk': {},
+    '5_8S_rRNA_euk': {},
 }
