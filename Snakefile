@@ -6,6 +6,9 @@ from glob import glob
 import pandas as pd
 import time
 
+from code.amplicon import dispatch
+
+
 configfile: "config.yaml"
 report: "code/report/workflow.rst"
 
@@ -3533,7 +3536,7 @@ def target_info_files(wc):
         ret.append(omics_base / i.name / 'detect_region' / 'target_info.txt')
     return ret
 
-rule amplicon_collect_target_guesses:
+checkpoint amplicon_collect_target_guesses:
     input:
         target_info_files
     output:
@@ -3564,9 +3567,16 @@ rule remove_primers_pe:
             > {params.reads_dir}/primer_trimming.log
         """
 
+def get_target_tab(wc):
+    return checkpoints.amplicon_collect_target_guesses.get(**wc).output.target_tab
+
+def get_dataset_fastq_files(wc):
+    return dispatch.get_fastq_files(get_target_tab(wc), **wc)
+
 checkpoint amplicon_dispatch:
     input:
-        rules.amplicon_collect_target_guesses.output
+        get_dataset_fastq_files,
+        target_tab=get_target_tab,
     output:
         targets="data/projects/{dataset}/amplicon_target_assignments.tsv",
         samples="data/projects/{dataset}/amplicon_sample_info.tsv",
@@ -3578,7 +3588,7 @@ checkpoint amplicon_dispatch:
             --out-targets {output.targets} \
             --out-samples {output.samples} \
             {params.project_dir} \
-            {input}
+            {input.target_tab}
         """
 
 def get_target_assignments(wc):

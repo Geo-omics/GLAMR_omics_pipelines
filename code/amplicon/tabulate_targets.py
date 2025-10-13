@@ -38,11 +38,18 @@ def main():
 
 
 def collect_target_data(project_dir, test_dir=None):
+    """
+    Collect data from target_info files under project directory
+    """
     data = []
     for i in (project_dir / 'amplicons').iterdir():
         if not i.is_dir():
             continue
 
+        if i.is_symlink() and i.name != i.resolve().name:
+            # TODO / FIXME - meant for dev/testing only
+            # interpret this as skip / do not process sample
+            continue
         sample_id = i.name
         if test_dir:
             test_file_glob = TEST_FILE_PATTERN.format(sample_id=sample_id)

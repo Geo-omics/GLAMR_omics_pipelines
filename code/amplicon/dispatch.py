@@ -64,7 +64,8 @@ def main():
         argp.error('no data in input file?')
     write_assignments(data, args.out_targets)
     write_sample_info(
-        data, args.project_directory, args.out_samples, force=args.force,
+        get_sample_info(data, args.project_directory, force=args.force),
+        args.out_samples,
     )
 
 
@@ -149,49 +150,100 @@ def write_assignments(data, output_file):
     print('[Done]')
 
 
-def write_sample_info(data, project_dir, output_file, force=False):
+def get_sample_info(data, project_dir, force=False):
     """
-    Write the sample info outout file
-
-    This should raise exceptions if any of the paths of fastq files do not
-    exist.
+    Compile the sample info from the data
     """
     project_dir = Path(project_dir)
     # paths as written to output will be relative to the data root
     glamr_root = project_dir.parent.parent.parent
-    outrows = []
+    info = []
     for inrow in data:
         swapped = bool(inrow['swapped'])
-        fwd_p_cont, _, rev_p_cont = inrow['primer_content'].partition('/')
+        if inrow['primer_content']:
+            fwd_p_cont, _, rev_p_cont = inrow['primer_content'].partition('/')
+            if fwd_p_cont not in ['YES', 'no']:
+                raise ValueError(
+                    f'unexpected fwd primer content value: "{fwd_p_cont}"'
+                )
+            if rev_p_cont not in ['YES', 'no']:
+                raise ValueError(
+                    f'unexpected rev primer content value: "{rev_p_cont}"'
+                )
+        else:
+            assert bool(inrow['errors']) is True, 'unknown primer content should imply error, not?'  # noqa:E501
+            fwd_p_cont = rev_p_cont = None
 
-        sample_dir = project_dir / 'amplicons' / inrow['sample_id']
-        sample_dir = sample_dir.resolve().relative_to(glamr_root.resolve())
-        fwd_fq = sample_dir / 'reads' / 'raw_fwd_reads.fastq.gz'
-        rev_fq = sample_dir / 'reads' / 'raw_rev_reads.fastq.gz'
+        samp_dir = project_dir / 'amplicons' / inrow['sample_id']
+        samp_dir = samp_dir.resolve().relative_to(glamr_root.resolve())
+
+        if swapped:
+            # "Fix" the swap
+            fwd_infix = 'rev'
+            rev_infix = 'fwd'
+        else:
+            # keep as-is
+            fwd_infix = 'fwd'
+            rev_infix = 'rev'
+
+        if fwd_p_cont == 'YES':
+            fwd_fq = samp_dir / 'reads' / f'nopr.{fwd_infix}_reads.fastq.gz'
+        else:
+            fwd_fq = samp_dir / 'reads' / f'raw_{fwd_infix}_reads.fastq.gz'
+
+        if rev_p_cont == 'YES':
+            rev_fq = samp_dir / 'reads' / f'nopr.{rev_infix}_reads.fastq.gz'
+        else:
+            rev_fq = samp_dir / 'reads' / f'raw_{rev_infix}_reads.fastq.gz'
+
         if not (glamr_root / fwd_fq).is_file():
             if not force:
                 raise FileNotFoundError(f'no such fastq file: {fwd_fq}')
         if not (glamr_root / rev_fq).is_file():
             if not force:
                 raise FileNotFoundError(f'no such fastq file: {rev_fq}')
-        outrows.append({
+        info.append({
             'sample_id': inrow['sample_id'],
-            'sample_dir': sample_dir,
+            'sample_dir': samp_dir,
             'fwd_primer_content': fwd_p_cont,
             'rev_primer_content': rev_p_cont,
-            'fwd_fastq': rev_fq if swapped else fwd_fq,
-            'rev_fastq': fwd_fq if swapped else rev_fq,
+            'fwd_fastq': fwd_fq,
+            'rev_fastq': rev_fq,
         })
+    return info
 
+
+def write_sample_info(rows, output_file):
+    """
+    Write the sample info outout file
+
+    This should raise exceptions if any of the paths of fastq files do not
+    exist.
+    """
     print(f'Writing {output_file} ... ', end='', flush=True)
     with open(output_file, 'w') as ofile:
-        cols = list(outrows[0].keys())
+        cols = list(rows[0].keys())
         header = '\t'.join(cols) + '\n'
         ofile.write(header)
-        for row in outrows:
+        for row in rows:
             ofile.write('\t'.join(str(row[i]) for i in cols))
             ofile.write('\n')
     print('[Done]')
+
+
+def get_fastq_files(path_template, dataset=None):
+    """
+    Return list of all fastq files -- helper for some Snakemake input function
+
+    The path_template must accept "dataset" formatting.
+    """
+    targets_tab = Path(path_template.format(dataset=dataset))
+    data = read_input(targets_tab)
+    files = []
+    for row in get_sample_info(data, targets_tab.parent, force=True):
+        files.append(row['fwd_fastq'])
+        files.append(row['rev_fastq'])
+    return files
 
 
 if __name__ == '__main__':
