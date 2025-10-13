@@ -3546,6 +3546,24 @@ rule amplicon_collect_target_guesses:
         python3 -m amplicon.tabulate_targets {params.project_dir} > {output.target_tab}
         """
 
+rule remove_primers_pe:
+    input:
+        target_info=rules.amplicon_guess_target.output.target_info,
+        fwd=rules.get_reads.output.fwd_reads,
+        rev=rules.get_reads.output.rev_reads,
+    output:
+        fwd="data/omics/{sample_type}/{sample}/reads/nopr.fwd_reads.fastq.gz",
+        rev="data/omics/{sample_type}/{sample}/reads/nopr.rev_reads.fastq.gz",
+    params:
+        reads_dir = subpath(output.fwd, parent=True)
+    shell:
+        """
+        PYTHONPATH=code python -m amplicon.remove_primers \
+            --fwd-out {output.fwd} --rev-out {output.rev} \
+            -- {input.target_info} {input.fwd} {input.rev} \
+            > {params.reads_dir}/primer_trimming.log
+        """
+
 checkpoint amplicon_dispatch:
     input:
         rules.amplicon_collect_target_guesses.output
