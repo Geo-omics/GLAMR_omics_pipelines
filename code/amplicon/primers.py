@@ -2,9 +2,11 @@
 Primer handling module
 """
 import argparse
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import json
 from pathlib import Path
 from subprocess import Popen, PIPE
+from typing import ClassVar
 
 from .hmm import HMM
 
@@ -15,10 +17,15 @@ DEFAULT_AMPLICON_HMM_DB = '../data/reference/hmm_amplicons/combined.hmm'
 def main():
     argp = argparse.ArgumentParser(description=__doc__)
     subp = argp.add_subparsers(dest='command', required=True)
-    printp = subp.add_parser(
+    subp.add_parser(
         'print',
-        help='Parse and print content of the googlel. primer sheet',
+        help='Parse and print content of the google primer sheet',
     )
+    updatep = subp.add_parser(
+        'update',
+        help='Write an updated primer_data.py file',
+    )
+    updatep.add_argument('--out-json', help='Json output file')
     locp = subp.add_parser(
         'locate',
         help='Run nhmmscan against combined HMM database to locate the primers'
@@ -28,16 +35,27 @@ def main():
         default=DEFAULT_AMPLICON_HMM_DB,
         help='Path to the combined HMMR model database',
     )
-    argp.add_argument(
-        'google_primer_sheet',
+    exgrp = argp.add_mutually_exclusive_group()
+    exgrp.add_argument(
+        '--sheet',
         help='The primer google sheet, saved as tsv',
+    )
+    exgrp.add_argument(
+        '--json',
+        help='Primers encoded as json, as made by the update command',
     )
     args = argp.parse_args()
 
-    primers = read_google_sheet(args.google_primer_sheet)
+    if args.sheet:
+        primers = read_google_sheet(args.sheet)
+    else:
+        primers = Primer.load(args.json)
+
     match args.command:
         case 'print':
             print(*primers, sep='\n')
+        case 'update':
+            update_json(primers)
         case 'locate':
             locate_sequences(primers, db=args.hmm_db)
 
@@ -54,6 +72,9 @@ class Primer:
     end: int
     region: str
 
+    FWD: ClassVar = 'forward'
+    REV: ClassVar = 'reverse'
+
     def __post_init__(self):
         if self.sequence:
             if not self.sequence.isupper():
@@ -64,9 +85,9 @@ class Primer:
                 raise ValueError('sequence must be ascii only')
 
     def __str__(self):
-        if self.direction == 'forward':
+        if self.direction == self.FWD:
             direc = '[fwd]'
-        elif self.direction == 'reverse':
+        elif self.direction == self.REV:
             direc = '[rev]'
         else:
             direc = '<?>'
@@ -87,6 +108,13 @@ class Primer:
             loc += f' ({self.region})'
 
         return f'{self.name} {direc}{loc}'
+
+    @classmethod
+    def load(cls, path=None):
+        if path is None:
+            path = Path(__file__).parent / 'primers.json'
+        with open(path) as ifile:
+            return [Primer(**kw) for kw in json.load(ifile)]
 
 
 def read_google_sheet(file_name):
@@ -147,6 +175,15 @@ def read_google_sheet(file_name):
 
     print(f'read {len(primers)} primer records')
     return primers
+
+
+def update_json(primers):
+    data = [asdict(i) for i in primers]
+    output_file = 'primers.json'
+    print(f'Writing to {output_file} ... ', end='', flush=True)
+    with open(output_file, 'w') as ofile:
+        ofile.write(json.dumps(data, indent=4))
+    print('[Done]')
 
 
 def locate_sequences(primers, db=DEFAULT_AMPLICON_HMM_DB):
