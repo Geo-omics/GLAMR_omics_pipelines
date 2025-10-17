@@ -159,13 +159,54 @@ rule get_reads_paired:
         fi
         """
 
+rule get_reads_single:
+    input:
+        runinfo = rules.get_reads.output.runinfo,
+        download_dir = rules.get_reads.output.download_dir,
+    output:
+        single_reads = "data/omics/{sample_type}/{sample}/reads/raw_single_reads.fastq.gz",
+    params:
+        read_dir = subpath(input.runinfo, parent=True),
+        srr_accession = parse_input(input.runinfo, parse_runinfo, key='run'),
+    log: "logs/get_reads_paired/{sample_type}-{sample}.log"
+    resources: time_min = 5, heavy_network = 0, cpus = 1
+    shell:
+        """
+        . code/shell_prelude {log}
 
+        fwd_base={input.download_dir}/{params.srr_accession}.fastq
+        fwd_gz=$fwd_base.gz
+
+        if [[ -e "$fwd_gz" ]]; then
+            mv -- "$fwd_gz" "{output.single_reads}"
+        elif [[ -e "$fwd_base" ]]; then
+            echo "[NOTICE] Got uncompressed file, compressing..."
+            gzip -c -1 "$fwd_base" > "{output.single_reads}"
+        else
+            echo "[ERROR] expected download file not found in {input.download_dir}"
             exit 1
         fi
+        """
+
+def get_raw_reads_files(wc):
+    """
+    Input function to get the raw reads files
+
+    Wildcards need to contain sample_type and sample
+    """
+    runinfo = checkpoints.get_reads.get(**wc).output.runinfo
+    match parse_runinfo(runinfo, 'library_layout'):
+        case 'PAIRED':
+            ret = rules.get_reads_paired.output
+        case 'SINGLE':
+            ret = rules.get_reads_single.output
+        case _:
+            raise ValueError(f'unsupported library layout: {_}')
+    return ret
 
 rule get_reads_check:
     input:
-        rules.get_reads_paired.output
+        get_raw_reads_files
     output: touch("data/omics/{sample_type}/{sample}/reads/.reads_downloaded")
     shell: """echo "check: {input} [OK]" """
 
@@ -2536,7 +2577,7 @@ rule semibin2:
     #resources: cpus=32, mem_mb=700000, time_min=2880, partition = "largemem" # coassembly on our servers
     priority: 3
     shell:
-        """
+        r"""
         WORK_DIR=$PWD
 
         SemiBin2 single_easy_bin \
@@ -3501,99 +3542,108 @@ rule summarize_marker_mapping:
 
 
 rule amplicon_hmm:
-    input:
-        fastq_fwd = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
-        fastq_rev = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz"
+    input: "data/omics/amplicons/{sample}/reads/raw_{direc}_reads.fastq.gz"
     output:
-        hmm_tbl_fwd = "data/omics/{sample_type}/{sample}/detect_region/fwd.txt",
-        hmm_tbl_rev ="data/omics/{sample_type}/{sample}/detect_region/rev.txt",
-        full_out_fwd = "data/omics/{sample_type}/{sample}/detect_region/full_fwd.txt",
-        full_out_rev = "data/omics/{sample_type}/{sample}/detect_region/full_rev.txt"
+        hmm_tbl = "data/omics/amplicons/{sample}/detect_region/tbl_{direc}.txt",
+        full_out = "data/omics/amplicons/{sample}/detect_region/full_{direc}.txt",
     params:
-        amplicon_hmm_db ="data/reference/hmm_amplicons/combined.hmm"
+        amplicon_hmm_db ="data/reference/hmm_amplicons/combined.hmm",
+        outdir = subpath(input[0], parent=True),
     resources: cpus=1, mem_mb=20000, time_min=500
-    benchmark: "benchmarks/amplicon_hmm/{sample_type}_{sample}.txt"
-    log: "logs/amplicon_hmm/{sample_type}_{sample}.log"
+    benchmark: "benchmarks/amplicon_hmm/{sample}_{direc}.txt"
+    log: "logs/amplicon_hmm/{sample}_{direc}.log"
     conda: "config/conda_yaml/hmmer.yaml"
     shell:
         """
-        mkdir -p $(dirname {output.hmm_tbl_fwd})
+        . code/shell_prelude {log}
+        mkdir -p -- {params.outdir}
 
-        seqkit head -n 1000 {input.fastq_fwd} |
+        seqkit head -n 1000 {input} |
             seqkit fq2fa |
-            nhmmscan --cpu {resources.cpus} --tblout {output.hmm_tbl_fwd} {params.amplicon_hmm_db} - > {output.full_out_fwd} &&
-        
-        seqkit head -n 1000 {input.fastq_rev} |
-            seqkit fq2fa |
-            nhmmscan --cpu {resources.cpus} --tblout {output.hmm_tbl_rev} {params.amplicon_hmm_db} - > {output.full_out_rev}
+            nhmmscan --cpu {resources.cpus} --tblout {output.hmm_tbl} {params.amplicon_hmm_db} - > {output.full_out}
         """
 
 rule amplicon_stats:
     input:
-        fastq_fwd = rules.amplicon_hmm.input.fastq_fwd,
-        fastq_rev = rules.amplicon_hmm.input.fastq_rev
+        get_raw_reads_files
     output:
-        stats = "data/omics/{sample_type}/{sample}/detect_region/stats.csv"
+        stats = ensure("data/omics/{sample_type}/{sample}/detect_region/stats.csv", non_empty=True)
     resources: cpus=1, mem_mb=1000, time_min=10
     benchmark: "benchmarks/amplicon_stats/{sample_type}_{sample}.txt"
     log: "logs/amplicon_stats/{sample_type}_{sample}.log"
     container: "docker://eandersk/r_microbiome"
     shell:
         """
-        seqkit stats -a -T {input.fastq_fwd} {input.fastq_rev} > {output.stats}
+        . code/shell_prelude {log}
+
+        seqkit stats -a -T {input} >{output.stats}
+
+        # seqkit does exit with 0 on errors, so check number of lines:
+        if [[ ! -e {output.stats} || $(wc -l < {output.stats}) -le 1 ]]; then
+            echo >&2 "[ERROR] {output.stats}: no such file, empty, or only header in output"
+            exit 1
+        fi
         """
 
-rule amplicon_hmm_summarize_a:
-    input:
-        hmm_tbl_fwd = rules.amplicon_hmm.output.hmm_tbl_fwd,
-        hmm_tbl_rev = rules.amplicon_hmm.output.hmm_tbl_rev,
-    output:
-        hmm_tbl_summary_fwd = "data/omics/{sample_type}/{sample}/detect_region/fwd_summary.tsv",
-        hmm_tbl_summary_rev = "data/omics/{sample_type}/{sample}/detect_region/rev_summary.tsv"
+rule amplicon_hmm_summarize_r:
+    """
+    The original R-implemented hmm summary
+
+    This is not used downstream but its output may be of interest for
+    debugging.  So needs to be triggered manually.
+    """
+    input: rules.amplicon_hmm.output.hmm_tbl
+    output: "data/omics/amplicons/{sample}/detect_region/{direc}_summary.tsv"
     resources: cpus=1, mem_mb=10000, time_min=500
-    benchmark: "benchmarks/amplicon_hmm_summarize_a/{sample_type}_{sample}.txt"
-    log: "logs/amplicon_hmm_summarize_a/{sample_type}_{sample}.log"
+    benchmark: "benchmarks/amplicon_hmm_summarize_a/{sample}_{direc}.txt"
+    log: "logs/amplicon_hmm_summarize_a/{sample}_{direc}.log"
     container: "docker://eandersk/r_microbiome"
-    shell:
-        """
-        ./code/summarize_hmmscan.R --input {input.hmm_tbl_fwd} --output {output.hmm_tbl_summary_fwd}
-        ./code/summarize_hmmscan.R --input {input.hmm_tbl_rev} --output {output.hmm_tbl_summary_rev}
-        """
+    shell: "./code/summarize_hmmscan.R --input {input} --output {output} |& tee {log}"
 
-rule amplicon_hmm_summarize_b:
-    input:
-        hmm_tbl_fwd = rules.amplicon_hmm.output.hmm_tbl_fwd,
-        hmm_tbl_rev = rules.amplicon_hmm.output.hmm_tbl_rev,
-    output:
-        hmm_tbl_summary_fwd = "data/omics/{sample_type}/{sample}/detect_region/fwd_summary.txt",
-        hmm_tbl_summary_rev = "data/omics/{sample_type}/{sample}/detect_region/rev_summary.txt"
+rule amplicon_hmm_summarize:
+    input: rules.amplicon_hmm.output.hmm_tbl
+    output: ensure("data/omics/amplicons/{sample}/detect_region/{direc}_summary.txt", non_empty=True),
     resources: cpus=1, mem_mb=100, time_min=1
-    benchmark: "benchmarks/amplicon_hmm_summarize_b/{sample_type}_{sample}.txt"
-    log: "logs/amplicon_hmm_summarize_b/{sample_type}_{sample}.log"
-    shell:
-        """
-        ./code/amplicon-hmm-summarize {input.hmm_tbl_fwd} > {output.hmm_tbl_summary_fwd}
-        ./code/amplicon-hmm-summarize {input.hmm_tbl_rev} > {output.hmm_tbl_summary_rev}
-        """
+    benchmark: "benchmarks/amplicon_hmm_summarize/{sample}_{direc}.txt"
+    log: "logs/amplicon_hmm_summarize/{sample}_{direc}.log"
+    shell: "./code/amplicon-hmm-summarize {input} 2>&1 >{output} | tee {log}"
+
+
+def get_hmm_summaries(wc):
+    """
+    Input function to get the hmm summaries
+
+    Wildcards need to contain sample_type and sample
+    """
+    runinfo = checkpoints.get_reads.get(**wc).output.runinfo
+    match parse_runinfo(runinfo, 'library_layout'):
+        case 'PAIRED':
+            return [
+                str(rules.amplicon_hmm_summarize.output).format(direc='fwd', sample=wc['sample']),
+                str(rules.amplicon_hmm_summarize.output).format(direc='rev', sample=wc['sample']),
+            ]
+        case 'SINGLE':
+            return str(rules.amplicon_hmm_summarize.output).format(direc='single', sample=wc['sample'])
+        case _:
+            raise ValueError(f'unsupported library layout: {_}')
 
 rule amplicon_guess_target:
     input:
-        hmm_tbl_summary_fwd = rules.amplicon_hmm_summarize_b.output.hmm_tbl_summary_fwd,
-        hmm_tbl_summary_rev = rules.amplicon_hmm_summarize_b.output.hmm_tbl_summary_rev,
+        summaries=get_hmm_summaries,
         stats = rules.amplicon_stats.output.stats
     output:
-        target_info = "data/omics/{sample_type}/{sample}/detect_region/target_info.txt"
+        target_info = ensure("data/omics/{sample_type}/{sample}/detect_region/target_info.txt", non_empty=True)
     resources: cpus=1, mem_mb=100, time_min=1
     benchmark: "benchmarks/amplicon_guess_target/{sample_type}_{sample}.txt"
     log: "logs/amplicon_guess_target/{sample_type}_{sample}.log"
     container: "docker://eandersk/r_microbiome"
     shell:
-        """
+        r"""
+        . code/shell_prelude {log}
         PYTHONPATH=code python -m amplicon.guess_target \
             --stats {input.stats} \
-            {input.hmm_tbl_summary_fwd} \
-            {input.hmm_tbl_summary_rev} \
-            > {output.target_info}
+            {input.summaries} \
+            >{output.target_info}
         """
 
 def target_info_files(wc):
@@ -3625,8 +3675,8 @@ checkpoint amplicon_collect_target_guesses:
 rule remove_primers_pe:
     input:
         target_info=rules.amplicon_guess_target.output.target_info,
-        fwd=rules.get_reads.output.fwd_reads,
-        rev=rules.get_reads.output.rev_reads,
+        fwd=rules.get_reads_paired.output.fwd_reads,
+        rev=rules.get_reads_paired.output.rev_reads,
     output:
         fwd="data/omics/{sample_type}/{sample}/reads/nopr.fwd_reads.fastq.gz",
         rev="data/omics/{sample_type}/{sample}/reads/nopr.rev_reads.fastq.gz",
