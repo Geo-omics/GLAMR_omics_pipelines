@@ -2310,7 +2310,7 @@ rule map_to_contigs:
         mapper = "minimap2-sr",
         #mapper = "strobealign"
     conda: "config/conda_yaml/coverm.yaml"
-    benchmark: "benchmarks/map_to_contigs/{sample_type}-{project}__{sample}.txt"
+    # benchmark: "benchmarks/map_to_contigs/{sample_type}-{project}__{sample}.txt"
     resources: cpus=32, mem_mb=150000, time_min=7200, disk_mb=500000, scratch_disk_mb = 1000000
     shell:
         """
@@ -4241,4 +4241,3 @@ rule gutsmash:
 
 
 
-        
