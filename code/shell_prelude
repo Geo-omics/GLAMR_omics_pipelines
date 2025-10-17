@@ -1,0 +1,13 @@
+# source at beginning of rule's shell script if log is defined
+set -eu -o pipefail
+
+if [[ ! -v 1 ]]; then
+    echo >&2 "shell_prelude: Need the log file as argument"
+    exit 1
+fi
+
+log=$1
+if [[ -n "$log" ]]; then
+    exec > >(tee -i "$log" -p --output-error=exit)
+    exec 2>&1
+fi

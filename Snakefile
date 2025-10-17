@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 import os
 import re
 import subprocess
@@ -6,7 +7,7 @@ from glob import glob
 import pandas as pd
 import time
 
-from code.amplicon import dispatch
+from code.amplicon import dispatch, sra
 
 
 configfile: "config.yaml"
@@ -17,6 +18,7 @@ shell.prefix('printf "Job executed on: ${{HOSTNAME}}\n" && printf "SLURM job id:
 # Substitute bash $USER environment variable with actual user id, otherwise some steps fail
 param_work_dir = config["work_dir"] #get working directory from config file
 userid = env_var = os.environ['USER'] #get bash $USER variable
+ncbi_api_key = os.environ.get('NCBI_API_KEY', '')
 work_dir = param_work_dir.replace("$USER", userid) #sub $USER for actual username
 current_dir = os.getcwd()
 #humann_ref_dir = "/home/kiledal/scratch_gdick1/GVHD/data/reference/humann" # for running on Great Lakes
@@ -46,56 +48,127 @@ rule make_rulegraph_bins:
         """
 
 
-rule get_reads:
+def parse_runinfo(file, key):
+    """
+    Get value from runinfo file
+
+    Helper for rule get_reads.
+    The runinfo file is a two-line tsv obtained by "kingfisher annotate."
+    """
+    with ExitStack() as stack:
+        if isinstance(file, str):
+            # assume it's a snakemake _IOFile, got here via input function
+            # file.open() does not behave well, only works via with block?
+            ifile = open(str(file))
+            stack.enter_context(ifile)
+        else:
+            # assume a TextIOWrapper, got here via parse_input()
+            ifile = file
+            ifile.seek(0)  # file handle re-used across multiple calls
+
+        for k, v in zip(*[i.split('\t') for i in ifile], strict=True):
+            if k == key:
+                return v
+
+def parse_accession(file):
+    """ parse_input function for rule get_reads """
+    file.seek(0)  # we're called multiple times
+    if value := file.readline().strip():
+        return value
+    else:
+        raise RuntimeError(f'bad accession file? {value=}')
+
+
+def get_srr_accession(file):
+    """ parse_input function for rule get_reads """
+    accn = parse_accession(file)
+    if accn.startswith('SRR'):
+        return accn
+    else:
+        return sra.srs2srr(parse_accession(file))
+
+checkpoint get_reads:
     input:
-        acccession = "data/omics/{sample_type}/{sample}/reads/accession"
+        accession = "data/omics/{sample_type}/{sample}/reads/accession",
     output:
-        fwd_reads = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
-        rev_reads = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz",
-        touch = touch("data/omics/{sample_type}/{sample}/reads/.reads_downloaded")
+        runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.tsv",
+        download_dir = temp(directory("data/omics/{sample_type}/{sample}/reads/dl")),
     params:
-        read_dir = "data/omics/{sample_type}/{sample}/reads/"
+        read_dir = subpath(input.accession, parent=True),
+        accn = parse_input(input.accession, parse_accession),
+        srr_accn = parse_input(input.accession, get_srr_accession),
     conda: "config/conda_yaml/kingfisher.yaml"
-    #benchmark: 
-    #log:
+    #benchmark:
+    log: "logs/get_reads/{sample_type}-{sample}.log"
     resources: time_min = 5000, heavy_network = 1, cpus = 8
     shell:
         """
-        export PATH=$PWD/code/kingfisher/bin:$PATH
+        . code/shell_prelude {log}
 
-        cd {params.read_dir}
-        echo $(cat ./accession)
+        if [[ -n "{ncbi_api_key}" ]]; then
+            export NCBI_API_KEY="{ncbi_api_key}"
+        fi
+        [[ -v "$NCBI_API_KEY" ]] && echo "[WARNING] environment variable NCBI_API_KEY is not set"
 
-        kingfisher get \
+        echo "Given accession: {params.accn}"
+        echo "Using accession: {params.srr_accn}"
+
+        ./code/kingfisher/bin/kingfisher annotate -r "{params.srr_accn}" -a -f tsv > {output.runinfo}
+        ./code/kingfisher/bin/kingfisher get \
             --download-threads {resources.cpus} \
             --extraction-threads {resources.cpus} \
-            -r $(cat ./accession) \
-            -m ena-ascp aws-http prefetch \
-            --output-format-possibilities fastq.gz
-            # --check_md5sums \
-            # -m ena-ftp \
-
-        if (($(ls *_1.fastq.gz | wc -l)>1)); then
-            echo "Error: Multiple files were downloaded."
-            exit 1
-        fi
-
-        mv -f *_1.fastq.gz raw_fwd_reads.fastq.gz ||true
-        mv -f *_2.fastq.gz raw_rev_reads.fastq.gz ||true
-
-        # Download methods other than ascp can create .fastq files instead
-        if (($(ls *_1.fastq | wc -l)>1)); then
-            echo "Error: Multiple files were downloaded."
-            exit 1
-        fi
-
-        mv -f *_1.fastq raw_fwd_reads.fastq ||true
-        mv -f *_2.fastq raw_rev_reads.fastq ||true
-
-        # If ASCP download fails, other methods can output .fastq, compress before finishing if that's the case
-        if [ -e raw_fwd_reads.fastq ]; then gzip -1 raw_fwd_reads.fastq; fi
-        if [ -e raw_rev_reads.fastq ]; then gzip -1 raw_rev_reads.fastq; fi
+            --hide-download-progress \
+            -r "{params.srr_accn}" \
+            -m ena-ascp aws-http prefetch ena-ftp \
+            --output-format-possibilities fastq.gz \
+            --output-directory {output.download_dir} \
+            --check-md5sums
         """
+
+rule get_reads_paired:
+    input:
+        runinfo = rules.get_reads.output.runinfo,
+        download_dir = rules.get_reads.output.download_dir,
+    output:
+        fwd_reads = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
+        rev_reads = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz",
+    params:
+        read_dir = subpath(input.runinfo, parent=True),
+        srr_accession = parse_input(input.runinfo, parse_runinfo, key='run')
+    log: "logs/get_reads_paired/{sample_type}-{sample}.log"
+    resources: time_min = 5, heavy_network = 0, cpus = 1
+    shell:
+        """
+        . code/shell_prelude {log}
+
+        fwd_base={input.download_dir}/{params.srr_accession}_1.fastq
+        rev_base={input.download_dir}/{params.srr_accession}_2.fastq
+        fwd_gz=$fwd_base.gz
+        rev_gz=$rev_base.gz
+
+        if [[ -e "$fwd_gz" && -e "$fwd_gz" ]]; then
+            mv -- "$fwd_gz" {output.fwd_reads}
+            mv -- "$rev_gz" {output.rev_reads}
+        elif [[ -e "$fwd_base" && -e "$rev_base" ]]; then
+            echo "[NOTICE] Got uncompressed files, compressing..."
+            gzip -c -1 "$fwd_base" > {output.fwd_reads}
+            gzip -c -1 "$rev_base" > {output.rev_reads}
+        else
+            echo "[ERROR] expected download files not found in {input.download_dir}"
+            exit 1
+        fi
+        """
+
+
+            exit 1
+        fi
+
+rule get_reads_check:
+    input:
+        rules.get_reads_paired.output
+    output: touch("data/omics/{sample_type}/{sample}/reads/.reads_downloaded")
+    shell: """echo "check: {input} [OK]" """
+
 
 rule clumpify:
     input: 
