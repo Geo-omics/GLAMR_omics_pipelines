@@ -50,7 +50,7 @@ def parse_runinfo(file, key):
     """
     Get value from runinfo file
 
-    Helper for rule get_reads.
+    Helper for rules that need bits from the runinfo file.
     The runinfo file is a two-line tsv obtained by "kingfisher annotate."
     """
     with ExitStack() as stack:
@@ -85,7 +85,7 @@ def get_srr_accession(file):
     else:
         return sra.srs2srr(parse_accession(file))
 
-checkpoint get_reads:
+rule get_reads:
     input:
         accession = "data/omics/{sample_type}/{sample}/reads/accession",
     output:
@@ -111,7 +111,7 @@ checkpoint get_reads:
         echo "Given accession: {params.accn}"
         echo "Using accession: {params.srr_accn}"
 
-        ./code/kingfisher/bin/kingfisher annotate -r "{params.srr_accn}" -a -f tsv > {output.runinfo}
+        ./code/kingfisher/bin/kingfisher annotate -r "{params.srr_accn}" -a -f tsv -o {output.runinfo}
         ./code/kingfisher/bin/kingfisher get \
             --download-threads {resources.cpus} \
             --extraction-threads {resources.cpus} \
@@ -122,6 +122,12 @@ checkpoint get_reads:
             --output-directory {output.download_dir} \
             --check-md5sums
         """
+
+checkpoint get_runinfo:
+    input: rules.get_reads.output.runinfo
+    output: "data/omics/{sample_type}/{sample}/reads/runinfo1.tsv",
+    resources: time_min = 1, cpus = 1
+    shell: "ln -- {input} {output}"
 
 rule get_reads_paired:
     input:
@@ -192,7 +198,7 @@ def get_raw_reads_files(wc):
 
     Wildcards need to contain sample_type and sample
     """
-    runinfo = checkpoints.get_reads.get(**wc).output.runinfo
+    runinfo = checkpoints.get_runinfo.get(**wc).output[0]
     match parse_runinfo(runinfo, 'library_layout'):
         case 'PAIRED':
             ret = rules.get_reads_paired.output
@@ -3613,7 +3619,7 @@ def get_hmm_summaries(wc):
 
     Wildcards need to contain sample_type and sample
     """
-    runinfo = checkpoints.get_reads.get(**wc).output.runinfo
+    runinfo = checkpoints.get_runinfo.get(**wc).output[0]
     match parse_runinfo(runinfo, 'library_layout'):
         case 'PAIRED':
             return [
