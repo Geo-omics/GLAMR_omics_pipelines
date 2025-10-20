@@ -12,6 +12,8 @@ from .hmm import HMM
 
 
 DEFAULT_AMPLICON_HMM_DB = '../data/reference/hmm_amplicons/combined.hmm'
+DEFAULT_LOCATE_OUTPUT = 'primer_alignment_full.txt'
+DEFAULT_JSON = 'primers.json'
 
 
 def main():
@@ -25,7 +27,11 @@ def main():
         'update',
         help='Write an updated primer_data.py file',
     )
-    updatep.add_argument('--out-json', help='Json output file')
+    updatep.add_argument(
+        '--out-json',
+        default=DEFAULT_JSON,
+        help='Json output file',
+    )
     locp = subp.add_parser(
         'locate',
         help='Run nhmmscan against combined HMM database to locate the primers'
@@ -34,6 +40,11 @@ def main():
         '--hmm-db',
         default=DEFAULT_AMPLICON_HMM_DB,
         help='Path to the combined HMMR model database',
+    )
+    locp.add_argument(
+        '--output',
+        default=DEFAULT_LOCATE_OUTPUT,
+        help='Name of output file',
     )
     exgrp = argp.add_mutually_exclusive_group()
     exgrp.add_argument(
@@ -55,9 +66,9 @@ def main():
         case 'print':
             print(*primers, sep='\n')
         case 'update':
-            update_json(primers)
+            update_json(primers, output=args.out_json)
         case 'locate':
-            locate_sequences(primers, db=args.hmm_db)
+            locate_sequences(primers, db=args.hmm_db, output=args.output)
 
 
 @dataclass
@@ -179,18 +190,21 @@ def read_google_sheet(file_name):
     return primers
 
 
-def update_json(primers):
+def update_json(primers, output=None):
     data = [asdict(i) for i in primers]
-    output_file = 'primers.json'
-    print(f'Writing to {output_file} ... ', end='', flush=True)
-    with open(output_file, 'w') as ofile:
-        ofile.write(json.dumps(data, indent=4))
-    print('[Done]')
+    data_txt = json.dumps(data, indent=4)
+    if output:
+        print(f'Writing to {output} ... ', end='', flush=True)
+        with open(output, 'w') as ofile:
+            ofile.write(data_txt)
+        print('[Done]')
+    else:
+        print(data_txt)
 
 
-def locate_sequences(primers, db=DEFAULT_AMPLICON_HMM_DB):
-    if Path(db).is_file():
-        raise ValueError('no such file:')
+def locate_sequences(primers, db=DEFAULT_AMPLICON_HMM_DB, output=None):
+    if not Path(db).is_file():
+        raise ValueError(f'hmm DB not found (no such file): {db}')
     data = b''.join(f'>{i.name}\n{i.sequence}\n'.encode() for i in primers)
     cmd = [
         'nhmmscan', '--cpu', '4', '--tblout', 'primer_alignments.csv',
@@ -201,8 +215,12 @@ def locate_sequences(primers, db=DEFAULT_AMPLICON_HMM_DB):
     stdout, stderr = p.communicate(data)
     if stderr:
         print(f'ERROR: {stderr.decode()}')
-    with open('primer_alignment_full.txt', 'w') as ofile:
-        ofile.write(stdout.decode())
+    if output is None:
+        print(stdout.decode())
+    else:
+        with open(output, 'w') as ofile:
+            ofile.write(stdout.decode())
+        print(f'Output written to {output}')
 
 
 if __name__ == '__main__':
