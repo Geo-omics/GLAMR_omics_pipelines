@@ -2,7 +2,7 @@
 Primer handling module
 """
 import argparse
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 import json
 from pathlib import Path
 from subprocess import Popen, PIPE
@@ -123,6 +123,7 @@ def read_google_sheet(file_name):
         ('primer_sequence', 'sequence'),
         ('HMM', 'hmm'),
     )
+    field_names = [i.name for i in fields(Primer)]
 
     primers = []
     with open(file_name) as ifile:
@@ -171,6 +172,7 @@ def read_google_sheet(file_name):
                           f'positions: {e}')
                     row['start'] = row['end'] = None
 
+            row = {k: v for k, v in row.items() if k in field_names}
             primers.append(Primer(**row))
 
     print(f'read {len(primers)} primer records')
