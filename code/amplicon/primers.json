@@ -380,9 +380,9 @@
         "gene_target": "mito 16S",
         "citation": "paper_15 / Palumbi et al. (1996)",
         "hmm": "16S_rRNA_mito",
-        "start": null,
-        "end": null,
-        "region": null
+        "start": 1453,
+        "end": 1474,
+        "region": ""
     },
     {
         "name": "16Sbr-H",
@@ -393,6 +393,28 @@
         "hmm": "16S_rRNA_mito",
         "start": 1453,
         "end": 1474,
-        "region": null
+        "region": ""
+    },
+    {
+        "name": "V5F",
+        "sequence": "ACCTGCCTGCCGATTAGATACCCNGGTAG",
+        "direction": "forward",
+        "gene_target": "16S rRNA",
+        "citation": "paper_64",
+        "hmm": "16S_rRNA_bac",
+        "start": 776,
+        "end": 793,
+        "region": "V5-"
+    },
+    {
+        "name": "V6R",
+        "sequence": "ACGCCACCGAGCCGACAGCCATGCANCACCT",
+        "direction": "reverse",
+        "gene_target": "16SrRNA",
+        "citation": "paper_64",
+        "hmm": "16S_rRNA_bac",
+        "start": 1036,
+        "end": 1060,
+        "region": "-V6"
     }
 ]
