@@ -52,34 +52,34 @@ class HMMRAlignment:
             self.primer_score = None
             return
 
-        for name, (start, end) in primers.items():
+        for i in primers:
             # scores are positive if read goes beyond the primer
             # score is negative if read is short of primer
             # score of zero is a perfect alignment
             if forward:
-                outer_score = start - self.hmmfrom
-                inner_score = end - self.hmmfrom
+                outer_score = i.start - self.hmmfrom
+                inner_score = i.end - self.hmmfrom
             else:
-                outer_score = self.hmmto - end
-                inner_score = self.hmmto - start
+                outer_score = self.hmmto - i.end
+                inner_score = self.hmmto - i.start
 
             if best_outer_names is None:
-                best_outer_names = [name]
-                best_inner_names = [name]
+                best_outer_names = [i.name]
+                best_inner_names = [i.name]
                 best_outer_score = outer_score
                 best_inner_score = inner_score
             else:
                 if abs(outer_score) < abs(best_outer_score):
                     best_outer_score = outer_score
-                    best_outer_names = [name]
+                    best_outer_names = [i.name]
                 elif abs(outer_score) == abs(best_outer_score):
-                    best_outer_names.append(name)
+                    best_outer_names.append(i.name)
 
                 if abs(inner_score) < abs(best_inner_score):
                     best_inner_score = inner_score
-                    best_inner_names = [name]
+                    best_inner_names = [i.name]
                 elif abs(inner_score) == abs(best_inner_score):
-                    best_inner_names.append(name)
+                    best_inner_names.append(i.name)
 
         if abs(best_outer_score) <= abs(best_inner_score):
             has_primer = True

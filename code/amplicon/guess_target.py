@@ -6,7 +6,7 @@ Output is written to stdout.
 """
 import argparse
 
-from amplicon import models, Err
+from amplicon import get_models, Err
 
 
 def main():
@@ -152,6 +152,7 @@ def check_paired(fwd, rev):
             Err.E4
         )
 
+    models = get_models()
     errors = []
 
     # 0. Check if there is agreement on the model
@@ -184,16 +185,16 @@ def check_paired(fwd, rev):
         errors.append(('too far away from primer(s)', Err.E3))
 
     # 3. get and check primers: consistent with direction?
-    for pname, (start, end) in models[fwd['model']].fwd_primers.items():
-        if pname == fwd['primer']:
-            fwd_primer = dict(name=pname, start=start, end=end)
+    for prim in models[fwd['model']].fwd_primers:
+        if prim.name == fwd['primer']:
+            fwd_primer = dict(name=prim.name, start=prim.start, end=prim.end)
             break
     else:
         raise RuntimeError(f'unknown fwd primer: {fwd["primer"]}')
 
-    for pname, (start, end) in models[rev['model']].rev_primers.items():
-        if pname == rev['primer']:
-            rev_primer = dict(name=pname, start=start, end=end)
+    for prim in models[rev['model']].rev_primers:
+        if prim.name == rev['primer']:
+            rev_primer = dict(name=prim.name, start=prim.start, end=prim.end)
             break
     else:
         raise RuntimeError(f'unknown rev primer: {rev["primer"]}')

@@ -5,7 +5,7 @@
         "direction": "forward",
         "gene_target": "bac 16S rRNA",
         "citation": "doi: 10.1128/mSystems.00009-15",
-        "hmm": "16S_rRNA_bac",
+        "hmm_name": "16S_rRNA_bac",
         "start": 505,
         "end": 523,
         "region": "V4-"
@@ -16,7 +16,7 @@
         "direction": "reverse",
         "gene_target": "bac 16S rRNA",
         "citation": "doi: 10.1128/mSystems.00009-15",
-        "hmm": "16S_rRNA_bac",
+        "hmm_name": "16S_rRNA_bac",
         "start": 777,
         "end": 796,
         "region": "-V4"
@@ -27,7 +27,7 @@
         "direction": "forward",
         "gene_target": "euk 18S rRNA",
         "citation": "paper_15 / Blaxter et al. (1998)",
-        "hmm": "18S_rRNA_euk",
+        "hmm_name": "18S_rRNA_euk",
         "start": 30,
         "end": 50,
         "region": "V1-"
@@ -38,7 +38,7 @@
         "direction": "reverse",
         "gene_target": "euk 18S rRNA",
         "citation": "paper_15 / Blaxter et al. (1998)",
-        "hmm": "18S_rRNA_euk",
+        "hmm_name": "18S_rRNA_euk",
         "start": 417,
         "end": 435,
         "region": "-V2"
@@ -49,7 +49,7 @@
         "direction": "forward",
         "gene_target": "bac 16S rRNA",
         "citation": "",
-        "hmm": "16S_rRNA_bac",
+        "hmm_name": "16S_rRNA_bac",
         "start": 338,
         "end": 354,
         "region": "V3-"
@@ -60,7 +60,7 @@
         "direction": "reverse",
         "gene_target": "bac 16S rRNA",
         "citation": "",
-        "hmm": "16S_rRNA_bac",
+        "hmm_name": "16S_rRNA_bac",
         "start": 899,
         "end": 916,
         "region": "-V5"
@@ -71,7 +71,7 @@
         "direction": "",
         "gene_target": "",
         "citation": "",
-        "hmm": "16S_rRNA_bac",
+        "hmm_name": "16S_rRNA_bac",
         "start": "337",
         "end": "",
         "region": "V3-"
@@ -82,7 +82,7 @@
         "direction": "",
         "gene_target": "",
         "citation": "",
-        "hmm": "16S_rRNA_bac",
+        "hmm_name": "16S_rRNA_bac",
         "start": "",
         "end": "795",
         "region": "-V4"
@@ -93,7 +93,7 @@
         "direction": "forward",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -104,7 +104,7 @@
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -115,7 +115,7 @@
         "direction": "forward",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -126,7 +126,7 @@
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -137,7 +137,7 @@
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -148,7 +148,7 @@
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -159,7 +159,7 @@
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -170,7 +170,7 @@
         "direction": "forward",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -181,7 +181,7 @@
         "direction": "forward",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -192,7 +192,7 @@
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -203,7 +203,7 @@
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -214,7 +214,7 @@
         "direction": "forward",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -225,7 +225,7 @@
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -236,7 +236,7 @@
         "direction": "forward",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -247,7 +247,7 @@
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -258,7 +258,7 @@
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -269,7 +269,7 @@
         "direction": "forward",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -280,7 +280,7 @@
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -291,7 +291,7 @@
         "direction": "forward",
         "gene_target": "",
         "citation": "",
-        "hmm": "mito_16S",
+        "hmm_name": "mito_16S",
         "start": "848",
         "end": null,
         "region": null
@@ -302,7 +302,7 @@
         "direction": "reverse",
         "gene_target": "",
         "citation": "",
-        "hmm": "mito_16S",
+        "hmm_name": "mito_16S",
         "start": "",
         "end": "1474",
         "region": null
@@ -313,7 +313,7 @@
         "direction": "forward",
         "gene_target": "",
         "citation": "",
-        "hmm": "16S_rRNA_bac",
+        "hmm_name": "16S_rRNA_bac",
         "start": "338",
         "end": null,
         "region": null
@@ -324,7 +324,7 @@
         "direction": "forward",
         "gene_target": "COI-F230",
         "citation": "paper_15 / Gibson et al. (2015)",
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -335,7 +335,7 @@
         "direction": "reverse",
         "gene_target": "COI-F230",
         "citation": "paper_15 / Gibson et al. (2015)",
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -346,7 +346,7 @@
         "direction": "forward",
         "gene_target": "COI-BE",
         "citation": "paper_15 / Gibson et al. (2015)",
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -357,7 +357,7 @@
         "direction": "reverse",
         "gene_target": "COI-BE",
         "citation": "paper_15 / Gibson et al. (2015)",
-        "hmm": null,
+        "hmm_name": null,
         "start": null,
         "end": null,
         "region": null
@@ -368,7 +368,7 @@
         "direction": "forward",
         "gene_target": "mito 16S",
         "citation": "paper_15 / Palumbi et al. (1996)",
-        "hmm": "16S_rRNA_mito",
+        "hmm_name": "16S_rRNA_mito",
         "start": 848,
         "end": 867,
         "region": null
@@ -379,7 +379,7 @@
         "direction": "reverse",
         "gene_target": "mito 16S",
         "citation": "paper_15 / Palumbi et al. (1996)",
-        "hmm": "16S_rRNA_mito",
+        "hmm_name": "16S_rRNA_mito",
         "start": 1453,
         "end": 1474,
         "region": ""
@@ -390,7 +390,7 @@
         "direction": "reverse",
         "gene_target": "mito 16S",
         "citation": "paper_2 / doi: 10.1371/journal.pone.0177643",
-        "hmm": "16S_rRNA_mito",
+        "hmm_name": "16S_rRNA_mito",
         "start": 1453,
         "end": 1474,
         "region": ""
@@ -401,7 +401,7 @@
         "direction": "forward",
         "gene_target": "16S rRNA",
         "citation": "paper_64",
-        "hmm": "16S_rRNA_bac",
+        "hmm_name": "16S_rRNA_bac",
         "start": 776,
         "end": 793,
         "region": "V5-"
@@ -412,7 +412,7 @@
         "direction": "reverse",
         "gene_target": "16SrRNA",
         "citation": "paper_64",
-        "hmm": "16S_rRNA_bac",
+        "hmm_name": "16S_rRNA_bac",
         "start": 1036,
         "end": 1060,
         "region": "-V6"

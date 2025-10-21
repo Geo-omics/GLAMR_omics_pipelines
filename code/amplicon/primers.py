@@ -8,8 +8,6 @@ from pathlib import Path
 from subprocess import Popen, PIPE
 from typing import ClassVar
 
-from .hmm import HMM
-
 
 DEFAULT_AMPLICON_HMM_DB = '../data/reference/hmm_amplicons/combined.hmm'
 DEFAULT_LOCATE_OUTPUT = 'primer_alignment_full.txt'
@@ -78,7 +76,8 @@ class Primer:
     direction: str
     gene_target: str
     citation: str
-    hmm: HMM
+    hmm = None
+    hmm_name: str
     start: int
     end: int
     region: str
@@ -103,7 +102,7 @@ class Primer:
         else:
             direc = '<?>'
 
-        if self.hmm:
+        if self.hmm_name:
             if self.start is None:
                 start = '?'
             else:
@@ -112,7 +111,7 @@ class Primer:
                 end = '?'
             else:
                 end = self.end
-            loc = f' {self.hmm}:{start}-{end}'
+            loc = f' {self.hmm_name}:{start}-{end}'
         else:
             loc = ''
         if loc and self.region:
@@ -123,16 +122,22 @@ class Primer:
     @classmethod
     def load(cls, path=None):
         if path is None:
-            path = Path(__file__).parent / 'primers.json'
+            path = Path(__file__).parent / DEFAULT_JSON
         with open(path) as ifile:
             return [Primer(**kw) for kw in json.load(ifile)]
+
+    def is_forward(self):
+        return self.direction == self.FWD
+
+    def is_reverse(self):
+        return self.direction == self.REV
 
 
 def read_google_sheet(file_name):
     RENAMING = (
         ('primer_name', 'name'),
         ('primer_sequence', 'sequence'),
-        ('HMM', 'hmm'),
+        ('HMM', 'hmm_name'),
     )
     field_names = [i.name for i in fields(Primer)]
 

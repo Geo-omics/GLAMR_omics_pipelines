@@ -28,22 +28,29 @@ class HMM:
                 raise ValueError('end must not be larger than length')
             last = end
         self.regions = regions
-
-        if primers is None:
-            primers = dict(fwd={}, rev={})
-        # check primer coords consistency
-        for primer_coords in primers.values():
-            for start, end in primer_coords.values():
-                if start <= 0 or end <= 0:
-                    raise ValueError('primer coords must be positive')
-                if end <= start:
-                    raise ValueError('start must be smaller than end')
-                if length is not None and length < end:
-                    raise ValueError('prim end must not be larger than length')
-
-        self.fwd_primers = primers.get('fwd')
-        self.rev_primers = primers.get('rev')
         self.length = length
+
+        self.fwd_primers = []
+        self.rev_primers = []
+        if primers is not None:
+            for i in primers:
+                if i.start is None or i.end is None:
+                    continue
+                if length is not None and length < i.end:
+                    raise ValueError('prim end must not be larger than length')
+                if i.hmm is not None and i.hmm.name != name:
+                    raise ValueError(
+                        'a different HMM is already assigned to this primer'
+                    )
+                else:
+                    i.hmm = self
+                if i.is_forward():
+                    self.fwd_primers.append(i)
+                elif i.is_reverse():
+                    self.rev_primers.append(i)
+                else:
+                    # skip
+                    continue
 
     def __str__(self):
         return self.name
@@ -78,24 +85,18 @@ class HMM:
 
         Interval start or end must be within 5 positions of primer.
         """
-        fwd = []
-        rev = []
-        for name, (start, end) in self.fwd_primers.items():
-            if (start - 5) <= qstart <= (start + 5) and qstart < end:
-                fwd.append(name)
-        for name, (start, end) in self.rev_primers.items():
-            if start < qend and (end - 5) <= qend <= (end + 5):
-                rev.append(name)
+        fwd = [
+            i for i in self.fwd_primers
+            if (i.start - 5) <= qstart <= (i.start + 5) and qstart < i.end
+        ]
+        rev = [
+            i for i in self.rev_primers.items()
+            if i.start < qend and (i.end - 5) <= qend <= (i.end + 5)
+        ]
         return tuple(fwd), tuple(rev)
 
     def primer_check(self, qstart, qend):
         """ Tell if interval fits perfectly inside a primer pair """
-        fwd = []
-        rev = []
-        for name, (start, end) in self.fwd_primers.items():
-            if end + 1 == qstart:
-                fwd.append(name)
-        for name, (start, end) in self.rev_primers.items():
-            if qend == start - 1:
-                rev.append(name)
+        fwd = [i for i in self.fwd_primers if i.end + 1 == qstart]
+        rev = [i for i in self.rev_primers if qend == i.start - 1]
         return tuple(fwd), tuple(rev)

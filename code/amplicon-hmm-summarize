@@ -3,7 +3,7 @@ import argparse
 from collections import Counter
 from itertools import groupby
 
-from amplicon import models
+from amplicon import get_models
 from amplicon.alignment import HMMRAlignment
 
 
@@ -14,6 +14,8 @@ argp = argparse.ArgumentParser()
 argp.add_argument('infile')
 args = argp.parse_args()
 
+
+models = get_models()
 
 # 1. load alignment data
 rows = []
