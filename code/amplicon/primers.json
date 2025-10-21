@@ -48,7 +48,7 @@
         "sequence": "CCTACGGGAGGCAGCAG",
         "direction": "forward",
         "gene_target": "bac 16S rRNA",
-        "citation": "",
+        "citation": null,
         "hmm_name": "16S_rRNA_bac",
         "start": 338,
         "end": 354,
@@ -59,7 +59,7 @@
         "sequence": "CCGTCAATTCMTTTRAGT",
         "direction": "reverse",
         "gene_target": "bac 16S rRNA",
-        "citation": "",
+        "citation": null,
         "hmm_name": "16S_rRNA_bac",
         "start": 899,
         "end": 916,
@@ -67,29 +67,29 @@
     },
     {
         "name": "S-D-Bact-0341-b-S-17",
-        "sequence": "",
-        "direction": "",
-        "gene_target": "",
-        "citation": "",
+        "sequence": null,
+        "direction": null,
+        "gene_target": null,
+        "citation": null,
         "hmm_name": "16S_rRNA_bac",
-        "start": "337",
-        "end": "",
+        "start": null,
+        "end": null,
         "region": "V3-"
     },
     {
         "name": "S-D-Bact-0785-a-A-21",
-        "sequence": "",
-        "direction": "",
-        "gene_target": "",
-        "citation": "",
+        "sequence": null,
+        "direction": null,
+        "gene_target": null,
+        "citation": null,
         "hmm_name": "16S_rRNA_bac",
-        "start": "",
-        "end": "795",
+        "start": null,
+        "end": null,
         "region": "-V4"
     },
     {
         "name": "18F",
-        "sequence": "",
+        "sequence": null,
         "direction": "forward",
         "gene_target": null,
         "citation": null,
@@ -100,7 +100,7 @@
     },
     {
         "name": "1492R",
-        "sequence": "",
+        "sequence": null,
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
@@ -111,7 +111,7 @@
     },
     {
         "name": "ss530F",
-        "sequence": "",
+        "sequence": null,
         "direction": "forward",
         "gene_target": null,
         "citation": null,
@@ -122,7 +122,7 @@
     },
     {
         "name": "ls580R",
-        "sequence": "",
+        "sequence": null,
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
@@ -133,7 +133,7 @@
     },
     {
         "name": "805R",
-        "sequence": "",
+        "sequence": null,
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
@@ -144,7 +144,7 @@
     },
     {
         "name": "789R",
-        "sequence": "",
+        "sequence": null,
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
@@ -155,7 +155,7 @@
     },
     {
         "name": "23SR",
-        "sequence": "",
+        "sequence": null,
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
@@ -166,7 +166,7 @@
     },
     {
         "name": "27F",
-        "sequence": "",
+        "sequence": null,
         "direction": "forward",
         "gene_target": null,
         "citation": null,
@@ -177,7 +177,7 @@
     },
     {
         "name": "518F",
-        "sequence": "",
+        "sequence": null,
         "direction": "forward",
         "gene_target": null,
         "citation": null,
@@ -188,7 +188,7 @@
     },
     {
         "name": "800R",
-        "sequence": "",
+        "sequence": null,
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
@@ -199,7 +199,7 @@
     },
     {
         "name": "1387R",
-        "sequence": "",
+        "sequence": null,
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
@@ -210,7 +210,7 @@
     },
     {
         "name": "517F",
-        "sequence": "",
+        "sequence": null,
         "direction": "forward",
         "gene_target": null,
         "citation": null,
@@ -221,7 +221,7 @@
     },
     {
         "name": "1048R",
-        "sequence": "",
+        "sequence": null,
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
@@ -232,7 +232,7 @@
     },
     {
         "name": "976F",
-        "sequence": "",
+        "sequence": null,
         "direction": "forward",
         "gene_target": null,
         "citation": null,
@@ -243,7 +243,7 @@
     },
     {
         "name": "1046R",
-        "sequence": "",
+        "sequence": null,
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
@@ -254,7 +254,7 @@
     },
     {
         "name": "804R",
-        "sequence": "",
+        "sequence": null,
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
@@ -265,7 +265,7 @@
     },
     {
         "name": "106F",
-        "sequence": "",
+        "sequence": null,
         "direction": "forward",
         "gene_target": null,
         "citation": null,
@@ -276,7 +276,7 @@
     },
     {
         "name": "781R",
-        "sequence": "",
+        "sequence": null,
         "direction": "reverse",
         "gene_target": null,
         "citation": null,
@@ -287,34 +287,34 @@
     },
     {
         "name": "16S AR",
-        "sequence": "",
+        "sequence": null,
         "direction": "forward",
-        "gene_target": "",
-        "citation": "",
+        "gene_target": null,
+        "citation": null,
         "hmm_name": "mito_16S",
-        "start": "848",
+        "start": null,
         "end": null,
         "region": null
     },
     {
         "name": "16S BR",
-        "sequence": "",
+        "sequence": null,
         "direction": "reverse",
-        "gene_target": "",
-        "citation": "",
+        "gene_target": null,
+        "citation": null,
         "hmm_name": "mito_16S",
-        "start": "",
-        "end": "1474",
+        "start": null,
+        "end": null,
         "region": null
     },
     {
         "name": "341F",
-        "sequence": "",
+        "sequence": null,
         "direction": "forward",
-        "gene_target": "",
-        "citation": "",
+        "gene_target": null,
+        "citation": null,
         "hmm_name": "16S_rRNA_bac",
-        "start": "338",
+        "start": null,
         "end": null,
         "region": null
     },
@@ -382,7 +382,7 @@
         "hmm_name": "16S_rRNA_mito",
         "start": 1453,
         "end": 1474,
-        "region": ""
+        "region": null
     },
     {
         "name": "16Sbr-H",
@@ -393,7 +393,7 @@
         "hmm_name": "16S_rRNA_mito",
         "start": 1453,
         "end": 1474,
-        "region": ""
+        "region": null
     },
     {
         "name": "V5F",

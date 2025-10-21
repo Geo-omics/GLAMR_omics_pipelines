@@ -153,8 +153,16 @@ def read_google_sheet(file_name):
                 # ignore empty or comment lines
                 continue
             row = line.split('\t')
+            if not row:
+                # google sheet does not save trailing empty cells, so empty
+                # rows should have been skipped already, but let's be sure of
+                # it
+                continue
             row = row + [None] * (len(cols) - len(row))  # add missing fields
-            row = {k: v for k, v in zip(cols, row, strict=True)}
+            row = {
+                k: None if v == '' else v
+                for k, v in zip(cols, row, strict=True)
+            }
 
             for old, new in RENAMING:
                 row[new] = row.pop(old)
@@ -170,23 +178,20 @@ def read_google_sheet(file_name):
             else:
                 names.add(name)
 
-            seq = row['sequence']
-            if seq:
+            if seq := row['sequence']:
                 if seq in seqs:
                     print(f'WARNING: duplicate sequence: skipping line {lnum}')
                     continue
                 else:
                     seqs.add(seq)
+            else:
+                row['sequence'] = None
 
-            if primer_pos := row.pop('primer_pos'):
-                start, _, end = primer_pos.partition('-')
-                try:
-                    row['start'] = int(start)
-                    row['end'] = int(end)
-                except Exception as e:
-                    print(f'WARNING: line {lnum}: failed parsing primer '
-                          f'positions: {e}')
-                    row['start'] = row['end'] = None
+            if row['start'] is not None:
+                row['start'] = int(row['start'])
+
+            if row['end'] is not None:
+                row['end'] = int(row['end'])
 
             row = {k: v for k, v in row.items() if k in field_names}
             primers.append(Primer(**row))
