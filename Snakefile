@@ -8,6 +8,7 @@ import pandas as pd
 import time
 
 import code.amplicon.dispatch
+import code.amplicon.guess_target
 import code.amplicon.hmm_summarize
 import code.amplicon.sra
 
@@ -3638,19 +3639,9 @@ rule amplicon_guess_target:
         summaries=get_hmm_summaries,
         stats = rules.amplicon_stats.output.stats
     output:
-        target_info = ensure("data/omics/{sample_type}/{sample}/detect_region/target_info.txt", non_empty=True)
+        target_info = "data/omics/{sample_type}/{sample}/detect_region/target_info.txt"
     resources: cpus=1, mem_mb=100, time_min=1
-    benchmark: "benchmarks/amplicon_guess_target/{sample_type}_{sample}.txt"
-    log: "logs/amplicon_guess_target/{sample_type}_{sample}.log"
-    container: "docker://eandersk/r_microbiome"
-    shell:
-        r"""
-        . code/shell_prelude {log}
-        PYTHONPATH=code python -m amplicon.guess_target \
-            --stats {input.stats} \
-            {input.summaries} \
-            >{output.target_info}
-        """
+    run: code.amplicon.guess_target.main(input.summaries, input.stats, output.target_info)
 
 def target_info_files(wc):
     """
