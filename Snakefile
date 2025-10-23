@@ -7,8 +7,9 @@ from glob import glob
 import pandas as pd
 import time
 
-from code.amplicon import dispatch, sra
+import code.amplicon.dispatch
 import code.amplicon.hmm_summarize
+import code.amplicon.sra
 
 
 configfile: "config.yaml"
@@ -84,7 +85,7 @@ def get_srr_accession(file):
     if accn.startswith('SRR'):
         return accn
     else:
-        return sra.srs2srr(parse_accession(file))
+        return code.amplicon.sra.srs2srr(parse_accession(file))
 
 rule get_reads:
     input:
@@ -213,7 +214,7 @@ rule get_reads_check:
     input:
         get_raw_reads_files
     output: touch("data/omics/{sample_type}/{sample}/reads/.reads_downloaded")
-    shell: """echo "check: {input} [OK]" """
+    run: pass
 
 
 rule clumpify:
@@ -3610,7 +3611,6 @@ rule amplicon_hmm_summarize:
     output: "data/omics/amplicons/{sample}/detect_region/{direc}_summary.txt"
     resources: cpus=1, mem_mb=100, time_min=1
     benchmark: "benchmarks/amplicon_hmm_summarize/{sample}_{direc}.txt"
-    log: "logs/amplicon_hmm_summarize/{sample}_{direc}.log"
     run: code.amplicon.hmm_summarize.main(input[0], output[0])
 
 
@@ -3623,6 +3623,7 @@ def get_hmm_summaries(wc):
     runinfo = checkpoints.get_runinfo.get(**wc).output[0]
     match parse_runinfo(runinfo, 'library_layout'):
         case 'PAIRED':
+            # This MUST have fwd first and rev second, this is what guess_target expects!
             return [
                 str(rules.amplicon_hmm_summarize.output).format(direc='fwd', sample=wc['sample']),
                 str(rules.amplicon_hmm_summarize.output).format(direc='rev', sample=wc['sample']),
@@ -3699,7 +3700,7 @@ def get_target_tab(wc):
     return checkpoints.amplicon_collect_target_guesses.get(**wc).output.target_tab
 
 def get_dataset_fastq_files(wc):
-    return dispatch.get_fastq_files(get_target_tab(wc), **wc)
+    return code.amplicon.dispatch.get_fastq_files(get_target_tab(wc), **wc)
 
 checkpoint amplicon_dispatch:
     input:
