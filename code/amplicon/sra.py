@@ -90,11 +90,11 @@ def get_entry_xml(accession, multi=False):
     return ET.fromstring(xml_txt)
 
 
-def get_entry(accession, multi=False):
+def get_entry(accession, multi=False, auto_parse=True):
     """ retrieve SRA entry by accession """
     pref = accession[:3]
     with get_entry_raw(accession, multi=multi) as data:
-        if pref in ['SRS', 'SRX', 'SRR', 'SRP']:
+        if pref in ['SRS', 'SRX', 'SRR', 'SRP'] or not auto_parse:
             # biopython parser won't work with the EXPERIMENT_PACKAGE_SET
             # that we're expecting here
             return el2dict(ET.fromstring(data.read().decode()))
