@@ -69,7 +69,7 @@ def main():
             locate_sequences(primers, db=args.hmm_db, output=args.output)
 
 
-@dataclass
+@dataclass(unsafe_hash=True)
 class Primer:
     name: str
     sequence: str

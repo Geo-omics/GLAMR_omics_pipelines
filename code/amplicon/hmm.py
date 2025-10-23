@@ -55,6 +55,9 @@ class HMM:
     def __str__(self):
         return self.name
 
+    def __repr__(self):
+        return f'<{self.__class__.__name__}: {self.name}>'
+
     def get_regions(self, qstart, qend):
         """ get regions contained in interval -- any overlap counts """
         if qstart <= 0 or qend <= 0:

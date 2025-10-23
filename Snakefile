@@ -8,6 +8,7 @@ import pandas as pd
 import time
 
 from code.amplicon import dispatch, sra
+import code.amplicon.hmm_summarize
 
 
 configfile: "config.yaml"
@@ -3606,11 +3607,11 @@ rule amplicon_hmm_summarize_r:
 
 rule amplicon_hmm_summarize:
     input: rules.amplicon_hmm.output.hmm_tbl
-    output: ensure("data/omics/amplicons/{sample}/detect_region/{direc}_summary.txt", non_empty=True),
+    output: "data/omics/amplicons/{sample}/detect_region/{direc}_summary.txt"
     resources: cpus=1, mem_mb=100, time_min=1
     benchmark: "benchmarks/amplicon_hmm_summarize/{sample}_{direc}.txt"
     log: "logs/amplicon_hmm_summarize/{sample}_{direc}.log"
-    shell: "./code/amplicon-hmm-summarize {input} 2>&1 >{output} | tee {log}"
+    run: code.amplicon.hmm_summarize.main(input[0], output[0])
 
 
 def get_hmm_summaries(wc):
