@@ -11,6 +11,7 @@ import code.amplicon.dispatch
 import code.amplicon.guess_target
 import code.amplicon.hmm_summarize
 import code.amplicon.sra
+from code.amplicon.utils import load_stats
 
 
 configfile: "config.yaml"
@@ -93,7 +94,7 @@ rule get_reads:
         accession = "data/omics/{sample_type}/{sample}/reads/accession",
     output:
         runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.tsv",
-        download_dir = temp(directory("data/omics/{sample_type}/{sample}/reads/dl")),
+        download_dir = temp(directory("data/omics/{sample_type}/{sample}/reads/tmp_downloads")),
     params:
         read_dir = subpath(input.accession, parent=True),
         accn = parse_input(input.accession, parse_accession),
@@ -153,7 +154,12 @@ rule raw_reads_stats:
     output:
         stats = update("data/omics/{sample_type}/{sample}/reads/stats.csv"),
         flag = touch("data/omics/{sample_type}/{sample}/reads/.reads_downloaded")
-    run: pass
+    shell:
+        """
+        [[ -e {output.stats} ]] || seqkit stats -a -T {input} >{output.stats}
+        # seqkit stats exits with status 0 even in error cases, so check line count!
+        [[ $(wc -l < {output.stats}) -gt 1 ]] || {{ echo "ERROR by seqkit stats"; exit 1; }}
+        """
 
 rule get_reads_paired:
     input:
@@ -165,33 +171,41 @@ rule get_reads_paired:
     params:
         read_dir = subpath(input.runinfo, parent=True),
         srr_accession = parse_input(input.runinfo, parse_runinfo, key='run'),
-        stats_file = rules.raw_reads_stats.output.stats
+        stats_file = rules.raw_reads_stats.output.stats,
     log: "logs/get_reads_paired/{sample_type}-{sample}.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
-    shell:
-        """
-        . code/shell_prelude {log}
+    run:
+        shell("""
+            . code/shell_prelude {log}
 
-        fwd_base={input.download_dir}/{params.srr_accession}_1.fastq
-        rev_base={input.download_dir}/{params.srr_accession}_2.fastq
-        fwd_gz=$fwd_base.gz
-        rev_gz=$rev_base.gz
+            rm -f {params.stats_file}
+            fwd_base={input.download_dir}/{params.srr_accession}_1.fastq
+            rev_base={input.download_dir}/{params.srr_accession}_2.fastq
+            fwd_gz=$fwd_base.gz
+            rev_gz=$rev_base.gz
 
-        if [[ -e "$fwd_gz" && -e "$fwd_gz" ]]; then
-            mv -- "$fwd_gz" {output.fwd_reads}
-            mv -- "$rev_gz" {output.rev_reads}
-        elif [[ -e "$fwd_base" && -e "$rev_base" ]]; then
-            echo "[NOTICE] Got uncompressed files, compressing..."
-            gzip -c -1 "$fwd_base" > {output.fwd_reads}
-            gzip -c -1 "$rev_base" > {output.rev_reads}
-        else
-            echo "[ERROR] expected download files not found in {input.download_dir}"
-            exit 1
-        fi
+            if [[ -e "$fwd_gz" && -e "$fwd_gz" ]]; then
+                mv -- "$fwd_gz" {output.fwd_reads}
+                mv -- "$rev_gz" {output.rev_reads}
+            elif [[ -e "$fwd_base" && -e "$rev_base" ]]; then
+                echo "[NOTICE] Got uncompressed files, compressing..."
+                gzip -c -1 "$fwd_base" > {output.fwd_reads}
+                gzip -c -1 "$rev_base" > {output.rev_reads}
+            else
+                echo "[ERROR] expected download files not found in {input.download_dir}"
+                exit 1
+            fi
 
-        seqkit stats -a -T {output.fwd_reads} {output.rev_reads} >{params.stats_file}
-        python3 -m code.check_raw_reads {params.stats_file} {output.fwd_reads} {output.rev_reads}
-        """
+            seqkit stats -a -T {output.fwd_reads} {output.rev_reads} >{params.stats_file}
+        """)
+        spots = int(parse_runinfo(input.runinfo, 'spots'))
+        errs = []
+        for file, data in load_stats(params.stats_file).items():
+            if (num_seqs := data['num_seqs']) != spots:
+                errs.append(f'In file {file}: expected {spots} reads but got {num_seqs}')
+        if errs:
+            raise RuntimeError('\n'.join(errs))
+
 
 rule get_reads_single:
     input:
@@ -205,26 +219,32 @@ rule get_reads_single:
         stats_file = rules.raw_reads_stats.output.stats
     log: "logs/get_reads_paired/{sample_type}-{sample}.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
-    shell:
-        """
-        . code/shell_prelude {log}
+    run:
+        shell("""
+            . code/shell_prelude {log}
 
-        fwd_base={input.download_dir}/{params.srr_accession}.fastq
-        fwd_gz=$fwd_base.gz
+            fwd_base={input.download_dir}/{params.srr_accession}.fastq
+            fwd_gz=$fwd_base.gz
 
-        if [[ -e "$fwd_gz" ]]; then
-            mv -- "$fwd_gz" "{output.single_reads}"
-        elif [[ -e "$fwd_base" ]]; then
-            echo "[NOTICE] Got uncompressed file, compressing..."
-            gzip -c -1 "$fwd_base" > "{output.single_reads}"
-        else
-            echo "[ERROR] expected download file not found in {input.download_dir}"
-            exit 1
-        fi
+            if [[ -e "$fwd_gz" ]]; then
+                mv -- "$fwd_gz" "{output.single_reads}"
+            elif [[ -e "$fwd_base" ]]; then
+                echo "[NOTICE] Got uncompressed file, compressing..."
+                gzip -c -1 "$fwd_base" > "{output.single_reads}"
+            else
+                echo "[ERROR] expected download file not found in {input.download_dir}"
+                exit 1
+            fi
 
-        seqkit stats -a -T {output.single_reads} >{params.stats_file}
-        python3 -m code.check_raw_reads {params.stats_file} {output.single_reads}
-        """
+            seqkit stats -a -T {output.single_reads} >{params.stats_file}
+        """)
+        spots = int(parse_runinfo(input.runinfo, 'spots'))
+        errs = []
+        for file, data in load_stats(params.stats_file).items():
+            if (num_seqs := data['num_seqs']) != spots:
+                errs.append(f'In file {file}: expected {spots} reads but got {num_seqs}')
+        if errs:
+            raise RuntimeError('\n'.join(errs))
 
 
 rule clumpify:
