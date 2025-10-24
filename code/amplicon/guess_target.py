@@ -6,8 +6,10 @@ Output is written to stdout.
 """
 import argparse
 import json
+from pathlib import Path
 
 from . import get_models, Err
+from .utils import load_stats
 
 
 def cli():
@@ -56,7 +58,7 @@ def main(summaries, stats_file, outfile=None):
         ) from e
 
     try:
-        lengths = get_lengths(stats_file)
+        lengths = get_lengths(stats_file, *summaries)
     except BadData as e:
         msg, errno = e.args
         raise UsageError(
@@ -129,42 +131,44 @@ def read_summary(file):
         return json.load(ifile)
 
 
-def get_lengths(stats_file):
+def get_lengths(stats_file, *summaries):
     """
     Get length(s) from stats file
 
     Assume first row is forward data and second row i(if any) reverse.  Get the
     median (truncated towards zero) as nominal read length.
     """
-    lengths = []
-    with open(stats_file) as ifile:
-        colidx = None
-        for line in ifile:
-            row = line.rstrip('\n').split('\t')
-            if colidx is None:
-                # this is the header, first row
-                try:
-                    colidx = row.index('Q2')
-                except ValueError as e:
-                    raise BadData('failed parsing header', Err.E15) from e
+    try:
+        stats = load_stats(stats_file)
+    except Exception as e:
+        raise BadData(
+            f'failed reading stats file: {e.__class__.__name__}: {e}',
+            Err.E15
+        ) from e
 
-                continue
+    # sanity checks
+    if len(summaries) == 1 and len(stats) == 1:
+        # single-ended
+        pass
+    elif len(summaries) == 2 and len(stats) == 2:
+        # paired-end, check fwd is fwd and rev is rev
+        raw_name_1 = Path(list(stats)[0]).name
+        raw_name_2 = Path(list(stats)[1]).name
+        sum_name_1 = Path(summaries[0]).name
+        sum_name_2 = Path(summaries[1]).name
+        test_raw = 'fwd' in raw_name_1 and 'rev' in raw_name_2
+        test_sum = 'fwd' in sum_name_1 and 'rev' in sum_name_2
+        if test_raw and test_sum:
+            pass
+        else:
+            raise BadData(
+                'unexpected file names, can not match fwd vs.rev files',
+                Err.E16
+            )
+    else:
+        raise BadData('inconsistent number of files / endedness?', Err.E17)
 
-            try:
-                lengths.append(int(float(row[colidx])))
-            except (ValueError, TypeError, KeyError) as e:
-                raise BadData(
-                    f'Failed reading/parsing stats file: '
-                    f'{e.__class__.__name__}: {e}',
-                    Err.E16
-                ) from e
-
-    if len(lengths) == 0:
-        raise BadData('stats data row missing', Err.E17)
-    if len(lengths) > 2:
-        raise BadData('too many stats data rows', Err.E18)
-
-    return lengths
+    return [row['Q2'] for _, row in stats.items()]
 
 
 def basic_checks(data, file_dir):
