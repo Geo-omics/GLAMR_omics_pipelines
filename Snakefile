@@ -132,6 +132,29 @@ checkpoint get_runinfo:
     resources: time_min = 1, cpus = 1
     shell: "ln -- {input} {output}"
 
+def get_raw_reads_files(wc):
+    """
+    Input function to get the raw reads files
+
+    Wildcards need to contain sample_type and sample
+    """
+    runinfo = checkpoints.get_runinfo.get(**wc).output[0]
+    match parse_runinfo(runinfo, 'library_layout'):
+        case 'PAIRED':
+            ret = rules.get_reads_paired.output
+        case 'SINGLE':
+            ret = rules.get_reads_single.output
+        case _:
+            raise ValueError(f'unsupported library layout: {_}')
+    return ret
+
+rule raw_reads_stats:
+    input: get_raw_reads_files
+    output:
+        stats = update("data/omics/{sample_type}/{sample}/reads/stats.csv"),
+        flag = touch("data/omics/{sample_type}/{sample}/reads/.reads_downloaded")
+    run: pass
+
 rule get_reads_paired:
     input:
         runinfo = rules.get_reads.output.runinfo,
@@ -141,7 +164,8 @@ rule get_reads_paired:
         rev_reads = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz",
     params:
         read_dir = subpath(input.runinfo, parent=True),
-        srr_accession = parse_input(input.runinfo, parse_runinfo, key='run')
+        srr_accession = parse_input(input.runinfo, parse_runinfo, key='run'),
+        stats_file = rules.raw_reads_stats.output.stats
     log: "logs/get_reads_paired/{sample_type}-{sample}.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
     shell:
@@ -164,6 +188,9 @@ rule get_reads_paired:
             echo "[ERROR] expected download files not found in {input.download_dir}"
             exit 1
         fi
+
+        seqkit stats -a -T {output.fwd_reads} {output.rev_reads} >{params.stats_file}
+        python3 -m code.check_raw_reads {params.stats_file} {output.fwd_reads} {output.rev_reads}
         """
 
 rule get_reads_single:
@@ -175,6 +202,7 @@ rule get_reads_single:
     params:
         read_dir = subpath(input.runinfo, parent=True),
         srr_accession = parse_input(input.runinfo, parse_runinfo, key='run'),
+        stats_file = rules.raw_reads_stats.output.stats
     log: "logs/get_reads_paired/{sample_type}-{sample}.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
     shell:
@@ -193,29 +221,10 @@ rule get_reads_single:
             echo "[ERROR] expected download file not found in {input.download_dir}"
             exit 1
         fi
+
+        seqkit stats -a -T {output.single_reads} >{params.stats_file}
+        python3 -m code.check_raw_reads {params.stats_file} {output.single_reads}
         """
-
-def get_raw_reads_files(wc):
-    """
-    Input function to get the raw reads files
-
-    Wildcards need to contain sample_type and sample
-    """
-    runinfo = checkpoints.get_runinfo.get(**wc).output[0]
-    match parse_runinfo(runinfo, 'library_layout'):
-        case 'PAIRED':
-            ret = rules.get_reads_paired.output
-        case 'SINGLE':
-            ret = rules.get_reads_single.output
-        case _:
-            raise ValueError(f'unsupported library layout: {_}')
-    return ret
-
-rule get_reads_check:
-    input:
-        get_raw_reads_files
-    output: touch("data/omics/{sample_type}/{sample}/reads/.reads_downloaded")
-    run: pass
 
 
 rule clumpify:
@@ -3570,28 +3579,6 @@ rule amplicon_hmm:
             nhmmscan --cpu {resources.cpus} --tblout {output.hmm_tbl} {params.amplicon_hmm_db} - > {output.full_out}
         """
 
-rule amplicon_stats:
-    input:
-        get_raw_reads_files
-    output:
-        stats = ensure("data/omics/{sample_type}/{sample}/detect_region/stats.csv", non_empty=True)
-    resources: cpus=1, mem_mb=1000, time_min=10
-    benchmark: "benchmarks/amplicon_stats/{sample_type}_{sample}.txt"
-    log: "logs/amplicon_stats/{sample_type}_{sample}.log"
-    container: "docker://eandersk/r_microbiome"
-    shell:
-        """
-        . code/shell_prelude {log}
-
-        seqkit stats -a -T {input} >{output.stats}
-
-        # seqkit does exit with 0 on errors, so check number of lines:
-        if [[ ! -e {output.stats} || $(wc -l < {output.stats}) -le 1 ]]; then
-            echo >&2 "[ERROR] {output.stats}: no such file, empty, or only header in output"
-            exit 1
-        fi
-        """
-
 rule amplicon_hmm_summarize_r:
     """
     The original R-implemented hmm summary
@@ -3637,11 +3624,12 @@ def get_hmm_summaries(wc):
 rule amplicon_guess_target:
     input:
         summaries=get_hmm_summaries,
-        stats = rules.amplicon_stats.output.stats
+        stats = rules.raw_reads_stats.output.stats
     output:
         target_info = "data/omics/{sample_type}/{sample}/detect_region/target_info.txt"
     resources: cpus=1, mem_mb=100, time_min=1
     run: code.amplicon.guess_target.main(input.summaries, input.stats, output.target_info)
+
 
 def target_info_files(wc):
     """
