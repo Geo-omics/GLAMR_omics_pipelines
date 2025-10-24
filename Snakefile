@@ -89,20 +89,17 @@ def get_srr_accession(file):
     else:
         return code.amplicon.sra.srs2srr(parse_accession(file))
 
-rule get_reads:
+rule get_reads_prep:
     input:
-        accession = "data/omics/{sample_type}/{sample}/reads/accession",
+        accession = "data/omics/{sample_type}/{sample}/reads/accession"
     output:
-        runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.tsv",
-        download_dir = temp(directory("data/omics/{sample_type}/{sample}/reads/tmp_downloads")),
+        runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.tsv"
     params:
-        read_dir = subpath(input.accession, parent=True),
         accn = parse_input(input.accession, parse_accession),
         srr_accn = parse_input(input.accession, get_srr_accession),
     conda: "config/conda_yaml/kingfisher.yaml"
-    #benchmark:
-    log: "logs/get_reads/{sample_type}-{sample}.log"
-    resources: time_min = 5000, heavy_network = 1, cpus = 8
+    log: "logs/get_reads_prep/{sample_type}-{sample}.log"
+    resources: time_min = 1, heavy_network = 1, cpus = 1
     shell:
         """
         . code/shell_prelude {log}
@@ -114,22 +111,53 @@ rule get_reads:
 
         echo "Given accession: {params.accn}"
         echo "Using accession: {params.srr_accn}"
-
         ./code/kingfisher/bin/kingfisher annotate -r "{params.srr_accn}" -a -f tsv -o {output.runinfo}
+        """
+
+rule get_reads:
+    input:
+        runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.tsv"
+    output:
+        download_dir = temp(directory("data/omics/{sample_type}/{sample}/reads/tmp_downloads"))
+    params:
+        read_dir = subpath(input.runinfo, parent=True),
+        srr_accn = parse_input(input.runinfo, parse_runinfo, key='run'),
+    conda: "config/conda_yaml/kingfisher.yaml"
+    log: "logs/get_reads/{sample_type}-{sample}.log"
+    resources: time_min = 5000, heavy_network = 1, cpus = 8
+    shell:
+        """
+        . code/shell_prelude {log}
+
+        if [[ -n "{ncbi_api_key}" ]]; then
+            export NCBI_API_KEY="{ncbi_api_key}"
+        fi
+        [[ -v "$NCBI_API_KEY" ]] && echo "[WARNING] environment variable NCBI_API_KEY is not set"
+
+        # Adding methods in same order as in kingfisher documentation:
+        command -v prefetch && have_sra_toolkit=true || have_sra_toolkit=false
+        meths=()
+        command -v ascp && meths=(ena-ascp) || true
+        $have_sra_toolkit && meths=("${{meths[@]}}" ena-ftp prefetch) || true
+        command -v aria2c && $have_sra_toolkit && meths=("${{meths[@]}}" aws-http) || true
+        $have_sra_toolkit && meths=("${{meths[@]}}" aws-cp) || true
+        echo "Available methods: ${{meths[*]}}"
+
+        echo "Using accession {params.srr_accn}"
         ./code/kingfisher/bin/kingfisher get \
             --download-threads {resources.cpus} \
             --extraction-threads {resources.cpus} \
             --hide-download-progress \
             -r "{params.srr_accn}" \
-            -m ena-ascp aws-http prefetch ena-ftp \
+            -m ${{meths[@]}}  \
             --output-format-possibilities fastq.gz \
             --output-directory {output.download_dir} \
             --check-md5sums
         """
 
 checkpoint get_runinfo:
-    input: rules.get_reads.output.runinfo
-    output: "data/omics/{sample_type}/{sample}/reads/runinfo1.tsv",
+    input: rules.get_reads_prep.output.runinfo
+    output: "data/omics/{sample_type}/{sample}/reads/runinfo1.tsv"
     resources: time_min = 1, cpus = 1
     shell: "ln -- {input} {output}"
 
@@ -163,7 +191,7 @@ rule raw_reads_stats:
 
 rule get_reads_paired:
     input:
-        runinfo = rules.get_reads.output.runinfo,
+        runinfo = rules.get_reads_prep.output.runinfo,
         download_dir = rules.get_reads.output.download_dir,
     output:
         fwd_reads = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
@@ -209,7 +237,7 @@ rule get_reads_paired:
 
 rule get_reads_single:
     input:
-        runinfo = rules.get_reads.output.runinfo,
+        runinfo = rules.get_reads_prep.output.runinfo,
         download_dir = rules.get_reads.output.download_dir,
     output:
         single_reads = "data/omics/{sample_type}/{sample}/reads/raw_single_reads.fastq.gz",
