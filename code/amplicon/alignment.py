@@ -87,13 +87,21 @@ class HMMRAlignment:
                     # two header lines and some trailing comments
                     continue
                 row = line.strip().split()
-                if row[0] not in models:
-                    raise ValueError(
-                        f'unknown HMM model: "{row[0]}" at line {lnum}'
-                    )
+                try:
+                    model_name = row[0]
+                except IndexError as e:
+                    raise RuntimeError(f'empty line at {lnum}') from e
+
+                try:
+                    model = models[model_name]
+                except KeyError as e:
+                    raise RuntimeError(
+                        f'unknown HMM model: "{model_name}" at line {lnum}'
+                    ) from e
+
                 try:
                     row = cls(
-                        model=models[row[0]],
+                        model=model,
                         qname=row[2],
                         hmmfrom=int(row[4]),
                         hmmto=int(row[5]),
@@ -102,9 +110,9 @@ class HMMRAlignment:
                         strand=row[11],
                         score=float(row[13]),
                     )
-                except (KeyError, ValueError) as e:
+                except (IndexError, ValueError) as e:
                     raise RuntimeError(
-                        f'failed parsing line {lnum}: {e}'
+                        f'failed parsing line {lnum}: {e} -- \n{row=}'
                     ) from e
                 rows.append(row)
         return rows
