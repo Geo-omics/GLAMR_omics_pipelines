@@ -3674,7 +3674,7 @@ rule amplicon_guess_target:
         summaries=get_hmm_summaries,
         stats = rules.raw_reads_stats.output.stats
     output:
-        target_info = "data/omics/{sample_type}/{sample}/detect_region/target_info.txt"
+        target_info = "data/omics/{sample_type}/{sample}/detect_region/target_info.json"
     resources: cpus=1, mem_mb=100, time_min=1
     run: code.amplicon.guess_target.main(input.summaries, input.stats, output.target_info)
 
@@ -3686,10 +3686,10 @@ def target_info_files(wc):
     Collects target info files for each amplicon sample in given dataset.
     """
     project_base = Path("data/projects/") / wc.dataset / 'amplicons'
-    omics_base = Path("data/omics/amplicons")
+    target_info = rules.amplicon_guess_target.output.target_info
     ret = []
     for i in project_base.glob("samp_*"):
-        ret.append(omics_base / i.name / 'detect_region' / 'target_info.txt')
+        ret.append(target_info.format(sample_type='amplicons', sample=i.name))
     return ret
 
 checkpoint amplicon_collect_target_guesses:
