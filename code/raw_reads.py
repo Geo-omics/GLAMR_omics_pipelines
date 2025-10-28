@@ -47,9 +47,11 @@ def make_stats(input, output, keep_existing=False):
     """
     Generate some raw read statistics with seqkit
 
-    keep_existing [bool]: If True and the output file exists then do nothing.
+    keep_existing [bool]:
+        If True and the output file exists then do nothing.
     """
     output = Path(str(output))
+
     if keep_existing and output.is_file():
         return
 
@@ -66,6 +68,7 @@ def make_stats(input, output, keep_existing=False):
                 f'[ERROR] seqkit stats wrote {lnum} lines but {expect} are '
                 f'expected'
             )
+    print(f'[OK] {output} written.')
 
 
 def post_download(input, output, params, layout=None):

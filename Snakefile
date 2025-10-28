@@ -188,16 +188,11 @@ rule raw_reads_stats:
     The normal way to produce this file via the rules get_reads_paired or
     get_reads_single rules.
     """
+    input: get_raw_reads_files
     output:
-        stats = update("data/omics/{sample_type}/{sample}/reads/stats.csv"),
+        stats = update("data/omics/{sample_type}/{sample}/reads/stats.tsv"),
     resources: time_min = 1, cpus = 1
-    run:
-        if not exists(output.stats):
-            raise RuntimeError(
-                f'[ERROR] no such stats file: {output.stats} -- On of the '
-                f'get_reads_xxxx must create it.'
-            )
-
+    run: code.raw_reads.make_stats(input, output.stats, keep_existing=True)
 
 def get_download_dir(wc):
     """
