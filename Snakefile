@@ -12,6 +12,7 @@ import code.amplicon.guess_target
 import code.amplicon.hmm_summarize
 import code.amplicon.sra
 from code.amplicon.utils import load_stats
+import code.raw_reads
 
 
 configfile: "config.yaml"
@@ -116,7 +117,7 @@ rule get_reads_prep:
 
 rule get_reads:
     input:
-        runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.tsv"
+        runinfo = ancient("data/omics/{sample_type}/{sample}/reads/runinfo.tsv")
     output:
         download_dir = temp(directory("data/omics/{sample_type}/{sample}/reads/tmp_downloads"))
     params:
@@ -161,7 +162,7 @@ checkpoint get_runinfo:
     resources: time_min = 1, cpus = 1
     shell: "ln -- {input} {output}"
 
-def get_raw_reads_files(wc):
+def get_raw_reads_files(wc, format=False):
     """
     Input function to get the raw reads files
 
@@ -175,104 +176,90 @@ def get_raw_reads_files(wc):
             ret = rules.get_reads_single.output
         case _:
             raise ValueError(f'unsupported library layout: {_}')
-    return ret
+    if format:
+        return [i.format(**wc) for i in ret]
+    else:
+        return ret
 
 rule raw_reads_stats:
-    input: get_raw_reads_files
+    """
+    A stand-in rule, is mostly here to define the name of the stats file.
+
+    The normal way to produce this file via the rules get_reads_paired or
+    get_reads_single rules.
+    """
     output:
         stats = update("data/omics/{sample_type}/{sample}/reads/stats.csv"),
-        flag = touch("data/omics/{sample_type}/{sample}/reads/.reads_downloaded")
-    shell:
-        """
-        [[ -e {output.stats} ]] || seqkit stats -a -T {input} >{output.stats}
-        # seqkit stats exits with status 0 even in error cases, so check line count!
-        [[ $(wc -l < {output.stats}) -gt 1 ]] || {{ echo "ERROR by seqkit stats"; exit 1; }}
-        """
+    resources: time_min = 1, cpus = 1
+    run:
+        if not exists(output.stats):
+            raise RuntimeError(
+                f'[ERROR] no such stats file: {output.stats} -- On of the '
+                f'get_reads_xxxx must create it.'
+            )
+
+
+def get_download_dir(wc):
+    """
+    Input function that may return empty or the temp downloads directory, which
+    is the output for get_reads, depending on whether raw reads need to be
+    downloaded.  If the raw reads exist they will get checked against the stats
+    file.  If no stats file exists it will be created from the existing raw reads
+    files (and the test should obviously succeed then.)  A failed test will result
+    in a new download.
+    """
+    raw_reads = partial(get_raw_reads_files, format=True)(wc)
+    for i in raw_reads:
+        if not exists(i):
+            print(f'Raw reads file missing: {i}')
+            break
+    else:
+        # all raw reads exist
+        stats_file = rules.raw_reads_stats.output.stats.format(**wc)
+        code.raw_reads.make_stats(raw_reads, stats_file, keep_existing=True)
+        runinfo = checkpoints.get_runinfo.get(**wc).output[0]
+        num_spots = parse_runinfo(runinfo, key='spots')
+        try:
+            code.raw_reads.check(stats=stats_file, num_spots=num_spots)
+        except Exception as e:
+            print(f'Raw reads check failed: {e}')
+        else:
+            # do not download again
+            return []
+    # download (again)
+    return rules.get_reads.output.download_dir.format(**wc)
 
 rule get_reads_paired:
     input:
         runinfo = rules.get_reads_prep.output.runinfo,
-        download_dir = rules.get_reads.output.download_dir,
+        download_dir = get_download_dir,
     output:
-        fwd_reads = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
-        rev_reads = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz",
+        fwd_reads = update("data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz"),
+        rev_reads = update("data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz"),
     params:
-        read_dir = subpath(input.runinfo, parent=True),
+        reads_dir = subpath(input.runinfo, parent=True),
         srr_accession = parse_input(input.runinfo, parse_runinfo, key='run'),
+        num_spots = parse_input(input.runinfo, parse_runinfo, key='spots'),
         stats_file = rules.raw_reads_stats.output.stats,
     log: "logs/get_reads_paired/{sample_type}-{sample}.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
-    run:
-        shell("""
-            . code/shell_prelude {log}
-
-            rm -f {params.stats_file}
-            fwd_base={input.download_dir}/{params.srr_accession}_1.fastq
-            rev_base={input.download_dir}/{params.srr_accession}_2.fastq
-            fwd_gz=$fwd_base.gz
-            rev_gz=$rev_base.gz
-
-            if [[ -e "$fwd_gz" && -e "$fwd_gz" ]]; then
-                mv -- "$fwd_gz" {output.fwd_reads}
-                mv -- "$rev_gz" {output.rev_reads}
-            elif [[ -e "$fwd_base" && -e "$rev_base" ]]; then
-                echo "[NOTICE] Got uncompressed files, compressing..."
-                gzip -c -1 "$fwd_base" > {output.fwd_reads}
-                gzip -c -1 "$rev_base" > {output.rev_reads}
-            else
-                echo "[ERROR] expected download files not found in {input.download_dir}"
-                exit 1
-            fi
-
-            seqkit stats -a -T {output.fwd_reads} {output.rev_reads} >{params.stats_file}
-        """)
-        spots = int(parse_runinfo(input.runinfo, 'spots'))
-        errs = []
-        for file, data in load_stats(params.stats_file).items():
-            if (num_seqs := data['num_seqs']) != spots:
-                errs.append(f'In file {file}: expected {spots} reads but got {num_seqs}')
-        if errs:
-            raise RuntimeError('\n'.join(errs))
+    run: code.raw_reads.post_download_paired(input, output, params)
 
 
 rule get_reads_single:
     input:
         runinfo = rules.get_reads_prep.output.runinfo,
-        download_dir = rules.get_reads.output.download_dir,
+        download_dir = get_download_dir,
     output:
-        single_reads = "data/omics/{sample_type}/{sample}/reads/raw_single_reads.fastq.gz",
+        single_reads = update("data/omics/{sample_type}/{sample}/reads/raw_single_reads.fastq.gz"),
     params:
-        read_dir = subpath(input.runinfo, parent=True),
+        reads_dir = subpath(input.runinfo, parent=True),
         srr_accession = parse_input(input.runinfo, parse_runinfo, key='run'),
-        stats_file = rules.raw_reads_stats.output.stats
+        num_spots = parse_input(input.runinfo, parse_runinfo, key='spots'),
+        stats_file = rules.raw_reads_stats.output.stats,
     log: "logs/get_reads_paired/{sample_type}-{sample}.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
-    run:
-        shell("""
-            . code/shell_prelude {log}
-
-            fwd_base={input.download_dir}/{params.srr_accession}.fastq
-            fwd_gz=$fwd_base.gz
-
-            if [[ -e "$fwd_gz" ]]; then
-                mv -- "$fwd_gz" "{output.single_reads}"
-            elif [[ -e "$fwd_base" ]]; then
-                echo "[NOTICE] Got uncompressed file, compressing..."
-                gzip -c -1 "$fwd_base" > "{output.single_reads}"
-            else
-                echo "[ERROR] expected download file not found in {input.download_dir}"
-                exit 1
-            fi
-
-            seqkit stats -a -T {output.single_reads} >{params.stats_file}
-        """)
-        spots = int(parse_runinfo(input.runinfo, 'spots'))
-        errs = []
-        for file, data in load_stats(params.stats_file).items():
-            if (num_seqs := data['num_seqs']) != spots:
-                errs.append(f'In file {file}: expected {spots} reads but got {num_seqs}')
-        if errs:
-            raise RuntimeError('\n'.join(errs))
+    run: code.raw_reads.post_download_single(input, output, params)
 
 
 rule clumpify:
