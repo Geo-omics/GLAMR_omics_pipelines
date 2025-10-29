@@ -3,6 +3,8 @@ import argparse
 from io import BytesIO
 import json
 from os import environ
+from random import randint
+from time import sleep
 
 from Bio import Entrez
 
@@ -70,11 +72,28 @@ def get_entry_raw(accession, multi=False):
     elif not multi and len(ids) > 1:
         raise RuntimeError(f'search returned multiple hits: {ids}')
 
-    with Entrez.efetch(db='sra', id=','.join(ids)) as h:
-        data = BytesIO()
-        data.write(h.read())
-        data.seek(0)
-        return data
+    num_attempts = 3
+    while num_attempts:
+        num_attempts -= 1
+        try:
+            with Entrez.efetch(db='sra', id=','.join(ids)) as h:
+                data = BytesIO()
+                data.write(h.read())
+                data.seek(0)
+                return data
+        except Exception as e:
+            print(f'[ERROR] get_entry_raw({accession}): {e}',
+                  end=' ', flush=True)
+            if 'Too Many Requests' in str(e):
+                # Try to catch urllib.error.HttpError 429? but can't seem to
+                # import that here (maybe circular?)
+                if num_attempts > 0:
+                    print(f'-- {num_attempts} more retries')
+                    sleep(randint(20, 40))
+                    continue
+                else:
+                    print('(no further attempts)')
+            raise
 
 
 def get_entry_xml(accession, multi=False):
