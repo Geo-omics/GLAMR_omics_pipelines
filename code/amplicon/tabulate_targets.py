@@ -2,17 +2,19 @@
 Collect targeting information for all samples of a dataset
 """
 import argparse
-from collections import Counter
+from contextlib import ExitStack
+import json
 from pathlib import Path
-import re
+from statistics import mean
+import sys
 
-from . import Err
+from .utils import UsageError
 
 
 TEST_FILE_PATTERN = 'guess*{sample_id}.txt'
 
 
-def main():
+def cli():
     argp = argparse.ArgumentParser(description=__doc__)
     argp.add_argument(
         'project_directory',
@@ -23,145 +25,135 @@ def main():
              ' per sample.',
     )
     argp.add_argument(
-        '--test-dir',
-        help='Directory with target info files for testing.  Target info files'
-             f'must be named via this pattern: "{TEST_FILE_PATTERN}"',
+        '--outfile',
+        help='Path to output file',
     )
     args = argp.parse_args()
+    try:
+        main(
+            None,
+            output=args.outfile,
+            project_dir=args.project_directory,
+        )
+    except UsageError as e:
+        argp.error(e)
 
-    project_dir = Path(args.project_directory)
 
-    data = collect_target_data(project_dir, args.test_dir)
-    data = mangle_data(data)
-    print_preamble(data, project_dir.name)
-    print_table(data)
+INFILE_TAIL = Path('detect_region') / 'target_info.json'
 
 
-def collect_target_data(project_dir, test_dir=None):
-    """
-    Collect data from target_info files under project directory
-    """
-    data = []
+def main(infiles, output=None, dataset=None, project_dir=None):
+    project_dir = Path(project_dir)
+    if not project_dir.is_dir():
+        raise UsageError(f'no such directory: {project_dir}')
+
+    # 1. get input files if needed
+    if infiles is None:
+        infiles = find_info_files(project_dir)
+    else:
+        infiles = [Path(i) for i in infiles]
+
+    # extract sample IDs if possible
+    samp_ids = []
+    tail_len = len(INFILE_TAIL.parts)
+    for i in infiles:
+        if i.parts[-tail_len:] == INFILE_TAIL.parts:
+            samp_ids.append(i.parents[tail_len - 1].name)
+        else:
+            samp_ids.append(i)
+
+    data = list(zip(samp_ids, collect_target_data(infiles), strict=True))
+    write_table(data, get_columns(data), output=output)
+    return
+    agg_data = aggregate(data, dataset=dataset)
+    write_output(agg_data, output)
+
+
+def find_info_files(project_dir):
+    """ Get all target_info files for a given dataset """
+    infiles = []
     for i in (project_dir / 'amplicons').iterdir():
         if not i.is_dir():
             continue
 
-        if i.is_symlink() and i.name != i.resolve().name:
-            # TODO / FIXME - meant for dev/testing only
-            # interpret this as skip / do not process sample
-            continue
-        sample_id = i.name
-        if test_dir:
-            test_file_glob = TEST_FILE_PATTERN.format(sample_id=sample_id)
-            for j in Path(test_dir).glob(test_file_glob):
-                input_file = j
-                break
+        if i.name.startswith('samp_'):
+            if (file := i / INFILE_TAIL).is_file():
+                infiles.append(file)
             else:
-                input_file = None
-        else:
-            input_file = i / 'detect_region' / 'target_info.txt'
-
-        if input_file:
-            row = get_target_info(input_file)
-        else:
-            row = {'errors': [(Err.E19, 'no test target info file')]}
-        row['sample_id'] = sample_id
-        data.append(row)
-
-    return data
+                print(f'[WARNING] target info missing: {file}')
+    return infiles
 
 
-error_pat = re.compile(r'^error E([0-9]+)')
-
-
-def get_target_info(target_info_file):
+def collect_target_data(infiles):
     """
-    Read target info file for a sample
+    Collect data from target_info files
     """
-    data = {'errors': []}
-    err_map = {i.value: i for i in Err}
-    try:
-        ifile = open(target_info_file)
-    except Exception as e:
-        data['errors'].append(
-            (Err.E18, f'no target info: {e.__class__.__name__}: {e}')
-        )
-        return data
-
-    with ifile as ifile:
-        for lnum, line in enumerate(ifile, start=1):
-            line = line.strip()
-            key, _, value = line.partition(':')
-            value = value.strip()
-            try:
-                value = int(value)
-            except ValueError:
-                pass
-
-            if key in data:
-                raise ValueError(
-                    f'duplicate key in {target_info_file} line {lnum}'
-                )
-            if m := error_pat.match(key):
-                try:
-                    err = err_map[int(m.group(1))]
-                except KeyError as e:
-                    raise ValueError('invalid error number') from e
-                data['errors'].append((err, value))
-            else:
-                data[key] = value
+    data = []
+    for i in infiles:
+        with open(i) as ifile:
+            data.append(json.load(ifile))
     return data
 
 
-def mangle_data(data):
-    for row in data:
-        row['errors_full'] = row['errors']
-        row['errors'] = ','.join(err.name for err, _ in row['errors_full'])
-        if row.get('swapped') == 'YES':
-            row['swapped'] = 'swapped'
-    return data
+def get_columns(data):
+    ranks = {}
+    for _, sample_data in data:
+        for rank, key in enumerate(sample_data.keys()):
+            if key not in ranks:
+                ranks[key] = []
+            ranks[key].append(rank)
+    ranks = [(k, mean(rs)) for k, rs in ranks.items()]
+    return [key for key, _ in sorted(ranks, key=lambda x: x[1])]
 
 
-def print_preamble(data, dataset):
-    errors = Counter()
-    for row in data:
-        errors.update(row['errors_full'])
-
-    print(f'# dataset {dataset} with {len(data)} amplicon samples')
-    cats = Counter()
-    for row in data:
-        if row['errors']:
-            cats['errors'] += 1
-        elif row['primers']:
-            cats[row['primers']] += 1
+def write_table(data, columns, output=None):
+    with ExitStack() as estack:
+        if output is None:
+            ofile = sys.stdout
         else:
-            raise ValueError('expecting primer or error')
-    print('#', *cats.most_common())
+            ofile = estack.enter_context(open(output, 'w'))
 
-    if errors:
-        for (err, msg), count in sorted(errors.items(), key=lambda x: x[0][0]):
-            print(f'# error {err.name}: [{count}x]', msg)
+        columns = ['sample', *columns]
+        ofile.write('\t'.join(columns))
+        ofile.write('\n')
+        for sample_id, sample_data in data:
+            sample_data['sample'] = sample_id
+            row = [str(sample_data[col]) for col in columns]
+            ofile.write('\t'.join(row))
+            ofile.write('\n')
+        if output is not None:
+            print(f'[OK] written {output}')
+
+
+def write_output(data, output):
+    out_txt = json.dumps(data, indent=4)
+    if output is None:
+        print(out_txt)
     else:
-        print('# no errors')
+        with open(output, 'w') as ofile:
+            ofile.write(out_txt)
+            ofile.write('\n')
+        print(f'[OK] written: {output}')
 
 
-def print_table(data):
-    columns = (
-        'sample_id', 'errors', 'swapped', 'primers', 'model', 'primer_content',
-        'distance', 'length', 'overlap',
-    )
+def aggregate(data, dataset=None):
+    GROUP_KEY = ('layout', 'model_name', 'fwd_primer', 'rev_primer')
+    groups = {}
+    for sample_id, samp_data in data:
+        key = tuple(samp_data.pop(i) for i in GROUP_KEY)
+        if key not in groups:
+            groups[key] = []
 
-    def sortkey(row):
-        try:
-            num = int(row['sample_id'].removeprefix('samp_'))
-        except Exception:
-            num = 0
-        return (row.get('model', ''), row.get('primers', ''), num)
+        groups[key].append(dict(sample_id=sample_id, **samp_data))
 
-    print(*columns, sep='\t')
-    for row in sorted(data, key=sortkey):
-        print(*(row.get(col, '') for col in columns), sep='\t')
+    # can't json-serialize the group key tuple as mapping key (must be string?)
+    json_compat_data = []
+    for key, group in groups.items():
+        item = dict(zip(GROUP_KEY, key))
+        item['samples'] = group
+        json_compat_data.append(item)
+    return json_compat_data
 
 
 if __name__ == '__main__':
-    main()
+    cli()

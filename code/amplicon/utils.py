@@ -34,3 +34,7 @@ def load_stats(path):
     if not rows:
         raise RuntimeError('no data in file')
     return rows
+
+
+class UsageError(Exception):
+    pass

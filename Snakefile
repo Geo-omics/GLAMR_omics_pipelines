@@ -11,6 +11,7 @@ import code.amplicon.dispatch
 import code.amplicon.guess_target
 import code.amplicon.hmm_summarize
 import code.amplicon.sra
+import code.amplicon.tabulate_targets
 from code.amplicon.utils import load_stats
 import code.raw_reads
 
@@ -3681,11 +3682,7 @@ checkpoint amplicon_collect_target_guesses:
         target_tab="data/projects/{dataset}/target_info.tsv"
     params:
         project_dir = subpath(output.target_tab, parent=True)
-    shell:
-        """
-        export PYTHONPATH=code
-        python3 -m amplicon.tabulate_targets {params.project_dir} > {output.target_tab}
-        """
+    run: code.amplicon.tabulate_targets.main(input, output=output.target_tab, **params, **wildcards)
 
 rule remove_primers_pe:
     input:

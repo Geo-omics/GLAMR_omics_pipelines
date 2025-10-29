@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from . import get_models, Err
-from .utils import load_stats
+from .utils import load_stats, UsageError
 
 
 def cli():
@@ -108,10 +108,6 @@ def main(summaries, stats_file, outfile=None):
             ofile.write(out_txt)
             ofile.write('\n')
         print(f'Output written to: {outfile}')
-
-
-class UsageError(Exception):
-    pass
 
 
 class BadData(Exception):
