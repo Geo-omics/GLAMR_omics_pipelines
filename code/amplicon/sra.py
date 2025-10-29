@@ -126,11 +126,16 @@ def get_entry(accession, multi=False, auto_parse=True):
                   f'{e.__class__.__name__}: {e}')
 
 
-def srs2srr(srs_accession):
+def srs2srr(accn):
     """ Look up SRRxxxxxxx from SRSxxxxxxxx accessions """
-    if not srs_accession.startswith('SRS'):
-        raise ValueError(f'expected SRSxxxxx accession, got {srs_accession}')
-    entry = get_entry(srs_accession)
+    bad_prefix_msg = 'expected SRSxxxxx accession, got {accn}'
+    if accn.startswith('SRX'):
+        print('[WARNING]', bad_prefix_msg.format(accn=accn),
+              'trying SRX accessions anyway')
+    elif not accn.startswith('SRS'):
+        raise ValueError(bad_prefix_msg.format(accn=accn))
+
+    entry = get_entry(accn)
     try:
         pkg = entry['EXPERIMENT_PACKAGE_SET']['EXPERIMENT_PACKAGE']
         run = pkg['RUN_SET']['RUN']
