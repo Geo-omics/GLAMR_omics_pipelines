@@ -39,6 +39,7 @@ def main(infile, outfile=None, debug=False):
     if not alignments:
         # nothing else to be done
         finish(summary, outfile)
+        return
 
     # 2. get best alignment per read
     alignments = pick_winning_model(alignments)
@@ -52,6 +53,7 @@ def main(infile, outfile=None, debug=False):
     summary['good_alignments_count'] = len(alignments)
     if not alignments:
         finish(summary, outfile)
+        return
 
     if debug:
         lines = []
@@ -62,6 +64,7 @@ def main(infile, outfile=None, debug=False):
         for line, count in reversed(Counter(lines).most_common()):
             print(f'{count:>5}', line)
         finish(summary)
+        return
 
     # 4. find primers and mode
     mode = get_mode(alignments)
