@@ -83,14 +83,6 @@ def parse_accession(file):
         raise RuntimeError(f'bad accession file? {value=}')
 
 
-def get_srr_accession(file):
-    """ parse_input function for rule get_reads """
-    accn = parse_accession(file)
-    if accn.startswith('SRR'):
-        return accn
-    else:
-        return code.amplicon.sra.srs2srr(parse_accession(file))
-
 rule get_reads_prep:
     input:
         accession = "data/omics/{sample_type}/{sample}/reads/accession"
@@ -98,23 +90,29 @@ rule get_reads_prep:
         runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.tsv"
     params:
         accn = parse_input(input.accession, parse_accession),
-        srr_accn = parse_input(input.accession, get_srr_accession),
     conda: "config/conda_yaml/kingfisher.yaml"
     log: "logs/get_reads_prep/{sample_type}-{sample}.log"
-    resources: time_min = 1, heavy_network = 1, cpus = 1
-    shell:
-        """
-        . code/shell_prelude {log}
+    resources: time_min = 5, heavy_network = 1, cpus = 1
+    run:
+        with open(input.accession) as ifile:
+            accn = parse_accession(ifile)
+        if accn.startswith('SRR'):
+            srr_accn = accn_str = accn
+        else:
+            srr_accn = code.amplicon.sra.srs2srr(accn, slow=True)
+            accn_str = accn + ' => ' + srr_accn
 
-        if [[ -n "{ncbi_api_key}" ]]; then
-            export NCBI_API_KEY="{ncbi_api_key}"
-        fi
-        [[ -v "$NCBI_API_KEY" ]] && echo "[WARNING] environment variable NCBI_API_KEY is not set"
+        print(f'Accession for {wildcards.sample}: {accn_str}')
+        shell("""
+            . code/shell_prelude {log}
 
-        echo "Given accession: {params.accn}"
-        echo "Using accession: {params.srr_accn}"
-        ./code/kingfisher/bin/kingfisher annotate -r "{params.srr_accn}" -a -f tsv -o {output.runinfo}
-        """
+            if [[ -n "{ncbi_api_key}" ]]; then
+                export NCBI_API_KEY="{ncbi_api_key}"
+            fi
+            [[ -v "$NCBI_API_KEY" ]] && echo "[WARNING] environment variable NCBI_API_KEY is not set"
+
+            ./code/kingfisher/bin/kingfisher annotate -r "{srr_accn}" -a -f tsv -o {output.runinfo}
+        """)
 
 rule get_reads:
     input:
