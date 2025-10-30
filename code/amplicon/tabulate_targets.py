@@ -118,7 +118,7 @@ def write_table(data, columns, output=None):
         ofile.write('\n')
         for sample_id, sample_data in data:
             sample_data['sample'] = sample_id
-            row = [str(sample_data[col]) for col in columns]
+            row = [str(sample_data.get(col, '')) for col in columns]
             ofile.write('\t'.join(row))
             ofile.write('\n')
         if output is not None:
