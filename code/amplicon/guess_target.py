@@ -31,12 +31,20 @@ def cli():
         '--output',
         help='Name of output file.  By default write to stdout',
     )
+    argp.add_argument(
+        '--traceback',
+        action='store_true',
+        help='always show traceback on errors',
+    )
 
     args = argp.parse_args()
     try:
         main(args.summary, args.stats, args.output)
     except UsageError as e:
-        argp.error(e)
+        if args.traceback:
+            raise
+        else:
+            argp.error(e)
 
 
 def main(summaries, stats_file, outfile=None):
@@ -100,6 +108,9 @@ def main(summaries, stats_file, outfile=None):
         f'E{err}: {msg}'
         for msg, err in errors
     ]
+    if not out_data['errors']:
+        del out_data['errors']
+
     out_txt = json.dumps(out_data, indent=4)
     if outfile is None:
         print(out_txt)
@@ -124,7 +135,25 @@ def error(errno, msg):
 
 def read_summary(file):
     with open(file) as ifile:
-        return json.load(ifile)
+        data = json.load(ifile)
+
+    all_models = get_models()
+    if model_name := data.get('model'):
+        model = all_models[model_name]
+        data['model'] = model
+    for direc, primers in [('fwd', model.fwd_primers), ('rev', model.rev_primers)]:  # noqa: E501
+        key = f'{direc}_primer'
+        if primer_name := data.get(key):
+            for i in primers:
+                if i.name == primer_name:
+                    data[key] = i
+                    break
+            else:
+                raise ValueError(
+                    f'no {direc} primer with name {primer_name} in model '
+                    f'{model_name}'
+                )
+    return data
 
 
 def get_lengths(stats_file, *summaries):
@@ -196,10 +225,9 @@ def check_single(single):
     MAX_DISTANCE = 30
 
     info = {'layout': 'single'}
-    models = get_models()
     errors = []
 
-    info['model_name'] = models[single['model']].name
+    info['model_name'] = single['model'].name
 
     if 'direction' in single:
         # 1. Did reads get swapped?
@@ -214,14 +242,14 @@ def check_single(single):
 
     # 2. basic checks
     if 'fwd_primer' in single:
-        info['fwd_primer'] = single['fwd_primer']
+        info['fwd_primer'] = single['fwd_primer'].name
         if single['fwd_count'] < MIN_COUNT:
             errors.append(('too few good reads with fwd primer', Err.E5))
     else:
         errors.append(('no fwd primer detected', Err.E6))
 
     if 'rev_primer' in single:
-        info['rev_primer'] = single['rev_primer']
+        info['rev_primer'] = single['rev_primer'].name
         if single['rev_count'] < MIN_COUNT:
             errors.append(('too few good reads with rev primer', Err.E7))
     else:
@@ -256,12 +284,11 @@ def check_paired(fwd, rev):
     MAX_DISTANCE = 30
 
     info = {'layout': 'paired'}
-    models = get_models()
     errors = []
 
     # 0. Check if there is agreement on the model
     if fwd['model'] == rev['model']:
-        info['model_name'] = models[fwd['model']].name
+        info['model_name'] = fwd['model'].name
 
         # 1. Did reads get swapped?
         # This check only makes sense if model is not in question
@@ -284,16 +311,20 @@ def check_paired(fwd, rev):
         swapped = False
     info['swapped'] = swapped
 
+    # These are the forward and reverse primers for the pair:
+    fwd_primer = fwd.get('fwd_primer')
+    rev_primer = rev.get('rev_primer')
+
     # 2. basic checks
-    if 'fwd_primer' in fwd:
-        info['fwd_primer'] = fwd['fwd_primer']
+    if fwd_primer:
+        info['fwd_primer'] = fwd_primer.name
         if fwd['fwd_count'] < MIN_COUNT:
             errors.append(('too few good reads with fwd primer', Err.E5))
     else:
         errors.append(('no fwd primer detected', Err.E6))
 
-    if 'rev_primer' in rev:
-        info['rev_primer'] = rev['rev_primer']
+    if rev_primer:
+        info['rev_primer'] = rev_primer.name
         if rev['rev_count'] < MIN_COUNT:
             errors.append(('too few good reads with rev primer', Err.E7))
     else:
@@ -314,15 +345,15 @@ def check_paired(fwd, rev):
             errors.append(('too far away from rev primer', Err.E10))
 
     # 4. Calculate overlap
-    if 'fwd_avg_scores' in fwd and 'rev_avg_scores' in rev:
+    if 'fwd_avg_score' in fwd and 'rev_avg_score' in rev:
         if fwd['fwd_clean']:
-            start = fwd['fwd_primer'].end + fwd['fwd_avg_score']['avg']
+            start = fwd_primer.end + fwd['fwd_avg_score']['avg']
         else:
-            start = fwd['fwd_primer'].end
+            start = fwd_primer.end
         if rev['rev_clean']:
-            end = rev['rev_primer'].start + rev['rev_avg_score']['avg']
+            end = rev_primer.start + rev['rev_avg_score']['avg']
         else:
-            end = rev['rev_primer'].start
+            end = rev_primer.start
         overlap = start + fwd['length'] + rev['length'] - end
         info['overlap'] = overlap
         if overlap >= 0:
@@ -333,12 +364,19 @@ def check_paired(fwd, rev):
 
     if overlap is not None and overlap >= 0:
         # check running into primer at other ends
-        if 'rev_primer' in fwd and fwd['rev_primer'] == rev['rev_primer']:
-            if 'rev_clean' in fwd and not fwd['rev_clean']:
-                info['fwd_reads_run_into_rev_primer'] = fwd['rev_avg_score']['avg']  # noqa: E501
-        if 'fwd_primer' in rev and rev['fwd_primer'] == fwd['fwd_primer']:
-            if 'fwd_clean' in rev and not rev['fwd_clean']:
-                info['rev_reads_run_into_fwd_primer'] = rev['fwd_avg_score']['avg']  # noqa: E501
+        if fwd_primer and rev_primer:
+            # fwd_end and rev_start below are not very accurate, it's not clear
+            # what the best way forward would be, cf. HMMR's ali vs. env
+            # coordinates
+            fwd_end = start + fwd['length']
+            info['fwd_rev_clean'] = fwd_end < rev_primer.start
+            if not info['fwd_rev_clean']:
+                info['fwd_rev_readthrough'] = fwd_end - rev_primer.start
+
+            rev_start = end - rev['length']
+            info['rev_fwd_clean'] = fwd_primer.end < rev_start
+            if not info['rev_fwd_clean']:
+                info['rev_fwd_readthrough'] = fwd_primer.end - rev_start
 
     info['errors'] = errors
     return info
