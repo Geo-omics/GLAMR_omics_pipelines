@@ -3,7 +3,7 @@ import argparse
 from io import BytesIO
 import json
 from os import environ
-from random import randint
+from random import uniform
 from time import sleep
 
 from Bio import Entrez
@@ -64,7 +64,7 @@ def search(accession):
         return res['IdList']
 
 
-def get_entry_raw(accession, multi=False):
+def get_entry_raw(accession, multi=False, slow=False):
     """ retrieve SRA entry by accession, return byte file handle """
     ids = search(accession)
     if len(ids) == 0:
@@ -74,6 +74,8 @@ def get_entry_raw(accession, multi=False):
 
     num_attempts = 3
     while num_attempts:
+        if slow:
+            sleep(uniform(0.0, 10.0))
         num_attempts -= 1
         try:
             with Entrez.efetch(db='sra', id=','.join(ids)) as h:
@@ -89,7 +91,7 @@ def get_entry_raw(accession, multi=False):
                 # import that here (maybe circular?)
                 if num_attempts > 0:
                     print(f'-- {num_attempts} more retries')
-                    sleep(randint(20, 40))
+                    sleep(uniform(10.0, 30.0))
                     continue
                 else:
                     print('(no further attempts)')
@@ -109,10 +111,10 @@ def get_entry_xml(accession, multi=False):
     return ET.fromstring(xml_txt)
 
 
-def get_entry(accession, multi=False, auto_parse=True):
+def get_entry(accession, multi=False, auto_parse=True, slow=False):
     """ retrieve SRA entry by accession """
     pref = accession[:3]
-    with get_entry_raw(accession, multi=multi) as data:
+    with get_entry_raw(accession, multi=multi, slow=slow) as data:
         if pref in ['SRS', 'SRX', 'SRR', 'SRP'] or not auto_parse:
             # biopython parser won't work with the EXPERIMENT_PACKAGE_SET
             # that we're expecting here
@@ -126,7 +128,7 @@ def get_entry(accession, multi=False, auto_parse=True):
                   f'{e.__class__.__name__}: {e}')
 
 
-def srs2srr(accn):
+def srs2srr(accn, slow=False):
     """ Look up SRRxxxxxxx from SRSxxxxxxxx accessions """
     bad_prefix_msg = 'expected SRSxxxxx accession, got {accn}'
     if accn.startswith('SRX'):
@@ -135,7 +137,7 @@ def srs2srr(accn):
     elif not accn.startswith('SRS'):
         raise ValueError(bad_prefix_msg.format(accn=accn))
 
-    entry = get_entry(accn)
+    entry = get_entry(accn, slow=slow)
     try:
         pkg = entry['EXPERIMENT_PACKAGE_SET']['EXPERIMENT_PACKAGE']
         run = pkg['RUN_SET']['RUN']
