@@ -1,4 +1,5 @@
 from enum import IntEnum
+from functools import cache
 
 from .hmm import HMM
 from .hmm_model_data import HMM_MODEL_DATA
@@ -9,6 +10,7 @@ Err = IntEnum('Err', ' '.join((f'E{i}' for i in range(20))))
 """ common error codes """
 
 
+@cache
 def get_models():
     """ Get known HMM models """
     primers = Primer.load()
