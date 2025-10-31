@@ -62,7 +62,19 @@ def main(infiles, output=None, dataset=None, project_dir=None):
         else:
             samp_ids.append(i)
 
-    data = list(zip(samp_ids, collect_target_data(infiles), strict=True))
+    data = zip(samp_ids, collect_target_data(infiles), strict=True)
+
+    # sort data by target and numeric sample ID
+    def sort_key(item):
+        samp_id, row = item
+        try:
+            snum = int(samp_id.removeprefix('samp_'))
+        finally:
+            snum = samp_id
+        return (row['layout'], row['model_name'], row['fwd_primer'],
+                row['rev_primer'], snum)
+    data = sorted(data, key=sort_key)
+
     write_table(data, get_columns(data), output=output)
     return
     agg_data = aggregate(data, dataset=dataset)
