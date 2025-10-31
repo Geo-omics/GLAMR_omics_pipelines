@@ -3667,10 +3667,10 @@ def target_info_files(wc):
 
     Collects target info files for each amplicon sample in given dataset.
     """
-    project_base = Path("data/projects/") / wc.dataset / 'amplicons'
+    project_samples = Path("data/projects/") / wc.dataset / 'amplicons'
     target_info = rules.amplicon_guess_target.output.target_info
     ret = []
-    for i in project_base.glob("samp_*"):
+    for i in project_samples.glob("samp_*"):
         ret.append(target_info.format(sample_type='amplicons', sample=i.name))
     return ret
 
