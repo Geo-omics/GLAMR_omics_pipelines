@@ -3626,7 +3626,7 @@ rule amplicon_hmm_summarize_r:
 
 rule amplicon_hmm_summarize:
     input: rules.amplicon_hmm.output.hmm_tbl
-    output: "data/omics/amplicons/{sample}/detect_region/{direc}_summary.txt"
+    output: "data/omics/amplicons/{sample}/detect_region/{direc}_summary.json"
     resources: cpus=1, mem_mb=100, time_min=1
     benchmark: "benchmarks/amplicon_hmm_summarize/{sample}_{direc}.txt"
     run: code.amplicon.hmm_summarize.main(input[0], output[0])

@@ -81,6 +81,7 @@ def finish(summary, output=None):
     else:
         with open(output, 'w') as ofile:
             ofile.write(out_txt)
+            ofile.write('\n')
         print(f'Output written to {output}')
 
 
