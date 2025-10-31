@@ -123,6 +123,7 @@ def get_mode(alignments):
     pair_data = Counter()
     for i in alignments:
         # below triggers the primer matching
+        # (see fwd_match() / rev_match() properties in alignment module)
         fwd_primer = None if i.fwd_match is None else i.fwd_match.primer
         rev_primer = None if i.rev_match is None else i.rev_match.primer
         fwd_data[fwd_primer] += 1

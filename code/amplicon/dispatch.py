@@ -1,5 +1,5 @@
 """
-Dispatch dada2 jobs
+Dispatch dada2 jobs for a dataset
 """
 import argparse
 from collections import Counter
@@ -8,6 +8,8 @@ import filecmp
 from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile
+
+from .utils import UsageError
 
 
 SINGLE_MODE_THRESHOLT = 0.8
@@ -22,7 +24,7 @@ DEFAULT_OUT_SAMPLES = 'sample_files.tsv'
 UNKNOWN = 'UNKNOWN'
 
 
-def main():
+def cli():
     argp = argparse.ArgumentParser(description=__doc__)
     argp.add_argument(
         'project_directory',
@@ -52,26 +54,47 @@ def main():
              f'tab-separated table listing samples with their paths to raw '
              f'reads.  Defaults to "{DEFAULT_OUT_SAMPLES}"',
     )
-    argp.add_argument(
-        '--force',
-        action='store_true',
-        help='Skip check that raw fastq files exist',
-    )
     args = argp.parse_args()
+    try:
+        main(
+            None,
+            args.target_tabular_input,
+            args.project_directory,
+            out_assignments=args.out_targets,
+            out_samples=args.out_samples,
+        )
+    except UsageError as e:
+        argp.error(e)
 
-    data = read_input(args.target_tabular_input)
+
+def main(
+    fastq_files,
+    target_tab,
+    project_dir,
+    out_assignments=None,
+    out_samples=None,
+):
+    project_dir = Path(project_dir).resolve()
+    data = load_target_table(target_tab)
     if not data:
-        argp.error('no data in input file?')
-    write_assignments(data, args.out_targets)
-    write_sample_info(
-        get_sample_info(data, args.project_directory, force=args.force),
-        args.out_samples,
-    )
+        raise UsageError(f'No data in input file: {target_tab}')
+
+    # sort by sample ID
+    def by_samp_id_key(row):
+        value = row['sample']
+        try:
+            value = int(value.removeprefix('samp_'))
+        finally:
+            return value
+    data = sorted(data, key=by_samp_id_key)
+
+    write_assignments(data, out_assignments)
+    write_sample_info(get_sample_info(data, project_dir), out_samples)
 
 
-def read_input(input_file):
+def load_target_table(input_file):
     """ Read input from tabular target info input file """
-    data = []
+    all_data = []
     with open(input_file) as ifile:
         header = None
         for line in ifile:
@@ -83,8 +106,17 @@ def read_input(input_file):
                 header = line.split('\t')
                 continue
 
-            data.append(dict(zip(header, line.split('\t'))))
-    return data
+            data = dict(zip(header, line.split('\t')))
+
+            for i in ['swapped', 'fwd_clean', 'rev_clean']:
+                if i in data:
+                    match data[i]:
+                        case 'True': data[i] = True
+                        case 'False': data[i] = False
+                        case _: raise ValueError('invalid value')
+
+            all_data.append(data)
+    return all_data
 
 
 def write_assignments(data, output_file):
@@ -92,15 +124,18 @@ def write_assignments(data, output_file):
     output_file = Path(output_file)
     stats = Counter()
     for row in data:
-        if row['errors']:
+        if 'errors' in row:
             row['target'] = UNKNOWN
         else:
-            row['target'] = row['model'] + '.' + row['primers']
+            row['target'] = '.'.join([
+                row['model_name'], row['fwd_primer'], row['rev_primer']
+            ])
         row['override'] = ''
         stats[row['target']] += 1
 
-    stats = stats.most_common()
-    print(f'Target stats: {stats}')
+    print('Dispatching...')
+    for target, count in stats.most_common():
+        print(f'  {count:>4} samples to target {target}')
 
     if len(stats) == 2:
         (top_target, top_count), (minor_target, minor_count) = stats
@@ -122,7 +157,7 @@ def write_assignments(data, output_file):
 
     print(f'Writing {output_file} ... ', end='', flush=True)
     with NamedTemporaryFile(mode='w+') as tmpfile:
-        header = ('sample_id', 'target', 'override')
+        header = ('sample', 'target', 'override')
         tmpfile.write('\t'.join(header))
         tmpfile.write('\n')
         for row in data:
@@ -150,67 +185,59 @@ def write_assignments(data, output_file):
     print('[Done]')
 
 
-def get_sample_info(data, project_dir, force=False):
+def get_sample_info(data, project_dir):
     """
     Compile the sample info from the data
+
+        project_dir: A resolved() pathlib.Path.
     """
-    project_dir = Path(project_dir)
     # paths as written to output will be relative to the data root
     glamr_root = project_dir.parent.parent.parent
-    info = []
-    for inrow in data:
-        swapped = bool(inrow['swapped'])
-        if inrow['primer_content']:
-            fwd_p_cont, _, rev_p_cont = inrow['primer_content'].partition('/')
-            if fwd_p_cont not in ['YES', 'no']:
-                raise ValueError(
-                    f'unexpected fwd primer content value: "{fwd_p_cont}"'
-                )
-            if rev_p_cont not in ['YES', 'no']:
-                raise ValueError(
-                    f'unexpected rev primer content value: "{rev_p_cont}"'
-                )
-        else:
-            assert bool(inrow['errors']) is True, 'unknown primer content should imply error, not?'  # noqa:E501
-            fwd_p_cont = rev_p_cont = None
+    all_info = []
+    for row in data:
+        samp_dir = project_dir / 'amplicons' / row['sample']
+        samp_dir = samp_dir.resolve().relative_to(glamr_root)
 
-        samp_dir = project_dir / 'amplicons' / inrow['sample_id']
-        samp_dir = samp_dir.resolve().relative_to(glamr_root.resolve())
-
-        if swapped:
-            # "Fix" the swap
-            fwd_infix = 'rev'
-            rev_infix = 'fwd'
-        else:
-            # keep as-is
-            fwd_infix = 'fwd'
-            rev_infix = 'rev'
-
-        if fwd_p_cont == 'YES':
-            fwd_fq = samp_dir / 'reads' / f'nopr.{fwd_infix}_reads.fastq.gz'
-        else:
-            fwd_fq = samp_dir / 'reads' / f'raw_{fwd_infix}_reads.fastq.gz'
-
-        if rev_p_cont == 'YES':
-            rev_fq = samp_dir / 'reads' / f'nopr.{rev_infix}_reads.fastq.gz'
-        else:
-            rev_fq = samp_dir / 'reads' / f'raw_{rev_infix}_reads.fastq.gz'
-
-        if not (glamr_root / fwd_fq).is_file():
-            if not force:
-                raise FileNotFoundError(f'no such fastq file: {fwd_fq}')
-        if not (glamr_root / rev_fq).is_file():
-            if not force:
-                raise FileNotFoundError(f'no such fastq file: {rev_fq}')
-        info.append({
-            'sample_id': inrow['sample_id'],
+        info = {
+            'sample_id': row['sample'],
             'sample_dir': samp_dir,
-            'fwd_primer_content': fwd_p_cont,
-            'rev_primer_content': rev_p_cont,
-            'fwd_fastq': fwd_fq,
-            'rev_fastq': rev_fq,
-        })
-    return info
+        }
+
+        if row['layout'] == 'paired':
+            if row['swapped']:
+                # "Fix" the swap
+                fwd_infix = 'rev'
+                rev_infix = 'fwd'
+            else:
+                # keep as-is
+                fwd_infix = 'fwd'
+                rev_infix = 'rev'
+
+            if row.get('fwd_clean') is False or row.get('fwd_rev_clean') is False:  # noqa:E501
+                fwd_fq = f'clean.{fwd_infix}_reads.fastq.gz'
+            else:
+                fwd_fq = f'raw_{fwd_infix}_reads.fastq.gz'
+
+            if row.get('rev_clean') is False or row.get('rev_fwd_clean') is False:  # noqa:E501
+                rev_fq = f'clean.{rev_infix}_reads.fastq.gz'
+            else:
+                rev_fq = f'raw_{rev_infix}_reads.fastq.gz'
+
+            info['fwd_fastq'] = samp_dir / 'reads' / fwd_fq
+            info['rev_fastq'] = samp_dir / 'reads' / rev_fq
+
+        elif row['layout'] == 'single':
+            if row.get('fwd_clean') is False or row.get('rev_clean') is False:
+                single_fq = 'clean.single_reads.fastq.gz'
+            else:
+                single_fq = 'raw_single_reads.fastq.gz'
+
+            info['single_fastq'] = samp_dir / 'reads' / single_fq
+        else:
+            raise ValueError('invalid layout')
+
+        all_info.append(info)
+    return all_info
 
 
 def write_sample_info(rows, output_file):
@@ -238,11 +265,13 @@ def get_fastq_files(path_template, dataset=None):
     The path_template must accept "dataset" formatting.
     """
     targets_tab = Path(path_template.format(dataset=dataset))
-    data = read_input(targets_tab)
+    project_dir = targets_tab.parent.resolve()
+    data = load_target_table(targets_tab)
     files = []
-    for row in get_sample_info(data, targets_tab.parent, force=True):
-        files.append(row['fwd_fastq'])
-        files.append(row['rev_fastq'])
+    for row in get_sample_info(data, project_dir):
+        for key in ['fwd_fastq', 'rev_fastq', 'single_fastq']:
+            if key in row:
+                files.append(row[key])
     return files
 
 

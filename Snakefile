@@ -11,6 +11,7 @@ import code.amplicon.dispatch
 import code.amplicon.guess_target
 import code.amplicon.hmm_summarize
 import code.amplicon.sra
+import code.amplicon.remove_primers
 import code.amplicon.tabulate_targets
 from code.amplicon.utils import load_stats
 import code.raw_reads
@@ -3688,17 +3689,37 @@ rule remove_primers_pe:
         fwd=rules.get_reads_paired.output.fwd_reads,
         rev=rules.get_reads_paired.output.rev_reads,
     output:
-        fwd="data/omics/{sample_type}/{sample}/reads/nopr.fwd_reads.fastq.gz",
-        rev="data/omics/{sample_type}/{sample}/reads/nopr.rev_reads.fastq.gz",
+        fwd="data/omics/{sample_type}/{sample}/reads/clean.fwd_reads.fastq.gz",
+        rev="data/omics/{sample_type}/{sample}/reads/clean.rev_reads.fastq.gz",
     params:
         reads_dir = subpath(output.fwd, parent=True)
-    shell:
-        """
-        PYTHONPATH=code python -m amplicon.remove_primers \
-            --fwd-out {output.fwd} --rev-out {output.rev} \
-            -- {input.target_info} {input.fwd} {input.rev} \
-            > {params.reads_dir}/primer_trimming.log
-        """
+    log: "logs/remove_primers/{sample_type}-{sample}.log"
+    run:
+        code.amplicon.remove_primers.main_paired(
+            input.target_info,
+            input.fwd,
+            input.rev,
+            output.fwd,
+            output.rev,
+            log[0],
+        )
+
+rule remove_primers_se:
+    input:
+        target_info=rules.amplicon_guess_target.output.target_info,
+        single=rules.get_reads_single.output.single_reads,
+    output:
+        single="data/omics/{sample_type}/{sample}/reads/clean.single_reads.fastq.gz"
+    params:
+        reads_dir = subpath(output.fwd, parent=True)
+    log: "logs/remove_primers/{sample_type}-{sample}.log"
+    run:
+        code.amplicon.remove_primers.main_single(
+            input.target_info,
+            input.single,
+            output.single,
+            log[0],
+        )
 
 def get_target_tab(wc):
     return checkpoints.amplicon_collect_target_guesses.get(**wc).output.target_tab
@@ -3708,21 +3729,21 @@ def get_dataset_fastq_files(wc):
 
 checkpoint amplicon_dispatch:
     input:
-        get_dataset_fastq_files,
+        fastqs = get_dataset_fastq_files,
         target_tab=get_target_tab,
     output:
         targets="data/projects/{dataset}/amplicon_target_assignments.tsv",
         samples="data/projects/{dataset}/amplicon_sample_info.tsv",
     params:
         project_dir = subpath(output.targets, parent=True)
-    shell:
-        """
-        PYTHONPATH=code python -m amplicon.dispatch \
-            --out-targets {output.targets} \
-            --out-samples {output.samples} \
-            {params.project_dir} \
-            {input.target_tab}
-        """
+    run:
+        code.amplicon.dispatch.main(
+            input.fastqs,
+            input.target_tab,
+            params.project_dir,
+            out_assignments=output.targets,
+            out_samples=output.samples,
+        )
 
 def get_target_assignments(wc):
     return checkpoints.amplicon_dispatch.get(**wc).output.targets
@@ -3771,7 +3792,7 @@ def dada2_output_dirs(wc):
             # ignore anything beyond that (could be used for a comment)
             sample, target, *override = line.split(maxsplit=3)
 
-            if sample == 'sample_id' and target == 'target':
+            if sample == 'sample' and target == 'target':
                 # header line
                 continue
 
