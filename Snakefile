@@ -3721,16 +3721,14 @@ rule remove_primers_se:
             log[0],
         )
 
-def get_target_tab(wc):
-    return checkpoints.amplicon_collect_target_guesses.get(**wc).output.target_tab
-
 def get_dataset_fastq_files(wc):
-    return code.amplicon.dispatch.get_fastq_files(get_target_tab(wc), **wc)
+    target_tab = checkpoints.amplicon_collect_target_guesses.get(**wc).output.target_tab
+    return code.amplicon.dispatch.get_fastq_files(target_tab, **wc)
 
 checkpoint amplicon_dispatch:
     input:
         fastqs = get_dataset_fastq_files,
-        target_tab=get_target_tab,
+        target_tab = rules.amplicon_collect_target_guesses.output.target_tab
     output:
         targets="data/projects/{dataset}/amplicon_target_assignments.tsv",
         samples="data/projects/{dataset}/amplicon_sample_info.tsv",
@@ -3745,16 +3743,11 @@ checkpoint amplicon_dispatch:
             out_samples=output.samples,
         )
 
-def get_target_assignments(wc):
-    return checkpoints.amplicon_dispatch.get(**wc).output.targets
-
-def get_sample_file_listing(wc):
-    return checkpoints.amplicon_dispatch.get(**wc).output.samples
 
 rule amplicon_dada2_target:
     input:
-        targets=get_target_assignments,
-        samples=get_sample_file_listing
+        targets = rules.amplicon_dispatch.output.targets,
+        samples = rules.amplicon_dispatch.output.samples,
     output:
         directory("data/projects/{dataset}/dada2.{target}.results")
     shell:
