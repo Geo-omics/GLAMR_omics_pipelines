@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""
+Generate test data for combine_coverage
+
+This undoes what combine_coverage does if run on a combined coverage file with
+all columns.  Running both tools in succession should result in identical data.
+"""
+import argparse
+from pathlib import Path
+
+
+argp = argparse.ArgumentParser()
+argp.add_argument(
+    'infile',
+    help='A combined coverage csv file, as if made by "coverm contig", '
+         'typically with all regular columns',
+)
+argp.add_argument(
+    '--out-dir',
+    help='Directory where split output are placed.  This directory should not '
+         'yet exist, it will be created.',
+)
+args = argp.parse_args()
+
+
+infile = open(args.infile)
+
+head0 = infile.readline().rstrip('\n').split('\t')
+
+outdir = Path(args.out_dir)
+outdir.mkdir()
+
+
+# read combined header
+col2name = {}
+for col_num, col in enumerate(head0[1:], start=2):
+    name, _, _ = col.partition(' ')
+    col2name[col_num] = name
+infile.seek(0)
+
+# prep
+name2file = {
+    name: (outdir / f'{name}.tsv').open('w')
+    for name in col2name.values()
+}
+col2file = {col: name2file[name] for col, name in col2name.items()}
+
+# write output
+for line in infile:
+    row = line.rstrip('\n').split('\t')
+    for ifile in name2file.values():
+        ifile.write(row[0])
+    for col, value in enumerate(row[1:], start=2):
+        col2file[col].write('\t' + value)
+    for ifile in name2file.values():
+        ifile.write('\n')
+
+for ifile in name2file.values():
+    ifile.close()
