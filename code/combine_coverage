@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""
+Combine split coverage files
+"""
+import argparse
+from contextlib import ExitStack
+
+
+argp = argparse.ArgumentParser()
+argp.add_argument(
+    'infile', nargs='+', help='per-sample coverage-against-co-assembly files',
+)
+argp.add_argument(
+    '--output-all',
+    help='output file, combined coverage with all columns from input files',
+)
+argp.add_argument(
+    '--output-mean',
+    help='output file, combined coverage, mean columns only',
+)
+argp.add_argument(
+    '--output-metabat',
+    help='output file, combined coverage, metabat-compatible columns',
+)
+args = argp.parse_args()
+
+
+files = [open(i) for i in args.infile]
+
+
+def get_col_indexes(*measures):
+    """
+    Get column indexes for columns of interest
+
+    This allows to not care if input files have consistent column ordering.
+    """
+    ret = []
+    for fidx, ifile in enumerate(files):
+        head_row = ifile.readline().rstrip('\n').split('\t')
+        mapping = {}
+        for colidx, item in enumerate(head_row):
+            _, _, measure = item.partition(' ')
+
+            if measure in measures:
+                if measure in mapping:
+                    raise RuntimeError('duplicate column?')
+                mapping[measure] = colidx - 1   # -1: compensate row w/o contig
+
+        if len(mapping) != len(measures):
+            raise RuntimeError('some column missing?')
+        ret.append(mapping)
+    for ifile in files:
+        ifile.seek(0)
+    return ret
+
+
+with ExitStack() as estack:
+    ofile = estack.enter_context(open(args.output_all, 'w'))
+
+    cols = None
+    if args.output_metabat:
+        ofile_mbat = estack.enter_context(open(args.output_metabat, 'w'))
+        cols = get_col_indexes('Mean', 'Variance', 'Length')
+    else:
+        ofile_mbat = None
+
+    if args.output_mean:
+        ofile_mean = estack.enter_context(open(args.output_mean, 'w'))
+        if cols is None:
+            cols = get_col_indexes('Mean')
+    else:
+        ofile_mean = None
+
+    for lnum, lines in enumerate(zip(*files, strict=True), start=1):
+        lines = (i.rstrip().split('\t') for i in lines)
+
+        if lnum == 1 and ofile_mbat:
+            # write three column headers
+            ofile_mbat.write('contigName\tcontigLen\ttotalAvgDepth')
+
+        first_val = None
+        for fidx, (contig, *row) in enumerate(lines):
+            if ofile_mbat or ofile_mean:
+                colidxs = cols[fidx]
+            if fidx == 0:
+                # first file / first column, the contig ID, should be shared by
+                # all input files, only write it once (taken from first file)
+                contig0 = contig
+                ofile.write(contig)
+
+                if ofile_mbat and lnum > 1:
+                    # write initial columns
+                    length0 = row[colidxs['Length']]
+                    depth0 = '???'  # TODO
+                    ofile_mbat.write(f'{contig}\t{length0}\t{depth0}')
+
+                if ofile_mean:
+                    # write 1st header or contig ID
+                    ofile_mean.write(contig)
+
+            if contig != contig0:
+                raise RuntimeError(
+                    f'contig ID mismatch: {contig} != {contig0} for '
+                    f'{files[fidx].name} at line {lnum}'
+                )
+            ofile.write('\t')
+            ofile.write('\t'.join(row))
+
+            if ofile_mbat or ofile_mean:
+                mean = row[colidxs['Mean']]
+
+            if ofile_mbat:
+                length = row[colidxs['Length']]
+                if lnum > 1 and length != length0:
+                    raise RuntimeError(
+                        f'length mismatch: file {files[fidx].name} line {lnum}'
+                        f' length {length}, expected {length0}\n{row=}'
+                    )
+                var = row[colidxs['Variance']]
+                if lnum == 1:
+                    # make this a header
+                    name, _, _ = mean.partition(' ')
+                    mean = name
+                    var = f'{name}-var'
+                ofile_mbat.write(f'\t{mean}\t{var}')
+
+            if ofile_mean:
+                ofile_mean.write(f'\t{mean}')
+
+        ofile.write('\n')
+
+        if ofile_mean:
+            ofile_mean.write('\n')
+
+        if ofile_mbat:
+            ofile_mbat.write('\n')
