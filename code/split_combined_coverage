@@ -40,7 +40,7 @@ infile.seek(0)
 
 # prep
 name2file = {
-    name: (outdir / f'{name}.tsv').open('w')
+    name: (outdir / f'{name}.full_cov.tsv').open('w')
     for name in col2name.values()
 }
 col2file = {col: name2file[name] for col, name in col2name.items()}

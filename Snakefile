@@ -2387,16 +2387,11 @@ rule map_to_contigs:
 
 
 rule contig_coverage:
-    input:
-        #bam_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bam"
-        bam_dir = config["binning_bam_dir"]
-    output: 
-        coverage = "data/projects/{project}/{sample_type}/{sample}/bins/contig_coverage.tsv",
-        coverage_full = "data/projects/{project}/{sample_type}/{sample}/bins/contig_coverage_all_stats.tsv",
-        coverage_metabat = "data/projects/{project}/{sample_type}/{sample}/bins/metabat_style_contig_coverage.tsv"
+    input: ancient(f'{config["binning_bam_dir"]}/{{bamfilename}}.bam')
+    output: f'{config["binning_bam_dir"]}/{{bamfilename}}.full_cov.tsv'
     params:
-        tmpdir = "tmp/coverm_contig_coverage/{sample}"
-    benchmark: "benchmarks/contig_coverage/{sample_type}-{project}__{sample}.txt"
+        tmpdir = "tmp/coverm_contig_coverage/xxx"
+    # benchmark: "benchmarks/contig_coverage/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/coverm.yaml"
     resources: cpus=24, mem_mb=120000, time_min=10000 # standard assemblies
     #resources: cpus=24, mem_mb=1000000, time_min=14400, partition = "largemem" # coassembly
@@ -2409,25 +2404,34 @@ rule contig_coverage:
         mkdir -p $TMPDIR
 
         coverm contig \
-            -b {input.bam_dir}/*.bam \
-            -t {resources.cpus} \
-            --output-file {output.coverage}
-
-        coverm contig \
-            -b {input.bam_dir}/*.bam \
+            -b {input} \
             -t {resources.cpus} \
             -m mean trimmed_mean covered_bases variance length count reads_per_base rpkm tpm \
-            --output-file {output.coverage_full}
-
-        coverm contig \
-            -b {input.bam_dir}/*.bam \
-            -t {resources.cpus} \
-            --methods metabat \
-            --output-file {output.coverage_metabat}
+            --output-file {output}
 
         rm -r {params.tmpdir}
         """
 
+rule combine_contig_coverage:
+    input: 
+        ancient([
+            i.with_suffix('.full_cov.tsv')
+            for i in Path(config["binning_bam_dir"]).glob('*.bam')
+        ])
+    output: 
+        coverage = "data/projects/{project}/{sample_type}/{sample}/bins/contig_coverage.tsv",
+        coverage_full = "data/projects/{project}/{sample_type}/{sample}/bins/contig_coverage_all_stats.tsv",
+        coverage_metabat = "data/projects/{project}/{sample_type}/{sample}/bins/metabat_style_contig_coverage.tsv"
+    benchmark: "benchmarks/contig_coverage/{sample_type}-{project}__{sample}.txt"
+    resources: cpus=1, mem_mb=100, time_min=120
+    shell:
+        """
+        code/combine_coverage \
+            --output-all {output.coverage_full} \
+            --output-mean {output.coverage} \
+            --output-metabat {output.coverage_metabat} \
+            {input}
+        """
 
 rule index_contig_coverage:
     input:
@@ -2491,7 +2495,7 @@ rule metabat2:
         bam_index = rules.index_contig_coverage.output.index_done,
         #bam_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bam",
         bam_dir = config["binning_bam_dir"],
-        coverm_depth = "data/projects/{project}/{sample_type}/{sample}/bins/metabat_style_contig_coverage.tsv"
+        coverm_depth = rules.combine_contig_coverage.output.coverage_metabat,
     output:
         #depth = "data/omics/{sample_type}/{sample}/bins/jgi_depth_summary.txt",
         done = touch("data/projects/{project}/{sample_type}/{sample}/bins/METABAT2/.done")
@@ -2516,7 +2520,7 @@ rule metabat2:
 rule maxbin2_coverage:
     input:
         script = "code/create_maxbin_coverage.R",
-        coverm_depth = "data/projects/{project}/{sample_type}/{sample}/bins/metabat_style_contig_coverage.tsv"
+        coverm_depth = rules.combine_contig_coverage.output.coverage_metabat,
     output:
         depths_file = "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/depths.txt"
     singularity: "docker://eandersk/r_microbiome"
@@ -2671,7 +2675,7 @@ rule VAMB:
 rule format_coverage_for_metadecoder:
     input:
         script = "code/make_metadecoder_coverage.R",
-        coverage = "data/projects/{project}/{sample_type}/{sample}/bins/contig_coverage.tsv",
+        coverage = rules.combine_contig_coverage.output.coverage,
         contigs = rules.rename_contigs.output.contigs
     output: "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/coverage.tsv"
     singularity: "docker://eandersk/r_microbiome"
