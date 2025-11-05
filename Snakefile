@@ -7,14 +7,14 @@ from glob import glob
 import pandas as pd
 import time
 
-import code.amplicon.dispatch
-import code.amplicon.guess_target
-import code.amplicon.hmm_summarize
-import code.amplicon.sra
-import code.amplicon.remove_primers
-import code.amplicon.tabulate_targets
-from code.amplicon.utils import load_stats
-import code.raw_reads
+import pypelib.amplicon.dispatch
+import pypelib.amplicon.guess_target
+import pypelib.amplicon.hmm_summarize
+import pypelib.amplicon.sra
+import pypelib.amplicon.remove_primers
+import pypelib.amplicon.tabulate_targets
+from pypelib.amplicon.utils import load_stats
+import pypelib.raw_reads
 
 
 configfile: "config.yaml"
@@ -100,7 +100,7 @@ rule get_reads_prep:
         if accn.startswith('SRR'):
             srr_accn = accn_str = accn
         else:
-            srr_accn = code.amplicon.sra.srs2srr(accn, slow=True)
+            srr_accn = pypelib.amplicon.sra.srs2srr(accn, slow=True)
             accn_str = accn + ' => ' + srr_accn
 
         print(f'Accession for {wildcards.sample}: {accn_str}')
@@ -192,7 +192,7 @@ rule raw_reads_stats:
     output:
         stats = update("data/omics/{sample_type}/{sample}/reads/stats.tsv"),
     resources: time_min = 1, cpus = 1
-    run: code.raw_reads.make_stats(input, output.stats, keep_existing=True)
+    run: pypelib.raw_reads.make_stats(input, output.stats, keep_existing=True)
 
 def get_download_dir(wc):
     """
@@ -211,11 +211,11 @@ def get_download_dir(wc):
     else:
         # all raw reads exist
         stats_file = rules.raw_reads_stats.output.stats.format(**wc)
-        code.raw_reads.make_stats(raw_reads, stats_file, keep_existing=True)
+        pypelib.raw_reads.make_stats(raw_reads, stats_file, keep_existing=True)
         runinfo = checkpoints.get_runinfo.get(**wc).output[0]
         num_spots = parse_runinfo(runinfo, key='spots')
         try:
-            code.raw_reads.check(stats=stats_file, num_spots=num_spots)
+            pypelib.raw_reads.check(stats=stats_file, num_spots=num_spots)
         except Exception as e:
             print(f'Raw reads check failed: {e}')
         else:
@@ -238,7 +238,7 @@ rule get_reads_paired:
         stats_file = rules.raw_reads_stats.output.stats,
     log: "logs/get_reads_paired/{sample_type}-{sample}.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
-    run: code.raw_reads.post_download_paired(input, output, params)
+    run: pypelib.raw_reads.post_download_paired(input, output, params)
 
 
 rule get_reads_single:
@@ -254,7 +254,7 @@ rule get_reads_single:
         stats_file = rules.raw_reads_stats.output.stats,
     log: "logs/get_reads_paired/{sample_type}-{sample}.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
-    run: code.raw_reads.post_download_single(input, output, params)
+    run: pypelib.raw_reads.post_download_single(input, output, params)
 
 
 rule clumpify:
@@ -3629,7 +3629,7 @@ rule amplicon_hmm_summarize:
     output: "data/omics/amplicons/{sample}/detect_region/{direc}_summary.json"
     resources: cpus=1, mem_mb=100, time_min=1
     benchmark: "benchmarks/amplicon_hmm_summarize/{sample}_{direc}.txt"
-    run: code.amplicon.hmm_summarize.main(input[0], output[0])
+    run: pypelib.amplicon.hmm_summarize.main(input[0], output[0])
 
 
 def get_hmm_summaries(wc):
@@ -3658,7 +3658,7 @@ rule amplicon_guess_target:
     output:
         target_info = "data/omics/{sample_type}/{sample}/detect_region/target_info.json"
     resources: cpus=1, mem_mb=100, time_min=1
-    run: code.amplicon.guess_target.main(input.summaries, input.stats, output.target_info)
+    run: pypelib.amplicon.guess_target.main(input.summaries, input.stats, output.target_info)
 
 
 def target_info_files(wc):
@@ -3681,7 +3681,7 @@ checkpoint amplicon_collect_target_guesses:
         target_tab="data/projects/{dataset}/target_info.tsv"
     params:
         project_dir = subpath(output.target_tab, parent=True)
-    run: code.amplicon.tabulate_targets.main(input, output=output.target_tab, **params, **wildcards)
+    run: pypelib.amplicon.tabulate_targets.main(input, output=output.target_tab, **params, **wildcards)
 
 rule remove_primers_pe:
     input:
@@ -3695,7 +3695,7 @@ rule remove_primers_pe:
         reads_dir = subpath(output.fwd, parent=True)
     log: "logs/remove_primers/{sample_type}-{sample}.log"
     run:
-        code.amplicon.remove_primers.main_paired(
+        pypelib.amplicon.remove_primers.main_paired(
             input.target_info,
             input.fwd,
             input.rev,
@@ -3714,7 +3714,7 @@ rule remove_primers_se:
         reads_dir = subpath(output.fwd, parent=True)
     log: "logs/remove_primers/{sample_type}-{sample}.log"
     run:
-        code.amplicon.remove_primers.main_single(
+        pypelib.amplicon.remove_primers.main_single(
             input.target_info,
             input.single,
             output.single,
@@ -3723,7 +3723,7 @@ rule remove_primers_se:
 
 def get_dataset_fastq_files(wc):
     target_tab = checkpoints.amplicon_collect_target_guesses.get(**wc).output.target_tab
-    return code.amplicon.dispatch.get_fastq_files(target_tab, **wc)
+    return pypelib.amplicon.dispatch.get_fastq_files(target_tab, **wc)
 
 checkpoint amplicon_dispatch:
     input:
@@ -3735,7 +3735,7 @@ checkpoint amplicon_dispatch:
     params:
         project_dir = subpath(output.targets, parent=True)
     run:
-        code.amplicon.dispatch.main(
+        pypelib.amplicon.dispatch.main(
             input.fastqs,
             input.target_tab,
             params.project_dir,
