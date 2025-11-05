@@ -4,6 +4,7 @@ Combine split coverage files
 """
 import argparse
 from contextlib import ExitStack
+import statistics
 
 
 argp = argparse.ArgumentParser()
@@ -78,6 +79,7 @@ with ExitStack() as estack:
             # write three column headers
             ofile_mbat.write('contigName\tcontigLen\ttotalAvgDepth')
 
+        means = []
         first_val = None
         for fidx, (contig, *row) in enumerate(lines):
             if ofile_mbat or ofile_mean:
@@ -122,6 +124,8 @@ with ExitStack() as estack:
                     name, _, _ = mean.partition(' ')
                     mean = name
                     var = f'{name}-var'
+                else:
+                    means.append(float(mean))
                 ofile_mbat.write(f'\t{mean}\t{var}')
 
             if ofile_mean:
@@ -134,3 +138,5 @@ with ExitStack() as estack:
 
         if ofile_mbat:
             ofile_mbat.write('\n')
+            if means:
+                print(f'BORK {contig0} {statistics.mean(means)}')
