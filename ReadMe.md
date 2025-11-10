@@ -6,7 +6,8 @@ GLAMR is designed to be a centralized resource housing Great Lakes omics dataset
 ## Folder structure
 ```
 GLAMR
-├── code
+├── code (scripts)
+├── pypelib (Python modules)
 ├── config
 │   ├── conda_yaml (for installing software dependencies)
 │   └── profiles (for snakemake)
@@ -17,15 +18,16 @@ GLAMR
 │   ├── projects [links to directories in the data/omics folder]
 |   |   └── project_name
 |   |       └── {sample_type}
-|   |           └── {sample_directories}
+|   |           └── {symlinks to sample_directories}
 │   ├── reference
 │   │   ├── amplicons
 │   │   ├── genomes
 │   │   ├── MAGs
 │   │   └── UMRAD
-│   |── sample_metadata
+│   ├── sample_metadata
 |   └──environment
-└── ReadMe.md
+├── ReadMe.md
+└── Snakefile
 ```
 
 ## Snakemake
