@@ -199,7 +199,7 @@ def get_sample_info(data, project_dir):
         samp_dir = samp_dir.resolve().relative_to(glamr_root)
 
         info = {
-            'sample_id': row['sample'],
+            'sample': row['sample'],
             'sample_dir': samp_dir,
         }
 

@@ -5,7 +5,7 @@ import argparse
 from collections import Counter
 from itertools import groupby
 import json
-from statistics import quantiles
+from statistics import median, quantiles
 
 from .alignment import HMMRAlignment
 
@@ -160,12 +160,16 @@ def get_mode(alignments):
     dirty_fwd_scores = []
     clean_rev_scores = []
     dirty_rev_scores = []
+    hmmfroms = []
+    hmmtos = []
     for i in alignments:
         fwd_primer = None if i.fwd_match is None else i.fwd_match.primer
         rev_primer = None if i.rev_match is None else i.rev_match.primer
 
         if (fwd_primer, rev_primer) == top_pair:
             items['top_alignments'].append(i)
+            hmmfroms.append(i.hmmfrom)
+            hmmtos.append(i.hmmto)
 
         if top_fwd_primer is not None and fwd_primer == top_fwd_primer:
             if i.fwd_match.clean:
@@ -226,6 +230,8 @@ def get_mode(alignments):
             ),
         }
 
+    items['hmmfrom_avg'] = median(hmmfroms)
+    items['hmmto_avg'] = median(hmmtos)
     return items
 
 

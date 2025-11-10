@@ -344,39 +344,49 @@ def check_paired(fwd, rev):
             # rev read's 5' end must be near a rev primer
             errors.append(('too far away from rev primer', Err.E10))
 
-    # 4. Calculate overlap
-    if 'fwd_avg_score' in fwd and 'rev_avg_score' in rev:
-        if fwd['fwd_clean']:
-            start = fwd_primer.end + fwd['fwd_avg_score']['avg']
+    # 4. Calculate clean read positions
+    match fwd.get('fwd_clean'):
+        case True | None: fwd_start = fwd['hmmfrom_avg']
+        case False: fwd_start = fwd_primer.end + 1
+        case _: raise ValueError()
+    fwd_end = fwd['hmmto_avg']
+    if rev_primer:
+        if rev_primer.start <= fwd_end:
+            info['fwd_rev_readthrough'] = fwd_end - rev_primer.start + 1
+            info['fwd_rev_clean'] = False
+            fwd_end = rev_primer.start - 1
         else:
-            start = fwd_primer.end
-        if rev['rev_clean']:
-            end = rev_primer.start + rev['rev_avg_score']['avg']
-        else:
-            end = rev_primer.start
-        overlap = start + fwd['length'] + rev['length'] - end
-        info['overlap'] = overlap
-        if overlap >= 0:
-            info['overlap_pct'] = f'{overlap / (end - start):.0%}'
+            info['fwd_rev_clean'] = True
 
+    match rev.get('rev_clean'):
+        case True | None: rev_end = rev['hmmto_avg']
+        case False: rev_end = rev_primer.start - 1
+        case _: raise ValueError()
+    rev_start = rev['hmmfrom_avg']
+    if fwd_primer:
+        if rev_start <= fwd_primer.end:
+            info['rev_fwd_readthrough'] = fwd_primer.end - rev_start + 1
+            info['rev_fwd_clean'] = False
+            rev_start = fwd_primer.end + 1
+        else:
+            info['rev_fwd_clean'] = True
+
+    info['fwd_hmmfrom'] = fwd_start
+    info['fwd_hmmto'] = fwd_end
+    info['rev_hmmfrom'] = rev_start
+    info['rev_hmmto'] = rev_end
+
+    # 5. Overlap (or gap?)
+    overlap = {
+        'start': max(fwd_start, rev_start),
+        'end': min(fwd_end, rev_end),
+    }
+    info['overlap'] = overlap
+    overlap_len = overlap['end'] - overlap['start'] + 1
+    if overlap_len >= 0:
+        info['overlap_pct'] = f'{overlap_len / (rev_end - fwd_start):.0%}'
     else:
-        overlap = None
-
-    if overlap is not None and overlap >= 0:
-        # check running into primer at other ends
-        if fwd_primer and rev_primer:
-            # fwd_end and rev_start below are not very accurate, it's not clear
-            # what the best way forward would be, cf. HMMR's ali vs. env
-            # coordinates
-            fwd_end = start + fwd['length']
-            info['fwd_rev_clean'] = fwd_end < rev_primer.start
-            if not info['fwd_rev_clean']:
-                info['fwd_rev_readthrough'] = fwd_end - rev_primer.start
-
-            rev_start = end - rev['length']
-            info['rev_fwd_clean'] = fwd_primer.end < rev_start
-            if not info['rev_fwd_clean']:
-                info['rev_fwd_readthrough'] = fwd_primer.end - rev_start
+        info['gap'] = overlap['start'] - overlap['end']
 
     info['errors'] = errors
     return info

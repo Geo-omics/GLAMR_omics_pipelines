@@ -103,8 +103,20 @@ def collect_target_data(infiles):
     data = []
     for i in infiles:
         with open(i) as ifile:
-            data.append(json.load(ifile))
+            data.append(flatten(json.load(ifile)))
     return data
+
+
+def flatten(data):
+    """ flatten dict-of-dicts into shallow dict """
+    ret = {}
+    for k, v in data.items():
+        if isinstance(v, dict):
+            for kk, vv in v.items():
+                ret[f'{k}_{kk}'] = vv
+        else:
+            ret[k] = v
+    return ret
 
 
 def get_columns(data):

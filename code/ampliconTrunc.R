@@ -3,7 +3,7 @@
 'Using dada2 with amplicon sequencing data
 
 Usage:
-  amplicon_quality_with_trunc.R [--glamr-root <PATH>] --quality <N> --outdir <PATH> --targets <PATH> --samples <PATH> <target>
+  amplicon_quality_with_trunc.R [--glamr-root <PATH>] --quality <N> --outdir <PATH> [--cpus <N>] --assignments <PATH> --samples <PATH> --targets <PATH> <target>
 
 The positional argument <sample_listing> is the path to a file made by the
 amplicon-dispatch script.
@@ -13,16 +13,20 @@ Options:
   --outdir <PATH>       Output Directory to save the filter and trim files,
                         quality plots, seqtab.nochim, representative sequences,
                         tracking read numbers
-  --targets <PATH>      Path to amplicon target assignment listing as produced
+  --assignments <PATH>  Path to amplicon target assignment listing as produced
                         by the amplicon-dispatch script.
   --samples <PATH>      Path to the samples and files listing as produced by
+                        the amplicon-dispatch script.
+  --targets <PATH>      Path to the target_info table.
                         the amplicon-dispatch script.
   --glamr-root <PATH>   GLAMR root directory, certain paths read from the other
                         input files will be interpreted as relative to this root directory
                         [default: ./]
   -q --quality=<N>      Quality threshold
+  --cpus=<N>            Number of threads/cpus [default: 1]
 ' -> doc
 
+library(Rcpp)
 library(dada2)
 library(docopt)
 library(fs)
@@ -33,13 +37,16 @@ library(tidyr)
 library(stringr)
 library(tibble)
 
+MIN_OVERLAP = 20
+
+
 args <- docopt(doc)
+cpus = as.integer(args$cpus)
+
 
 assignments <- read.delim(
-    args$targets,
-    sep='',
+    args$assignments,
     header=TRUE,
-    col.names=c('sample_id', 'target', 'override'),
     fill=TRUE,
 ) %>% tibble() %>%
     mutate(assigned=if_else(override == "", target, override, missing=target)) %>%
@@ -49,271 +56,141 @@ if (nrow(assignments) == 0) {
     stop('no samples where assigned to given target')
 }
 
+target_tab <- read.delim(args$targets, header=TRUE)
 
-wide_file_list <- read.delim(
+samples <- read.delim(
     args$samples,
-    sep='\t',
     header=TRUE,
-    col.names=c('sample_id', 'swapped', 'sample_dir', 'fwd', 'rev'),
 ) %>% tibble() %>%
-    semi_join(assignments, by=join_by('sample_id')) %>%
-    mutate(filt_reads_fwd=str_glue('{args$outdir}/filtered/{sample_id}_fwd.fastq.gz')) %>%
-    mutate(filt_reads_rev=str_glue('{args$outdir}/filtered/{sample_id}_rev.fastq.gz')) %>%
+    semi_join(assignments, by=join_by('sample')) %>%
+    left_join(target_tab, by=join_by('sample')) %>%
+    mutate(filt_reads_fwd=str_glue('{args$outdir}/filtered/{sample}_fwd.fastq.gz')) %>%
+    mutate(filt_reads_rev=str_glue('{args$outdir}/filtered/{sample}_rev.fastq.gz')) %>%
     # below: paste glamr_root and paths, but respect absolute paths in data,
     # make some effort to avoid double slashes
     mutate(sample_dir=if_else(str_starts(sample_dir, '/'),
                               sample_dir,
                               file.path(str_remove(args$glamr_root, '/$'), sample_dir))
     ) %>%
-    mutate(fwd=if_else(str_starts(sample_dir, '/'),
-                              fwd,
-                              file.path(str_remove(args$glamr_root, '/$'), fwd))
+    mutate(fwd_fastq=if_else(str_starts(sample_dir, '/'),
+                              fwd_fastq,
+                              file.path(str_remove(args$glamr_root, '/$'), fwd_fastq))
     ) %>%
-    mutate(rev=if_else(str_starts(sample_dir, '/'),
-                              rev,
-                              file.path(str_remove(args$glamr_root, '/$'), rev))
+    mutate(rev_fastq=if_else(str_starts(sample_dir, '/'),
+                              rev_fastq,
+                              file.path(str_remove(args$glamr_root, '/$'), rev_fastq))
     )
 
-if (nrow(assignments) != nrow(wide_file_list)) {
+if (nrow(assignments) != nrow(samples)) {
     stop('the sample file listing is missing rows for some samples??')
 }
 
 count <- 0
 
-for (i in seq_len(nrow(wide_file_list))) {
-  sample <- wide_file_list$sample_id[i]
-  path <- wide_file_list$sample_dir[i]
-
-  fwdScanPath <- file.path(path, "detect_region", "fwd_summary.tsv")
-  revScanPath <- file.path(path, "detect_region", "rev_summary.tsv")
-
-  fwdScan <- read.delim(fwdScanPath, header = TRUE, sep = "\t")
-  revScan <- read.delim(revScanPath, header = TRUE, sep = "\t")
-
-  if (fwdScan$seq_start_median[1] > fwdScan$seq_end_median[1] && revScan$seq_start_median[1] < revScan$seq_end_median[1]) {
-    print(paste0("Sample ", sample, " seems to have swapped forward and reverse reads"))
-    count <- count + 1
-
-    fwd_temp <- wide_file_list$fwd[i]
-    rev_temp <- wide_file_list$rev[i]
-    filt_fwd_temp <- wide_file_list$filt_reads_fwd[i]
-    filt_rev_temp <- wide_file_list$filt_reads_rev[i]
-
-    wide_file_list$fwd[i] <- rev_temp
-    wide_file_list$rev[i] <- fwd_temp
-    wide_file_list$filt_reads_fwd[i] <- filt_rev_temp
-    wide_file_list$filt_reads_rev[i] <- filt_fwd_temp
-  }
-}
-
-print(paste0(count, "/", nrow(wide_file_list), " of the samples are swapped"))
-
-forwardReads <- wide_file_list$fwd
-reverseReads <- wide_file_list$rev
+forwardReads <- samples$fwd_fastq
+reverseReads <- samples$rev_fastq
 
 # extract sample names
-namesOfSamples <- wide_file_list$sample_id
+namesOfSamples <- samples$sample
 
-fs::dir_create(path = args$outdir)
 
 # visualize and save quality of forward and reverse reads
-(forwardPlot <- plotQualityProfile(forwardReads[1:2]))
+cat('Plotting fwd reads quality for', length(samples), 'samples...\n')
+forwardPlot <- plotQualityProfile(forwardReads)
 plotDataFwd <- forwardPlot$data
-ggsave(filename = str_glue("{args$outdir}/forward_quality_plot.pdf"),
-       plot = forwardPlot, width = 5, height = 3, scale = 2)
+fs::dir_create(path = args$outdir)
+fwd_plot_path = str_glue("{args$outdir}/forward_quality_plot.pdf")
+ggsave(filename=fwd_plot_path, plot=forwardPlot, width=5, height=3, scale=2)
+cat('Saved as:', fwd_plot_path, '\n')
 
-(reversePlot <- plotQualityProfile(reverseReads[1:2]))
+cat('Plotting rev reads quality for', length(samples), 'samples...\n')
+reversePlot <- plotQualityProfile(reverseReads)
 plotDataRev <- reversePlot$data
-ggsave(filename = str_glue("{args$outdir}/reverse_quality_plot.pdf"),
-       plot = reversePlot, width = 5, height = 3, scale = 2)
+rev_plot_path = str_glue("{args$outdir}/reverse_quality_plot.pdf")
+ggsave(filename=rev_plot_path, plot=reversePlot, width=5, height=3, scale=2)
+cat('Saved as:', rev_plot_path, '\n')
 
-base_dir <- dirname(dirname(forwardReads[3]))
-fwdScanSummary <- file.path(base_dir, "detect_region", "fwd_summary.tsv")
-revScanSummary <- file.path(base_dir, "detect_region", "rev_summary.tsv")
-
-fwd_summary_t <- read.delim(fwdScanSummary, header = TRUE, sep = "\t")
-rev_summary_t <- read.delim(revScanSummary, header = TRUE, sep = "\t")
-
-if (fwd_summary_t$seq_start_median[1] > fwd_summary_t$seq_end_median[1]
-    && rev_summary_t$seq_start_median[1] < rev_summary_t$seq_end_median[1]) {
-      fwd_summary <- rev_summary_t
-      rev_summary <- fwd_summary_t
-} else {
-  fwd_summary <- fwd_summary_t
-  rev_summary <- rev_summary_t
-}
-
+cat('Computing truncation parameters...\n')
 # using weighted mean
-resultMeanFwd <- plotDataFwd %>%
+fwd_quality <- plotDataFwd %>%
   group_by(Cycle) %>%
   mutate(mean = sum(Score * Count) / sum(Count)) %>%
   slice_max(Count, with_ties = FALSE)
 
-resultMeanRev <- plotDataRev %>%
+rev_quality <- plotDataRev %>%
   group_by(Cycle) %>%
   mutate(mean = sum(Score * Count) / sum(Count)) %>%
   slice_max(Count, with_ties = FALSE)
 
 threshold <- args$quality
 
-# fwd_last is meant to be the location on the hmm model that the forward read ends reading
-# fwd_first is meant to be the location on the hmm model that the forward read starts reading
-# rev_last is meant to be the location on the hmm model that the reverse read ends reading
-# rev_first is meant to be the location on the hmm model that the reverse read starts reading
-# so rev_last < rev_first and fwd_last > fwd_first
-#       rev_last --V          V-- rev_first
-#                  ------------
-#             -------------
-# fwd_first --^           ^-- fwd_last
-fwd_last <- fwd_summary$hmm_end_median # hmm_end_median
-fwd_first <- fwd_summary$hmm_start_median # hmm_start_median
-rev_last <- rev_summary$hmm_start_median # hmm_start_median
-rev_first <- rev_summary$hmm_end_median # hmm_end_median
-
-
+# reads in HMM coordinates
+fwd_start <- round(median(samples$fwd_hmmfrom))
+fwd_end <- round(median(samples$fwd_hmmto))
+rev_start <- round(median(samples$rev_hmmfrom))
+rev_end <- round(median(samples$rev_hmmto))
+begin_overlap_hmm <- round(median(samples$overlap_start))
+end_overlap_hmm <- round(median(samples$overlap_end))
+overlap_len = end_overlap_hmm - begin_overlap_hmm
+cat('  hmm/fwds:', fwd_start, '-', fwd_end, '\n')
+cat('  hmm/revs:', rev_start, '-', rev_end, '\n')
+cat('  hmm/over:', begin_overlap_hmm, '-', end_overlap_hmm, ' (length:', overlap_len, ')', '\n')
+if (overlap_len < MIN_OVERLAP) {
+    stop(paste("Not enough overlap. Expected ", MIN_OVERLAP, "+. Overlap is:", overlap_len))
+}
 # Note: length of start and end on hmm does not necessarily correlate with length of start and end on seq
 
-# means the sequence is at follows
-# rev_first < fwd_first scenario:
-#       ---------                   <-- reverse read
-#                  ----------       <-- forward read
+# translate into read coordinates
+begin_overlap_seq_fwd = begin_overlap_hmm - fwd_start
+end_overlap_seq_fwd = min(begin_overlap_seq_fwd + overlap_len, max(fwd_quality$Cycle))
+begin_overlap_seq_rev = min(rev_end - begin_overlap_hmm, max(rev_quality$Cycle))
+end_overlap_seq_rev = rev_end - end_overlap_hmm
+cat('  begin_overlap_seq_fwd:', begin_overlap_seq_fwd, '\n')
+cat('    end_overlap_seq_fwd:', end_overlap_seq_fwd, '\n')
+cat('  begin_overlap_seq_rev:', begin_overlap_seq_rev, '\n')
+cat('    end_overlap_seq_rev:', end_overlap_seq_rev, '\n')
 
-# fwd_last < rev_last scenario:
-#               ----------          <-- reverse read
-#    --------                       <-- forward read
-if (rev_first < fwd_first || fwd_last < rev_last) {
-  # print out: No overlap.
-  # stop the program
-  stop("No overlap")
+# find 20-base window with maximum quality score
+fwd_window = begin_overlap_seq_fwd:(begin_overlap_seq_fwd + MIN_OVERLAP - 1)
+rev_window = (begin_overlap_seq_rev - MIN_OVERLAP + 1):begin_overlap_seq_rev
+high_score = -1
+while (last(fwd_window) < end_overlap_seq_fwd && first(rev_window) > end_overlap_seq_rev) {
+    fwd_window = fwd_window + 1
+    rev_window = rev_window - 1
+    score = sum(
+        fwd_quality$mean[fwd_window],
+        rev_quality$mean[rev_window]
+    )
+    if (score > high_score) {
+        high_score = score
+        forTrunc = last(fwd_window)
+        revTrunc = last(rev_window)
+    }
 }
+cat(' Initial trunc params, fwd:', forTrunc, 'rev:', revTrunc, '\n')
 
-if (rev_last < fwd_first && rev_first < fwd_last) { # Case 1
-  # means sequence is as follows
-  #      -------------              <-- reverse read
-  #          -------------          <-- forward read
-  if (abs(rev_first - fwd_first) < 20) {
-    stop(paste("Not enough overlap. Expected overlap is 20+. Overlap is", abs(rev_first - fwd_first)))
-  }
-
-  begin_overlap_hmm <- fwd_first
-  end_overlap_hmm <- rev_first
-
-  # left to right
-  begin_overlap_seq_fwd <- fwd_summary$seq_start_median
-  end_overlap_seq_fwd <- rev_first - fwd_first + 1
-
-  # left to right
-  begin_overlap_seq_rev <- rev_summary$seq_start_median - (fwd_first - rev_last)
-  end_overlap_seq_rev <- rev_summary$seq_end_median
-
-} else if (rev_last < fwd_first && fwd_last < rev_first) { # Case 2
-  # below assuming two sequences
-  #     ---------------               <-- reverse read
-  #        -------                    <-- forward read
-
-  if (fwd_last - fwd_first < 20) {
-    stop(paste("Not enough overlap. Expected overlap is 20+. Overlap is", abs(fwd_last - fwd_first)))
-  }
-
-  begin_overlap_hmm <- fwd_first
-  end_overlap_hmm <- fwd_last
-
-  # left to right
-  begin_overlap_seq_fwd <- fwd_summary$seq_start_median
-  end_overlap_seq_fwd <- fwd_summary$seq_end_median
-
-  # left to right
-  begin_overlap_seq_rev <- rev_summary$seq_start_median - (fwd_first - rev_last)
-  end_overlap_seq_rev <- begin_overlap_seq_rev - (end_overlap_seq_fwd - begin_overlap_seq_fwd)
-
-} else if (fwd_first < rev_last && rev_first < fwd_last) { # Case 3
-  # below assuming two sequences
-  #         --------                  <-- reverse read
-  #     --------------                <-- forward read
-  if (rev_first - rev_last < 20) {
-    stop(paste("Note enough overlap. Expected overlap is 20+. Overlap is", rev_first - rev_last))
-  }
-
-  begin_overlap_hmm <- rev_last
-  end_overlap_hmm <- rev_first
-
-  # left to right
-  begin_overlap_seq_fwd <- rev_last - fwd_first + 1
-  end_overlap_seq_fwd <- rev_first - fwd_first + 1
-
-  # left to right
-  begin_overlap_seq_rev <- rev_summary$seq_start_median
-  end_overlap_seq_rev <- rev_summary$seq_end_median
-
-} else { # Case 4
-  # below assuming normal two sequences
-  #           ---------------         <-- reverse read
-  #     ----------------              <-- forward read
-  if (abs(fwd_last - rev_last) < 20) {
-    stop(paste("Not enough overlap. Expected overlap is 20+. Overlap is", abs(fwd_last - rev_last)))
-  }
-
-  begin_overlap_hmm <- rev_last
-  end_overlap_hmm <- fwd_last
-
-  # left to right
-  begin_overlap_seq_fwd <- rev_last - fwd_first + 1
-  end_overlap_seq_fwd <- fwd_summary$seq_end_median
-
-  # left to right
-  begin_overlap_seq_rev <- rev_summary$seq_start_median
-  end_overlap_seq_rev <- rev_summary$seq_start_median - (end_overlap_seq_fwd - begin_overlap_seq_fwd)
-}
-
-sum <- 0
-
-# obtain first rolling avg
-for (i in 0:19) {
-  sum <- sum + resultMeanFwd$mean[i + begin_overlap_seq_fwd] + resultMeanRev$mean[begin_overlap_seq_rev - i]
-}
-
-revTrunc <- begin_overlap_seq_rev
-forTrunc <- begin_overlap_seq_fwd + 20
-optimal_sum <- sum
-
-for (i in 1:(end_overlap_seq_fwd - begin_overlap_seq_fwd - 20 + 1)) {
-  sum <- sum - resultMeanFwd$mean[i + begin_overlap_seq_fwd - 1] - resultMeanRev$mean[begin_overlap_seq_rev - i + 1]
-  sum <- sum + resultMeanFwd$mean[i + begin_overlap_seq_fwd + 20 - 1] + resultMeanRev$mean[begin_overlap_seq_rev - i - 20 + 1]
-
-  if (optimal_sum < sum) {
-    optimal_sum <- sum
-    revTrunc <- begin_overlap_seq_rev - i
-    forTrunc <- begin_overlap_seq_fwd + 20 + i - 1
-  }
-}
-
-continue <- TRUE
 # extend to the "right"
-while (forTrunc + 1 <= end_overlap_seq_fwd && continue) {
-  continue <- FALSE
-  sum <- resultMeanFwd$mean[forTrunc] + resultMeanFwd$mean[forTrunc - 1] + resultMeanFwd$mean[forTrunc + 1]
-  if (sum / 3 > threshold) {
-    continue <- TRUE
+while (mean(fwd_quality$mean[(forTrunc - 1):(forTrunc + 1)], na.rm=TRUE) > threshold) {
+    if (forTrunc >= end_overlap_seq_fwd) {
+      break
+    }
     forTrunc <- forTrunc + 1
-  }
 }
 
-continue <- TRUE
 # extend to the "left
-while (revTrunc + 1 <= begin_overlap_seq_rev & continue) {
-  continue <- FALSE
-  sum <- resultMeanRev$mean[revTrunc] + resultMeanRev$mean[revTrunc - 1] + resultMeanRev$mean[revTrunc + 1]
-  if (sum / 3 > threshold) {
-    continue <- TRUE
+while (mean(rev_quality$mean[(revTrunc - 1):(revTrunc + 1)], na.rm=TRUE) > threshold) {
+    if (revTrunc >= begin_overlap_seq_rev) {
+      break
+    }
     revTrunc <- revTrunc + 1
-  }
 }
-
-paste("Using forward truncation", forTrunc, "and reverse truncation", revTrunc)
+cat("Extended trunc params, fwd:", forTrunc, "rev:", revTrunc, '\n')
+final_overlap = overlap_len - (end_overlap_seq_fwd - forTrunc) - (begin_overlap_seq_rev - revTrunc)
+cat("Estimated overlap:", final_overlap, '\n')
 
 # filter and trim
-filtAndTrimForward <- wide_file_list$filt_reads_fwd
-filtAndTrimReverse <- wide_file_list$filt_reads_rev
+filtAndTrimForward <- samples$filt_reads_fwd
+filtAndTrimReverse <- samples$filt_reads_rev
 
 names(filtAndTrimForward) <- namesOfSamples
 names(filtAndTrimReverse) <- namesOfSamples
@@ -321,7 +198,7 @@ names(filtAndTrimReverse) <- namesOfSamples
 out <- filterAndTrim(forwardReads, filtAndTrimForward, reverseReads, filtAndTrimReverse,
                      truncLen=c(forTrunc, revTrunc),
                      maxN=0, maxEE=c(2,2), truncQ=2, rm.phix=TRUE,
-                     compress=TRUE, multithread=FALSE) # on macos multithread = true
+                     compress=TRUE, multithread=cpus)
 
 # saving the filter and trim to .tsv file
 out |>
@@ -330,8 +207,8 @@ out |>
   write_tsv(str_glue("{args$outdir}/filt_and_trim.tsv"))
 
 # learning errors
-errorForward <- learnErrors(filtAndTrimForward, multithread=TRUE)
-errorReverse <- learnErrors(filtAndTrimReverse, multithread=TRUE)
+errorForward <- learnErrors(filtAndTrimForward, multithread=cpus)
+errorReverse <- learnErrors(filtAndTrimReverse, multithread=cpus)
 
 # saving errors to an rds file
 errors <- list(errorForward, errorReverse)
@@ -342,9 +219,10 @@ forwardErrorPlot <- plotErrors(errorForward, nominalQ=TRUE)
 ggsave(filename = str_glue("{args$outdir}/forward_error_plot.pdf"),
        plot = forwardErrorPlot, width = 5, height = 3, scale = 2)
 
+print('SAVED ERRORS')
 # sample inference
-dadaForward <- dada(filtAndTrimForward, err=errorForward, multithread=TRUE)
-dadaReverse <- dada(filtAndTrimReverse, err=errorReverse, multithread=TRUE)
+dadaForward <- dada(filtAndTrimForward, err=errorForward, multithread=cpus)
+dadaReverse <- dada(filtAndTrimReverse, err=errorReverse, multithread=cpus)
 
 # merging forward and reverse reads
 mergeReads <- mergePairs(dadaForward, filtAndTrimForward, dadaReverse, filtAndTrimReverse, verbose=TRUE)
@@ -353,7 +231,7 @@ mergeReads <- mergePairs(dadaForward, filtAndTrimForward, dadaReverse, filtAndTr
 seqtable <- makeSequenceTable(mergeReads)
 
 # remove chimeras, saved to .tsv file
-seqtable_nochimeras <- removeBimeraDenovo(seqtable, method="consensus", multithread=TRUE, verbose=TRUE)
+seqtable_nochimeras <- removeBimeraDenovo(seqtable, method="consensus", multithread=cpus, verbose=TRUE)
 seqtable_nochimeras |>
   as.data.frame() |>
   `colnames<-`(openssl::md5(colnames(seqtable_nochimeras))) |>

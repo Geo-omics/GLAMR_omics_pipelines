@@ -3730,33 +3730,37 @@ checkpoint amplicon_dispatch:
         fastqs = get_dataset_fastq_files,
         target_tab = rules.amplicon_collect_target_guesses.output.target_tab
     output:
-        targets="data/projects/{dataset}/amplicon_target_assignments.tsv",
+        assignments="data/projects/{dataset}/amplicon_target_assignments.tsv",
         samples="data/projects/{dataset}/amplicon_sample_info.tsv",
     params:
-        project_dir = subpath(output.targets, parent=True)
+        project_dir = subpath(output.assignments, parent=True)
     run:
         pypelib.amplicon.dispatch.main(
             input.fastqs,
             input.target_tab,
             params.project_dir,
-            out_assignments=output.targets,
+            out_assignments=output.assignments,
             out_samples=output.samples,
         )
 
 
 rule amplicon_dada2_target:
     input:
-        targets = rules.amplicon_dispatch.output.targets,
+        assignments = rules.amplicon_dispatch.output.assignments,
         samples = rules.amplicon_dispatch.output.samples,
+        target_tab = rules.amplicon_collect_target_guesses.output.target_tab
     output:
         directory("data/projects/{dataset}/dada2.{target}.results")
+    resources: cpus=16
     shell:
         """
         ./code/ampliconTrunc.R \
             --quality 25 \
             --outdir {output} \
-            --targets {input.targets} \
+            --assignments {input.assignments} \
             --samples {input.samples} \
+            --targets {input.target_tab} \
+            --cpus {resources.cpus} \
             {wildcards.target}
         """
 
@@ -3770,7 +3774,7 @@ def dada2_output_dirs(wc):
     This will also check for missing target assignments and may raise a
     RuntimeError prompting to manually curate the target assignment file.
     """
-    assignments = Path(checkpoints.amplicon_dispatch.get(**wc).output.targets)
+    assignments = Path(checkpoints.amplicon_dispatch.get(**wc).output.assignments)
     with assignments.open() as ifile:
         targets = set()
         skip_count = 0
