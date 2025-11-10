@@ -80,8 +80,9 @@ def main_single(
         cmd = [
             'cutadapt',
             *args,
+            '--discard-untrimmed',
             '--output', single_out,
-            '--info-file', 'samp_102_trim_info.txt',
+            '--info-file', 'trim_info.txt',
             single_fastq,
         ]
         print('command:\n', *cmd, file=log)
@@ -129,10 +130,12 @@ def main_paired(
 
         cmd = [
             'cutadapt',
-            *args,
+            # *args,
+            # '--discard-untrimmed',
+            '-u', '17', '-U', '20',
             '--output', fwd_out,
             '--paired-output', rev_out,
-            '--info-file', 'samp_102_trim_info.txt',
+            '--info-file', 'trim_info.txt',
             rev_fastq if swapped else fwd_fastq,
             fwd_fastq if swapped else rev_fastq,
         ]

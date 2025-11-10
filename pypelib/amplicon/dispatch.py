@@ -5,6 +5,7 @@ import argparse
 from collections import Counter
 from datetime import datetime
 import filecmp
+from os import environ
 from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile
@@ -191,6 +192,9 @@ def get_sample_info(data, project_dir):
 
         project_dir: A resolved() pathlib.Path.
     """
+    # For testing, set env variable to pass the raw reads to dada2
+    USE_CLEAN = not bool(environ.get('NO_PRIMER_REMOVAL'))
+
     # paths as written to output will be relative to the data root
     glamr_root = project_dir.parent.parent.parent
     all_info = []
@@ -213,12 +217,12 @@ def get_sample_info(data, project_dir):
                 fwd_infix = 'fwd'
                 rev_infix = 'rev'
 
-            if row.get('fwd_clean') is False or row.get('fwd_rev_clean') is False:  # noqa:E501
+            if USE_CLEAN and (row.get('fwd_clean') is False or row.get('fwd_rev_clean') is False):  # noqa:E501
                 fwd_fq = f'clean.{fwd_infix}_reads.fastq.gz'
             else:
                 fwd_fq = f'raw_{fwd_infix}_reads.fastq.gz'
 
-            if row.get('rev_clean') is False or row.get('rev_fwd_clean') is False:  # noqa:E501
+            if USE_CLEAN and (row.get('rev_clean') is False or row.get('rev_fwd_clean') is False):  # noqa:E501
                 rev_fq = f'clean.{rev_infix}_reads.fastq.gz'
             else:
                 rev_fq = f'raw_{rev_infix}_reads.fastq.gz'
@@ -227,7 +231,7 @@ def get_sample_info(data, project_dir):
             info['rev_fastq'] = samp_dir / 'reads' / rev_fq
 
         elif row['layout'] == 'single':
-            if row.get('fwd_clean') is False or row.get('rev_clean') is False:
+            if USE_CLEAN and (row.get('fwd_clean') is False or row.get('rev_clean') is False):  # noqa:E501
                 single_fq = 'clean.single_reads.fastq.gz'
             else:
                 single_fq = 'raw_single_reads.fastq.gz'
