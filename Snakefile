@@ -3825,7 +3825,7 @@ rule remove_primers_se:
 
 def get_dataset_fastq_files(wc):
     target_tab = checkpoints.amplicon_collect_target_guesses.get(**wc).output.target_tab
-    return pypelib.amplicon.dispatch.get_fastq_files(target_tab, **wc)
+    return pypelib.amplicon.dispatch.get_fastq_files(target_tab, **wc, always_raw=False)
 
 checkpoint amplicon_dispatch:
     input:
@@ -3843,6 +3843,7 @@ checkpoint amplicon_dispatch:
             params.project_dir,
             out_assignments=output.assignments,
             out_samples=output.samples,
+            always_raw=False,
         )
 
 

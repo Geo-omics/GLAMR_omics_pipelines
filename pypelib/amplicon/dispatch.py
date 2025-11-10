@@ -73,6 +73,7 @@ def main(
     project_dir,
     out_assignments=None,
     out_samples=None,
+    always_raw=False
 ):
     project_dir = Path(project_dir).resolve()
     data = load_target_table(target_tab)
@@ -89,7 +90,10 @@ def main(
     data = sorted(data, key=by_samp_id_key)
 
     write_assignments(data, out_assignments)
-    write_sample_info(get_sample_info(data, project_dir), out_samples)
+    write_sample_info(
+        get_sample_info(data, project_dir, always_raw),
+        out_samples,
+    )
 
 
 def load_target_table(input_file):
@@ -185,7 +189,7 @@ def write_assignments(data, output_file):
     print('[Done]')
 
 
-def get_sample_info(data, project_dir):
+def get_sample_info(data, project_dir, always_raw=False):
     """
     Compile the sample info from the data
 
@@ -213,12 +217,12 @@ def get_sample_info(data, project_dir):
                 fwd_infix = 'fwd'
                 rev_infix = 'rev'
 
-            if row.get('fwd_clean') is False or row.get('fwd_rev_clean') is False:  # noqa:E501
+            if not always_raw and (row.get('fwd_clean') is False or row.get('fwd_rev_clean') is False):  # noqa:E501
                 fwd_fq = f'clean.{fwd_infix}_reads.fastq.gz'
             else:
                 fwd_fq = f'raw_{fwd_infix}_reads.fastq.gz'
 
-            if row.get('rev_clean') is False or row.get('rev_fwd_clean') is False:  # noqa:E501
+            if not always_raw and (row.get('rev_clean') is False or row.get('rev_fwd_clean') is False):  # noqa:E501
                 rev_fq = f'clean.{rev_infix}_reads.fastq.gz'
             else:
                 rev_fq = f'raw_{rev_infix}_reads.fastq.gz'
@@ -227,7 +231,7 @@ def get_sample_info(data, project_dir):
             info['rev_fastq'] = samp_dir / 'reads' / rev_fq
 
         elif row['layout'] == 'single':
-            if row.get('fwd_clean') is False or row.get('rev_clean') is False:
+            if not always_raw and (row.get('fwd_clean') is False or row.get('rev_clean') is False):  # noqa:E501
                 single_fq = 'clean.single_reads.fastq.gz'
             else:
                 single_fq = 'raw_single_reads.fastq.gz'
@@ -258,7 +262,7 @@ def write_sample_info(rows, output_file):
     print('[Done]')
 
 
-def get_fastq_files(path_template, dataset=None):
+def get_fastq_files(path_template, dataset=None, always_raw=False):
     """
     Return list of all fastq files -- helper for some Snakemake input function
 
@@ -268,7 +272,7 @@ def get_fastq_files(path_template, dataset=None):
     project_dir = targets_tab.parent.resolve()
     data = load_target_table(targets_tab)
     files = []
-    for row in get_sample_info(data, project_dir):
+    for row in get_sample_info(data, project_dir, always_raw=always_raw):
         for key in ['fwd_fastq', 'rev_fastq', 'single_fastq']:
             if key in row:
                 files.append(row[key])

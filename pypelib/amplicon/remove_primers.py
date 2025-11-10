@@ -80,6 +80,7 @@ def main_single(
         cmd = [
             'cutadapt',
             *args,
+            '--discard-untrimmed',
             '--output', single_out,
             '--info-file', 'samp_102_trim_info.txt',
             single_fastq,
@@ -129,7 +130,9 @@ def main_paired(
 
         cmd = [
             'cutadapt',
-            *args,
+            # *args,
+            # '--discard-untrimmed',
+            '-u', '17', '-U', '20',
             '--output', fwd_out,
             '--paired-output', rev_out,
             '--info-file', 'samp_102_trim_info.txt',
