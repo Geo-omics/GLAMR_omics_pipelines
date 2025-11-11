@@ -167,7 +167,7 @@ while (last(fwd_window) < end_overlap_seq_fwd && first(rev_window) > end_overlap
         revTrunc = last(rev_window)
     }
 }
-cat(' Initial trunc params, fwd:', forTrunc, 'rev:', revTrunc, '\n')
+cat('  Initial trunc params:: fwd:', forTrunc, 'rev:', revTrunc, '\n')
 
 # extend to the "right"
 while (mean(fwd_quality$mean[(forTrunc - 1):(forTrunc + 1)], na.rm=TRUE) > threshold) {
@@ -184,11 +184,12 @@ while (mean(rev_quality$mean[(revTrunc - 1):(revTrunc + 1)], na.rm=TRUE) > thres
     }
     revTrunc <- revTrunc + 1
 }
-cat("Extended trunc params, fwd:", forTrunc, "rev:", revTrunc, '\n')
+cat(" Extended trunc params:: fwd:", forTrunc, "rev:", revTrunc, '\n')
 final_overlap = overlap_len - (end_overlap_seq_fwd - forTrunc) - (begin_overlap_seq_rev - revTrunc)
-cat("Estimated overlap:", final_overlap, '\n')
+cat(" Estimated overlap:", final_overlap, '\n')
 
 # filter and trim
+cat("Filtering reads...\n")
 filtAndTrimForward <- samples$filt_reads_fwd
 filtAndTrimReverse <- samples$filt_reads_rev
 
@@ -207,6 +208,7 @@ out |>
   write_tsv(str_glue("{args$outdir}/filt_and_trim.tsv"))
 
 # learning errors
+cat("Learning errors...\n")
 errorForward <- learnErrors(filtAndTrimForward, multithread=cpus)
 errorReverse <- learnErrors(filtAndTrimReverse, multithread=cpus)
 
@@ -215,22 +217,31 @@ errors <- list(errorForward, errorReverse)
 write_rds(errors, str_glue("{args$outdir}/errors.rds"))
 
 # saving the forward error plot to a file
-forwardErrorPlot <- plotErrors(errorForward, nominalQ=TRUE)
-ggsave(filename = str_glue("{args$outdir}/forward_error_plot.pdf"),
-       plot = forwardErrorPlot, width = 5, height = 3, scale = 2)
+ggsave(
+    filename=str_glue("{args$outdir}/forward_error_plot.pdf"),
+    plot=plotErrors(errorForward, nominalQ=TRUE),
+    width=5, height=3, scale=2,
+)
+ggsave(
+    filename=str_glue("{args$outdir}/reverse_error_plot.pdf"),
+    plot=plotErrors(errorReverse, nominalQ=TRUE),
+    width=5, height=3, scale=2,
+)
 
-print('SAVED ERRORS')
 # sample inference
+cat("Running dada...\n")
 dadaForward <- dada(filtAndTrimForward, err=errorForward, multithread=cpus)
 dadaReverse <- dada(filtAndTrimReverse, err=errorReverse, multithread=cpus)
 
 # merging forward and reverse reads
+cat("Merging pairs...\n")
 mergeReads <- mergePairs(dadaForward, filtAndTrimForward, dadaReverse, filtAndTrimReverse, verbose=TRUE)
 
 # construct sequence table
 seqtable <- makeSequenceTable(mergeReads)
 
 # remove chimeras, saved to .tsv file
+cat("Removing chimeras...\n")
 seqtable_nochimeras <- removeBimeraDenovo(seqtable, method="consensus", multithread=cpus, verbose=TRUE)
 seqtable_nochimeras |>
   as.data.frame() |>
