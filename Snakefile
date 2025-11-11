@@ -3751,11 +3751,12 @@ rule amplicon_dada2_target:
         target_tab = rules.amplicon_collect_target_guesses.output.target_tab
     output:
         directory("data/projects/{dataset}/dada2.{target}.results")
+    params: quality_threshold=25
     resources: cpus=16
     shell:
         """
         ./code/ampliconTrunc.R \
-            --quality 25 \
+            --quality {params.quality_threshold} \
             --outdir {output} \
             --assignments {input.assignments} \
             --samples {input.samples} \
