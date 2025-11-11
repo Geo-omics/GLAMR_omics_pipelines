@@ -90,13 +90,14 @@ class HMMRAlignment:
                 try:
                     model_name = row[0]
                 except IndexError as e:
-                    raise RuntimeError(f'empty line at {lnum}') from e
+                    raise RuntimeError(f'{path }empty line at {lnum}') from e
 
                 try:
                     model = models[model_name]
                 except KeyError as e:
                     raise RuntimeError(
-                        f'unknown HMM model: "{model_name}" at line {lnum}'
+                        f'unknown HMM model: "{model_name}" at {path} line '
+                        f'{lnum}'
                     ) from e
 
                 try:
@@ -112,7 +113,7 @@ class HMMRAlignment:
                     )
                 except (IndexError, ValueError) as e:
                     raise RuntimeError(
-                        f'failed parsing line {lnum}: {e} -- \n{row=}'
+                        f'failed parsing {path} line {lnum}: {e}:\n{row=}'
                     ) from e
                 rows.append(row)
         return rows
