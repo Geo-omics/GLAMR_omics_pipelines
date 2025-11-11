@@ -112,6 +112,8 @@ rule get_reads_prep:
             fi
             [[ -v NCBI_API_KEY ]] && echo "[WARNING] environment variable NCBI_API_KEY is not set"
 
+            [[ -n "${{KINGFISHER_SLEEP:-}}" ]] && sleep $((RANDOM % 30))
+
             ./code/kingfisher/bin/kingfisher annotate -r "{srr_accn}" -a -f tsv -o {output.runinfo}
         """)
 
@@ -134,6 +136,8 @@ rule get_reads:
             export NCBI_API_KEY="{ncbi_api_key}"
         fi
         [[ -v NCBI_API_KEY ]] && echo "[WARNING] environment variable NCBI_API_KEY is not set"
+
+        [[ -n "${{KINGFISHER_SLEEP:-}}" ]] && sleep $((RANDOM % 30))
 
         # Adding methods in same order as in kingfisher documentation:
         command -v prefetch && have_sra_toolkit=true || have_sra_toolkit=false
