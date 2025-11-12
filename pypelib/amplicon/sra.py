@@ -1,5 +1,6 @@
 """ Module for dealings with the SRA """
 import argparse
+from contextlib import contextmanager
 from io import BytesIO
 import json
 from os import environ
@@ -57,45 +58,64 @@ def el2dict(elem):
     return {elem.tag: body}
 
 
+@contextmanager
+def try_three_times(fn, *args, **kwargs):
+    """
+    Slow down Entrez access if "too many requests," try up to three times.
+
+    Use as this:
+        with try_three_times(Entrez.esearch, db='sra', ...) as handle:
+            data = Entrez.read(handle)
+    """
+    attempts_left = 3
+    while attempts_left:
+        try:
+            resource = fn(*args, **kwargs)
+        except Exception as e:
+            attempts_left -= 1
+            if 'Too Many Requests' in str(e):
+                # Try to catch urllib.error.HttpError 429? but can't seem to
+                # import that here (maybe circular?)
+                if attempts_left:
+                    sleep(uniform(10.0, 30.0))
+                continue
+            # give up immediately on other errors
+            raise
+        else:
+            with resource as resource:
+                yield resource
+            break
+    else:
+        raise RuntimeError('tried maximum number of attempts')
+
+
 def search(accession):
     """ Run SRA search and get list of SRA-internal IDs """
-    with Entrez.esearch(db='sra', term=accession, idtype='acc') as h:
+    kwargs = dict(db='sra', term=accession, idtype='acc')
+    with try_three_times(Entrez.esearch, **kwargs) as h:
         res = Entrez.read(h)
         return res['IdList']
 
 
 def get_entry_raw(accession, multi=False, slow=False):
     """ retrieve SRA entry by accession, return byte file handle """
+    if slow:
+        sleep(uniform(0.0, 10.0))
     ids = search(accession)
     if len(ids) == 0:
         raise RuntimeError('search failed?')
     elif not multi and len(ids) > 1:
-        raise RuntimeError(f'search returned multiple hits: {ids}')
+        raise RuntimeError(
+            f'search for {accession=} returned multiple hits: {ids}'
+        )
 
-    num_attempts = 3
-    while num_attempts:
-        if slow:
-            sleep(uniform(0.0, 10.0))
-        num_attempts -= 1
-        try:
-            with Entrez.efetch(db='sra', id=','.join(ids)) as h:
-                data = BytesIO()
-                data.write(h.read())
-                data.seek(0)
-                return data
-        except Exception as e:
-            print(f'[ERROR] get_entry_raw({accession}): {e}',
-                  end=' ', flush=True)
-            if 'Too Many Requests' in str(e):
-                # Try to catch urllib.error.HttpError 429? but can't seem to
-                # import that here (maybe circular?)
-                if num_attempts > 0:
-                    print(f'-- {num_attempts} more retries')
-                    sleep(uniform(10.0, 30.0))
-                    continue
-                else:
-                    print('(no further attempts)')
-            raise
+    if slow:
+        sleep(uniform(0.0, 10.0))
+    with try_three_times(Entrez.efetch, db='sra', id=','.join(ids)) as h:
+        data = BytesIO()
+        data.write(h.read())
+        data.seek(0)
+        return data
 
 
 def get_entry_xml(accession, multi=False):
