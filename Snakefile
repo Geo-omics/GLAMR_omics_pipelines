@@ -23,9 +23,6 @@ report: "code/report/workflow.rst"
 
 shell.prefix('printf "Job executed on: ${{HOSTNAME}}\n" && printf "SLURM job id: ${{SLURM_JOB_ID}}\n\n"; ')
 
-ncbi_api_key = os.environ.get('NCBI_API_KEY', '')
-""" the api key is optional """
-
 current_dir = os.getcwd()
 #humann_ref_dir = "/home/kiledal/scratch_gdick1/GVHD/data/reference/humann" # for running on Great Lakes
 humann_ref_dir = "/geomicro/data2/kiledal/projects/GVHD/data/reference/humann"
@@ -103,6 +100,7 @@ rule get_reads_prep:
         runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.json"
     params:
         accn = parse_input(input.accession, parse_accession),
+        ncbi_api_key = os.environ.get('NCBI_API_KEY', '')
     conda: "config/conda_yaml/kingfisher.yaml"
     log: "logs/get_reads_prep/{sample_type}-{sample}.log"
     resources: time_min = 5, heavy_network = 1, cpus = 1
@@ -119,13 +117,10 @@ rule get_reads_prep:
         shell("""
             . code/shell_prelude {log}
 
-            if [[ -n "{ncbi_api_key}" ]]; then
-                export NCBI_API_KEY="{ncbi_api_key}"
-            fi
-            [[ -v NCBI_API_KEY ]] && echo "[WARNING] environment variable NCBI_API_KEY is not set"
+            [[ -n "{params.ncbi_api_key}" ]] && export NCBI_API_KEY={params.ncbi_api_key}
+            [[ -v NCBI_API_KEY ]] || echo "[NOTICE] environment variable NCBI_API_KEY is not set"
 
             [[ -n "${{KINGFISHER_SLEEP:-}}" ]] && sleep $((RANDOM % 30))
-
             ./code/kingfisher/bin/kingfisher annotate -r "{srr_accn}" -a -f json -o {output.runinfo}
         """)
         with open(output.runinfo) as ifile:
@@ -144,6 +139,7 @@ rule get_reads:
     params:
         read_dir = subpath(input.runinfo, parent=True),
         srr_accn = parse_input(input.runinfo, parse_runinfo, key='run'),
+        ncbi_api_key = os.environ.get('NCBI_API_KEY', '')
     conda: "config/conda_yaml/kingfisher.yaml"
     log: "logs/get_reads/{sample_type}-{sample}.log"
     resources: time_min = 5000, heavy_network = 1, cpus = 8
@@ -151,10 +147,8 @@ rule get_reads:
         """
         . code/shell_prelude {log}
 
-        if [[ -n "{ncbi_api_key}" ]]; then
-            export NCBI_API_KEY="{ncbi_api_key}"
-        fi
-        [[ -v NCBI_API_KEY ]] && echo "[WARNING] environment variable NCBI_API_KEY is not set"
+        [[ -n "{params.ncbi_api_key}" ]] && export NCBI_API_KEY={params.ncbi_api_key}
+        [[ -v NCBI_API_KEY ]] || echo "[NOTICE] environment variable NCBI_API_KEY is not set"
 
         [[ -n "${{KINGFISHER_SLEEP:-}}" ]] && sleep $((RANDOM % 30))
 
