@@ -193,8 +193,8 @@ def get_raw_reads_files(wc, format=False):
             ret = rules.get_reads_paired.output
         case 'SINGLE':
             ret = rules.get_reads_single.output
-        case _:
-            raise ValueError(f'unsupported library layout: {_}')
+        case other:
+            raise ValueError(f'unsupported library layout: {other}')
     if format:
         return [i.format(**wc) for i in ret]
     else:
