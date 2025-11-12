@@ -19,6 +19,8 @@ import pypelib.raw_reads
 
 
 configfile: "config.yaml"
+config.setdefault('binning_bam_dir', '/nosuchdirectory')
+
 report: "code/report/workflow.rst"
 
 shell.prefix('printf "Job executed on: ${{HOSTNAME}}\n" && printf "SLURM job id: ${{SLURM_JOB_ID}}\n\n"; ')
