@@ -1,4 +1,5 @@
 from contextlib import ExitStack
+import json
 import os
 import re
 import subprocess
@@ -53,12 +54,14 @@ rule make_rulegraph_bins:
         """
 
 
-def parse_runinfo(file, key):
+def parse_runinfo(file, key=None):
     """
     Get value from runinfo file
 
     Helper for rules that need bits from the runinfo file.
-    The runinfo file is a two-line tsv obtained by "kingfisher annotate."
+    The runinfo file is a json-formatted file obtained by "kingfisher annotate"
+
+    If key is None, then all data is returned.
     """
     with ExitStack() as stack:
         if isinstance(file, str):
@@ -71,9 +74,18 @@ def parse_runinfo(file, key):
             ifile = file
             ifile.seek(0)  # file handle re-used across multiple calls
 
-        for k, v in zip(*[i.split('\t') for i in ifile], strict=True):
-            if k == key:
-                return v
+        data = json.load(ifile)  # expecting a list
+        if len(data) == 0:
+            raise RuntimeError(f'empty runinfo? {ifile.name}')
+        if len(data) > 1:
+            # To be implemented if seen in the wild
+            raise RuntimeError(f'multiple exp packages? runinfo: {ifile.name}')
+        data = data[0]  # should get a dict
+        if key is None:
+            return data
+        else:
+            return data[key]
+
 
 def parse_accession(file):
     """ parse_input function for rule get_reads """
@@ -88,7 +100,7 @@ rule get_reads_prep:
     input:
         accession = "data/omics/{sample_type}/{sample}/reads/accession"
     output:
-        runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.tsv"
+        runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.json"
     params:
         accn = parse_input(input.accession, parse_accession),
     conda: "config/conda_yaml/kingfisher.yaml"
@@ -114,8 +126,15 @@ rule get_reads_prep:
 
             [[ -n "${{KINGFISHER_SLEEP:-}}" ]] && sleep $((RANDOM % 30))
 
-            ./code/kingfisher/bin/kingfisher annotate -r "{srr_accn}" -a -f tsv -o {output.runinfo}
+            ./code/kingfisher/bin/kingfisher annotate -r "{srr_accn}" -a -f json -o {output.runinfo}
         """)
+        with open(output.runinfo) as ifile:
+            runinfo = parse_runinfo(ifile)
+        if runinfo['number_of_runs_for_sample'] > 1:
+            raise RuntimeError(
+                f'Multiple runs per sample! {wildcards=} {params.accn=}\n'
+                f'{runinfo=}'
+            )
 
 rule get_reads:
     input:
