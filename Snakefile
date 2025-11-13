@@ -11,11 +11,11 @@ import time
 import pypelib.amplicon.dispatch
 import pypelib.amplicon.guess_target
 import pypelib.amplicon.hmm_summarize
-import pypelib.amplicon.sra
 import pypelib.amplicon.remove_primers
 import pypelib.amplicon.tabulate_targets
 from pypelib.amplicon.utils import load_stats
 import pypelib.raw_reads
+import pypelib.sra
 from pypelib.utils import save_error_file
 
 
@@ -111,7 +111,7 @@ rule get_reads_prep:
         with open(input.accession) as ifile:
             accn = parse_accession(ifile)
         with save_error_file(Path(output.runinfo).with_name('sra_error.json')):
-            srr_accn = pypelib.amplicon.sra.get_srr(accn, sample_type=wildcards.sample_type, slow=True)
+            srr_accn = pypelib.sra.get_srr(accn, sample_type=wildcards.sample_type, slow=True)
         accn_str = accn + ' => ' + srr_accn
 
         print(f'Accession for {wildcards.sample}: {accn_str}')

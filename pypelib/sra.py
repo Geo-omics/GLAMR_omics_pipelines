@@ -11,7 +11,7 @@ from Bio import Entrez
 
 import defusedxml.ElementTree as ET
 
-from pypelib.utils import save_error_file
+from .utils import save_error_file
 
 
 Entrez.email = 'GLAMR-omics@umich.edu'
