@@ -28,8 +28,9 @@ def el2dict(elem):
     for child in (el2dict(i) for i in elem):
         child_tag, child_body = list(child.items())[0]
         if child_tag in body:
-            # turn key/value into into key/list
+            # first turn key/value into into key/list
             lists[child_tag] = [body.pop(child_tag)]
+            lists[child_tag].append(child_body)
         elif child_tag in lists:
             lists[child_tag].append(child_body)
         else:
