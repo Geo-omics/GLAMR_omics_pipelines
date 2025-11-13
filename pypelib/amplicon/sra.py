@@ -11,6 +11,8 @@ from Bio import Entrez
 
 import defusedxml.ElementTree as ET
 
+from pypelib.utils import save_error_file
+
 
 Entrez.email = 'GLAMR-omics@umich.edu'
 Entrez.tool = 'glamr'
@@ -149,24 +151,91 @@ def get_entry(accession, multi=False, auto_parse=True, slow=False):
                   f'{e.__class__.__name__}: {e}')
 
 
-def srs2srr(accn, slow=False):
-    """ Look up SRRxxxxxxx from SRSxxxxxxxx accessions """
-    bad_prefix_msg = 'expected SRSxxxxx accession, got {accn}'
-    if accn.startswith('SRX'):
-        print('[WARNING]', bad_prefix_msg.format(accn=accn),
-              'trying SRX accessions anyway')
-    elif not accn.startswith('SRS'):
-        raise ValueError(bad_prefix_msg.format(accn=accn))
+def get_srr(accn, sample_type=None, slow=False):
+    """
+    Get the SRR for a given other accession
 
-    entry = get_entry(accn, slow=slow)
-    try:
-        pkg = entry['EXPERIMENT_PACKAGE_SET']['EXPERIMENT_PACKAGE']
-        run = pkg['RUN_SET']['RUN']
-        return run['accession']
-    except KeyError as e:
-        raise LookupError(
-            f'Failed parsing SRA record: {e}\n{str(entry)[:300]}...'
-        ) from e
+    accn: some SRA accession
+
+    Even if an SRR is given, some sanity checks will be run before the same
+    accession is returned.
+    """
+    strategy2sample_type = {
+        'AMPLICON': 'amplicons',
+        'WGS': 'metagenome',
+    }
+    entry = get_entry(accn, slow=slow, multi=True)
+    epset = entry['EXPERIMENT_PACKAGE_SET']
+    errargs = (accn, sample_type, epset)
+
+    if 'EXPERIMENT_PACKAGE_list' in epset:
+        # multiple experiments, need to find the right one
+        sample_type_matches = []
+        for expack in epset['EXPERIMENT_PACKAGE_list']:
+            if accn.startswith('SRR'):
+                if 'RUN' in expack['RUN_SET']:
+                    if accn == expack['RUN_SET']['RUN']['accession']:
+                        break
+                else:
+                    for run in expack['RUN_SET']['RUN_list']:
+                        if accn == run['accession']:
+                            break  # inner
+                    else:
+                        continue  # next expack
+                    break  # outer
+            elif accn.startswith('SRX'):
+                if expack['EXPERIMENT']['accession'] == accn:
+                    break
+            elif sample_type is not None:
+                strategy = expack['EXPERIMENT']['DESIGN']['LIBRARY_DESCRIPTOR']['LIBRARY_STRATEGY']  # noqa:E501
+                try:
+                    if sample_type == strategy2sample_type[strategy]:
+                        sample_type_matches.append(expack)
+                except KeyError:
+                    # TODO: add these to map
+                    raise NotImplementedError(f'missing: {strategy}', *errargs)
+            else:
+                # TODO
+                raise NotImplementedError(
+                    'need a way to discriminate these', *errargs,
+                )
+        else:
+            match len(sample_type_matches):
+                case 0:
+                    raise RuntimeError(
+                        f'{accn}: no matching experiment package found',
+                        *errargs
+                    )
+                case 1:
+                    expack = sample_type_matches[0]
+                case _:
+                    raise RuntimeError(
+                        f'{accn}/{sample_type}: multiple experiment packages',
+                        *errargs,
+                    )
+    else:
+        expack = epset['EXPERIMENT_PACKAGE']
+
+    if sample_type is not None:
+        try:
+            strategy = expack['EXPERIMENT']['DESIGN']['LIBRARY_DESCRIPTOR']['LIBRARY_STRATEGY']  # noqa:E501
+        except KeyError as e:
+            e.args = (*e.args, *errargs)
+            raise
+        try:
+            if sample_type != strategy2sample_type[strategy]:
+                raise RuntimeError(
+                    f'{accn}: {sample_type=} does not match {strategy=}',
+                    *errargs,
+                )
+        except KeyError:
+            # TODO: add these to map, see above
+            raise NotImplementedError(strategy, *errargs)
+
+    if 'RUN_list' in expack['RUN_SET']:
+        raise NotImplementedError(f'{accn}: multiple runs', *errargs)
+
+    return expack['RUN_SET']['RUN']['accession']
 
 
 def stringify(value):
@@ -201,10 +270,11 @@ def main():
     argp = argparse.ArgumentParser(description=__doc__)
     subs = argp.add_subparsers(dest='cmd', required=True)
     subp1 = subs.add_parser(
-        'srs2srr',
-        help='Look up SRRxxx accession from SRSxxx',
+        'srr',
+        help='Look up SRRxxx accession from other SRA accesions',
     )
-    subp1.add_argument('SRS_accession')
+    subp1.add_argument('any_accession')
+    subp1.add_argument('--error-file', help='path where to save error infos')
     subp2 = subs.add_parser(
         'runinfo',
         help='Get info for a run, writes json data to stdout.',
@@ -216,8 +286,9 @@ def main():
     args = argp.parse_args()
 
     match args.cmd:
-        case 'srs2srr':
-            print(srs2srr(args.SRS_accession))
+        case 'srr':
+            with save_error_file(args.error_file):
+                print(get_srr(args.any_accession))
         case 'runinfo':
             compile_srr_info(args.accession)
         case _:

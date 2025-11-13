@@ -16,6 +16,7 @@ import pypelib.amplicon.remove_primers
 import pypelib.amplicon.tabulate_targets
 from pypelib.amplicon.utils import load_stats
 import pypelib.raw_reads
+from pypelib.utils import save_error_file
 
 
 configfile: "config.yaml"
@@ -109,11 +110,9 @@ rule get_reads_prep:
     run:
         with open(input.accession) as ifile:
             accn = parse_accession(ifile)
-        if accn.startswith('SRR'):
-            srr_accn = accn_str = accn
-        else:
-            srr_accn = pypelib.amplicon.sra.srs2srr(accn, slow=True)
-            accn_str = accn + ' => ' + srr_accn
+        with save_error_file(Path(output.runinfo).with_name('sra_error.json')):
+            srr_accn = pypelib.amplicon.sra.get_srr(accn, sample_type=wildcards.sample_type, slow=True)
+        accn_str = accn + ' => ' + srr_accn
 
         print(f'Accession for {wildcards.sample}: {accn_str}')
         shell("""
