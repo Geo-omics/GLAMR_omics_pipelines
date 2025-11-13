@@ -8,8 +8,8 @@ import argparse
 import json
 from pathlib import Path
 
+from ..utils import load_stats, UsageError
 from . import get_models, Err
-from .utils import load_stats, UsageError
 
 
 def cli():

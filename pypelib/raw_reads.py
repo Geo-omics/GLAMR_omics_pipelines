@@ -5,7 +5,7 @@ from functools import partial
 from pathlib import Path
 import subprocess
 
-from .amplicon.utils import load_stats
+from .utils import load_stats
 
 
 def check(params=None, stats=None, num_spots=None):

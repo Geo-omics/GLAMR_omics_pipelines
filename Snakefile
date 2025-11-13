@@ -13,10 +13,9 @@ import pypelib.amplicon.guess_target
 import pypelib.amplicon.hmm_summarize
 import pypelib.amplicon.remove_primers
 import pypelib.amplicon.tabulate_targets
-from pypelib.amplicon.utils import load_stats
 import pypelib.raw_reads
 import pypelib.sra
-from pypelib.utils import save_error_file
+from pypelib.utils import load_stats, save_error_file
 
 
 configfile: "config.yaml"

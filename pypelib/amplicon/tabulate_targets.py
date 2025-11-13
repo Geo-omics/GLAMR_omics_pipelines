@@ -8,7 +8,7 @@ from pathlib import Path
 from statistics import mean
 import sys
 
-from .utils import UsageError
+from ..utils import UsageError
 
 
 TEST_FILE_PATTERN = 'guess*{sample_id}.txt'

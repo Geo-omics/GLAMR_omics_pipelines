@@ -9,7 +9,7 @@ from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile
 
-from .utils import UsageError
+from ..utils import UsageError
 
 
 SINGLE_MODE_THRESHOLT = 0.8
