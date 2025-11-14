@@ -94,7 +94,7 @@ def try_three_times(fn, *args, **kwargs):
 
 def search(accession, with_errors=False, quiet=False):
     """ Run SRA search and get list of SRA-internal IDs """
-    kwargs = dict(db='sra', term=accession, idtype='acc')
+    kwargs = dict(db='sra', term=f'{accession}[accn]')
     with try_three_times(Entrez.esearch, **kwargs) as h:
         res = Entrez.read(h)
 
