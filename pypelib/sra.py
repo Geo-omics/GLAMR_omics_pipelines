@@ -92,11 +92,36 @@ def try_three_times(fn, *args, **kwargs):
         raise RuntimeError('tried maximum number of attempts')
 
 
-def search(accession):
+def search(accession, with_errors=False, quiet=False):
     """ Run SRA search and get list of SRA-internal IDs """
     kwargs = dict(db='sra', term=accession, idtype='acc')
     with try_three_times(Entrez.esearch, **kwargs) as h:
         res = Entrez.read(h)
+
+    errs = []
+    for key, value in res.get('ErrorList', {}).items():
+        if value:
+            if not isinstance(value, list):
+                value = [value]
+            for item in value:
+                errs.append(f'[ERROR] (Entrez.esearch) {key}: {item}')
+    for key, value in res.get('WarningList', {}).items():
+        if key == 'OutputMessage':
+            for item in value:
+                errs.append(f'[NOTICE] (Entrez.esearch) {item}')
+        elif value:
+            if not isinstance(value, list):
+                value = [value]
+            for item in value:
+                errs.append(f'[WARNING] (Entrez.esearch) {key}: {item}')
+
+    if not quiet:
+        for line in errs:
+            print(line)
+
+    if with_errors:
+        return res['IdList'], errs
+    else:
         return res['IdList']
 
 
@@ -104,12 +129,13 @@ def get_entry_raw(accession, multi=False, slow=False):
     """ retrieve SRA entry by accession, return byte file handle """
     if slow:
         sleep(uniform(0.0, 10.0))
-    ids = search(accession)
+    ids, search_errors = search(accession, with_errors=True)
     if len(ids) == 0:
-        raise RuntimeError('search failed?')
+        raise RuntimeError('search failed?', *search_errors)
     elif not multi and len(ids) > 1:
         raise RuntimeError(
-            f'search for {accession=} returned multiple hits: {ids}'
+            f'search for {accession=} returned multiple hits: {ids}',
+            *search_errors,
         )
 
     if slow:
