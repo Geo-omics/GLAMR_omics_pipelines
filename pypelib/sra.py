@@ -162,12 +162,25 @@ def get_entry_xml(accession, multi=False):
 
 def get_entry(accession, multi=False, auto_parse=True, slow=False):
     """ retrieve SRA entry by accession """
-    pref = accession[:3]
     with get_entry_raw(accession, multi=multi, slow=slow) as data:
-        if pref in ['SRS', 'SRX', 'SRR', 'SRP'] or not auto_parse:
-            # biopython parser won't work with the EXPERIMENT_PACKAGE_SET
-            # that we're expecting here
-            return el2dict(ET.fromstring(data.read().decode()))
+        if not auto_parse:
+            try:
+                # biopython parser won't work with the EXPERIMENT_PACKAGE_SET
+                # that we're expecting here
+                entry = el2dict(ET.fromstring(data.read().decode()))
+            except Exception as e:
+                print(f'ERROR: e2dict failed! {e.__class__.__name__}: {e}')
+                raise
+            else:
+                if isinstance(entry, dict):
+                    if 'EXPERIMENT_PACKAGE_SET' in entry:
+                        return entry
+                # fall-back to Biopython's parsing
+                print(
+                    f'NOTICE: {accession=} did not return a exp pkg set, but:'
+                    f'\n', str(entry)[:1000]
+                )
+                data.seek(0)
 
         try:
             return Entrez.read(data)
@@ -175,6 +188,7 @@ def get_entry(accession, multi=False, auto_parse=True, slow=False):
             # no biopython support for the document type or so?
             print(f'auto-decoding failed for {accession}: '
                   f'{e.__class__.__name__}: {e}')
+            raise
 
 
 def get_srr(accn, sample_type=None, slow=False):
@@ -190,7 +204,7 @@ def get_srr(accn, sample_type=None, slow=False):
         'AMPLICON': 'amplicons',
         'WGS': 'metagenome',
     }
-    entry = get_entry(accn, slow=slow, multi=True)
+    entry = get_entry(accn, slow=slow, auto_parse=False, multi=True)
     epset = entry['EXPERIMENT_PACKAGE_SET']
     errargs = (accn, sample_type, epset)
 
@@ -270,10 +284,9 @@ def stringify(value):
 
 
 def compile_srr_info(accn):
-    if not accn.startswith('SRS') and not accn.startswith('SRR'):
-        raise ValueError('expecting SRR or SRS accession')
     info = {}
-    entry = get_entry(accn)
+    entry = get_entry(accn, auto_parse=False, multi=True)
+    # FIXME: fails in case of multiple exp packages
     pkg = entry['EXPERIMENT_PACKAGE_SET']['EXPERIMENT_PACKAGE']
     exp = pkg['EXPERIMENT']
     info['experiment'] = exp['accession']
