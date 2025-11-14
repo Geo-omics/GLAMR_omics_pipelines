@@ -1,3 +1,4 @@
+from collections import Counter
 from contextlib import ExitStack
 import json
 import os
@@ -130,6 +131,27 @@ rule get_reads_prep:
                 f'Multiple runs per sample! {wildcards=} {params.accn=}\n'
                 f'{runinfo=}'
             )
+
+rule summarize_sra_errors:
+    output: 'sra_error_summary.txt'
+    run:
+        unique_pref = re.compile(r'^SR[^:]+: ')  # rm accn to allow grouping
+        stats = Counter()
+        for i in Path('data/omics/').glob('*/samp_*/reads/sra_error.json'):
+            with open(i) as ifile:
+                data = json.load(ifile)
+            name = data['Exception']
+            try:
+                mesg = data['args'][0]
+            except IndexError:
+                megs = ''  # no args
+            mesg = unique_pref.sub('', mesg)
+            stats[(name, mesg)] += 1
+        print(*stats.most_common()[:10], sep='\n')
+        with open(output[0], 'w') as ofile:
+            for (name, mesg), count in stats.most_common():
+                ofile.write(f'{name}\t{mesg}\t{count}\n')
+
 
 rule get_reads:
     input:
