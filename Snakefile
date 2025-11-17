@@ -100,6 +100,7 @@ rule get_reads_prep:
     input:
         accession = "data/omics/{sample_type}/{sample}/reads/accession"
     output:
+        runinfo0 = "data/omics/{sample_type}/{sample}/reads/runinfo0.json",
         runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.json"
     params:
         accn = parse_input(input.accession, parse_accession),
@@ -111,7 +112,12 @@ rule get_reads_prep:
         with open(input.accession) as ifile:
             accn = parse_accession(ifile)
         with save_error_file(Path(output.runinfo).with_name('sra_error.json')):
-            srr_accn = pypelib.sra.get_srr(accn, sample_type=wildcards.sample_type, slow=True)
+            expack = pypelib.sra.get_experiment(accn, sample_type=wildcards.sample_type, slow=True)
+
+        info = pypelib.sra.compile_srr_info(expack)
+        with open(output.runinfo0, 'w') as ofile:
+            json.dump(info, ofile, indent=4)
+        srr_accn = expack['RUN_SET']['RUN']['accession']
         accn_str = accn + ' => ' + srr_accn
 
         print(f'Accession for {wildcards.sample}: {accn_str}')

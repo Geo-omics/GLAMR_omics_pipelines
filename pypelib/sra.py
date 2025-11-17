@@ -191,19 +191,19 @@ def get_entry(accession, multi=False, auto_parse=True, slow=False):
             raise
 
 
-def get_srr(accn, sample_type=None, slow=False):
+def get_experiment(accn, sample_type=None, slow=False):
     """
-    Get the SRR for a given other accession
+    Get the experiment record for a given accession
 
     accn: some SRA accession
 
-    Even if an SRR is given, some sanity checks will be run before the same
-    accession is returned.
+    Even if an SRR is given, some sanity checks will be run.
     """
     strategy2sample_type = {
         'AMPLICON': 'amplicons',
         'WGS': 'metagenome',
     }
+    strict_mode = environ.get('SRA_ESEARCH_STRICT', False)
     entry = get_entry(accn, slow=slow, auto_parse=False, multi=True)
     epset = entry['EXPERIMENT_PACKAGE_SET']
     errargs = (accn, sample_type, epset)
@@ -232,8 +232,11 @@ def get_srr(accn, sample_type=None, slow=False):
                     if sample_type == strategy2sample_type[strategy]:
                         sample_type_matches.append(expack)
                 except KeyError:
-                    # TODO: add these to map
-                    raise NotImplementedError(f'missing: {strategy}', *errargs)
+                    if strict_mode:
+                        # TODO: add these to map
+                        raise NotImplementedError(
+                            f'unknown library strategy: {strategy}', *errargs
+                        )
             else:
                 # TODO
                 raise NotImplementedError(
@@ -250,31 +253,41 @@ def get_srr(accn, sample_type=None, slow=False):
                     expack = sample_type_matches[0]
                 case _:
                     raise RuntimeError(
-                        f'{accn}/{sample_type}: multiple experiment packages',
+                        f'{accn}/{sample_type}: multiple matching experiment '
+                        f'packages',
                         *errargs,
                     )
     else:
         expack = epset['EXPERIMENT_PACKAGE']
 
     if sample_type is not None:
-        try:
-            strategy = expack['EXPERIMENT']['DESIGN']['LIBRARY_DESCRIPTOR']['LIBRARY_STRATEGY']  # noqa:E501
-        except KeyError as e:
-            e.args = (*e.args, *errargs)
-            raise
+        strategy = expack['EXPERIMENT']['DESIGN']['LIBRARY_DESCRIPTOR']['LIBRARY_STRATEGY']  # noqa:E501
         try:
             if sample_type != strategy2sample_type[strategy]:
-                raise RuntimeError(
-                    f'{accn}: {sample_type=} does not match {strategy=}',
-                    *errargs,
-                )
+                if strict_mode:
+                    raise RuntimeError(
+                        f'{accn}: {sample_type=} does not match {strategy=}',
+                        *errargs,
+                    )
         except KeyError:
-            # TODO: add these to map, see above
-            raise NotImplementedError(strategy, *errargs)
+            if strict_mode:
+                # TODO: add these to map, see above
+                raise NotImplementedError(strategy, *errargs)
 
     if 'RUN_list' in expack['RUN_SET']:
         raise NotImplementedError(f'{accn}: multiple runs', *errargs)
 
+    return expack
+
+
+def get_srr(accn, sample_type=None, slow=False):
+    """
+    Get SRR accession matching some other accession
+
+    The given accession can be SRR already, in which case some useful sanity
+    checks on the records are run.
+    """
+    expack = get_experiment(accn, sample_type=sample_type, slow=slow)
     return expack['RUN_SET']['RUN']['accession']
 
 
@@ -283,12 +296,9 @@ def stringify(value):
     return ' '.join(i.strip("'{}: ") for i in str(value).split())
 
 
-def compile_srr_info(accn):
+def compile_srr_info(expack):
     info = {}
-    entry = get_entry(accn, auto_parse=False, multi=True)
-    # FIXME: fails in case of multiple exp packages
-    pkg = entry['EXPERIMENT_PACKAGE_SET']['EXPERIMENT_PACKAGE']
-    exp = pkg['EXPERIMENT']
+    exp = expack['EXPERIMENT']
     info['experiment'] = exp['accession']
     info['study'] = exp['STUDY_REF']['accession']
     info['sample'] = exp['DESIGN']['SAMPLE_DESCRIPTOR']['accession']
@@ -298,11 +308,10 @@ def compile_srr_info(accn):
     info['selection'] = lib['LIBRARY_SELECTION']
     info['layout'] = lib['LIBRARY_LAYOUT']
     info['platform'] = stringify(exp['PLATFORM'])
-    info['run'] = pkg['RUN_SET']['RUN']['accession']
-    info['spots'] = pkg['RUN_SET']['RUN']['total_spots']
-    info['bases'] = pkg['RUN_SET']['RUN']['total_bases']
-
-    print(json.dumps(info, indent=4))
+    info['run'] = expack['RUN_SET']['RUN']['accession']
+    info['spots'] = expack['RUN_SET']['RUN']['total_spots']
+    info['bases'] = expack['RUN_SET']['RUN']['total_bases']
+    return info
 
 
 def main():
@@ -329,7 +338,8 @@ def main():
             with save_error_file(args.error_file):
                 print(get_srr(args.any_accession))
         case 'runinfo':
-            compile_srr_info(args.accession)
+            expack = get_experiment(args.accession)
+            print(json.dumps(compile_srr_info(expack), indent=4))
         case _:
             argp.error('invalid subcommand')
 
