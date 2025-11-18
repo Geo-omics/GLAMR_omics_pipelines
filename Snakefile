@@ -143,8 +143,18 @@ rule summarize_sra_errors:
     run:
         unique_pref = re.compile(r'^SR[^:]+: ')  # rm accn to allow grouping
         stats = Counter()
-        for i in Path('data/omics/').glob('*/samp_*/reads/sra_error.json'):
-            with open(i) as ifile:
+        for err in Path('data/omics/').glob('*/samp_*/reads/sra_error.json'):
+            # 1. check if error file is stale
+            runinfos = [
+                err.parent / Path(info_file).name
+                for info_file in rules.get_reads_prep.output
+            ]
+            if all(i.is_file() for i in runinfos):
+                err_mtime = err.stat().st_mtime
+                if all(i.stat().st_mtime > err_mtime for i in runinfos):
+                    print(f'[Outdated] {err}')
+
+            with open(err) as ifile:
                 data = json.load(ifile)
             name = data['Exception']
             try:
@@ -153,10 +163,57 @@ rule summarize_sra_errors:
                 megs = ''  # no args
             mesg = unique_pref.sub('', mesg)
             stats[(name, mesg)] += 1
-        print(*stats.most_common()[:10], sep='\n')
+        rows = [
+            f'{count:>5} {name:<25} {msg.strip()}'
+            for (name, msg), count in stats.most_common()
+        ]
+        print(*rows[:20], sep='\n')
         with open(output[0], 'w') as ofile:
-            for (name, mesg), count in stats.most_common():
-                ofile.write(f'{name}\t{mesg}\t{count}\n')
+            for row in rows:
+                ofile.write(f'{row}\n')
+
+rule about_multipack_sra_errors:
+    output: 'sra_multipack_errors.json'
+    run:
+        out = {}
+        for errfile in Path('data/omics/').glob('*/samp_*/reads/sra_error.json'):
+            with open(errfile) as ifile:
+                sample = errfile.parent.parent.name
+                errinfo = json.load(ifile)
+                for i in errinfo['args']:
+                    if 'multiple matching experiment packages' in i:
+                        break
+                else:
+                    # is something else
+                    continue
+                epacks = errinfo['args'][-1]['EXPERIMENT_PACKAGE_list']
+                studies = [i['STUDY']['accession'] for i in epacks]
+                if len(set(studies)) != 1:
+                    out[sample] = f'[EE] multiple studies: {studies}'
+                    continue
+                samples = [i['SAMPLE']['accession'] for i in epacks]
+                if len(set(samples)) != 1:
+                    out[sample] = f'[EE] multiple samples: {samples}'
+                    continue
+                data = []
+                for i in epacks:
+                    data.append({
+                        'experiment': [
+                            i['EXPERIMENT']['accession'],
+                            i['EXPERIMENT']['TITLE'],
+                        ],
+                        'design_description': i['EXPERIMENT']['DESIGN']['DESIGN_DESCRIPTION'],
+                        'library': [
+                            i['EXPERIMENT']['DESIGN']['LIBRARY_DESCRIPTOR']['LIBRARY_STRATEGY'],
+                            i['EXPERIMENT']['DESIGN']['LIBRARY_DESCRIPTOR']['LIBRARY_SOURCE'],
+                            i['EXPERIMENT']['DESIGN']['LIBRARY_DESCRIPTOR']['LIBRARY_SELECTION'],
+                            i['EXPERIMENT']['DESIGN']['LIBRARY_DESCRIPTOR']['LIBRARY_LAYOUT'],
+                        ],
+                        'run': i['RUN_SET']['RUN']['accession'],
+                    })
+            out[sample] = data
+        with open(output[0], 'w') as ofile:
+            json.dump(out, ofile, indent=4)
 
 
 rule get_reads:
