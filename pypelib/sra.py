@@ -6,12 +6,11 @@ import json
 from os import environ
 from random import uniform
 from time import sleep
+from xml.etree.ElementTree import indent as xml_indent
 
 from Bio import Entrez
 
 import defusedxml.ElementTree as ET
-
-from .utils import save_error_file
 
 
 Entrez.email = 'GLAMR-omics@umich.edu'
@@ -147,22 +146,17 @@ def get_entry_raw(accession, multi=False, slow=False):
         return data
 
 
-def get_entry_xml(accession, multi=False):
-    """
-    retrieve SRA entry by accession, return xml Element object
+def get_entry(accession=None, file=None, multi=False, auto_parse=False,
+              slow=False):
+    """ retrieve SRA entry by accession or from saved file """
+    if file is not None and accession is None:
+        data = open(file, 'rb')
+    elif accession is not None and file is None:
+        data = get_entry_raw(accession, multi=multi, slow=slow)
+    else:
+        raise TypeError('either accession if file must be given, but not both')
 
-    Also saves XML as file.  This is for debugging and testing.
-    """
-    data = get_entry_raw(accession, multi=multi)
-    xml_txt = data.read().decode()
-    with open(f'{accession}.efetch.xml', 'w') as ofile:
-        ofile.write(xml_txt.replace('><', '>\n<'))  # line break between tags
-    return ET.fromstring(xml_txt)
-
-
-def get_entry(accession, multi=False, auto_parse=True, slow=False):
-    """ retrieve SRA entry by accession """
-    with get_entry_raw(accession, multi=multi, slow=slow) as data:
+    with data as data:
         if not auto_parse:
             try:
                 # biopython parser won't work with the EXPERIMENT_PACKAGE_SET
@@ -191,21 +185,19 @@ def get_entry(accession, multi=False, auto_parse=True, slow=False):
             raise
 
 
-def get_experiment(accn, sample_type=None, slow=False):
+def get_experiment(accn, data, sample_type=None):
     """
     Get the experiment record for a given accession
 
-    accn: some SRA accession
-
-    Even if an SRR is given, some sanity checks will be run.
+    accn: The SRA accession used to retrieve the data.
+    data: return of get_entry()
     """
     strategy2sample_type = {
         'AMPLICON': 'amplicons',
         'WGS': 'metagenome',
     }
     strict_mode = environ.get('SRA_ESEARCH_STRICT', False)
-    entry = get_entry(accn, slow=slow, auto_parse=False, multi=True)
-    epset = entry['EXPERIMENT_PACKAGE_SET']
+    epset = data['EXPERIMENT_PACKAGE_SET']
     errargs = (accn, sample_type, epset)
 
     if 'EXPERIMENT_PACKAGE_list' in epset:
@@ -280,17 +272,6 @@ def get_experiment(accn, sample_type=None, slow=False):
     return expack
 
 
-def get_srr(accn, sample_type=None, slow=False):
-    """
-    Get SRR accession matching some other accession
-
-    The given accession can be SRR already, in which case some useful sanity
-    checks on the records are run.
-    """
-    expack = get_experiment(accn, sample_type=sample_type, slow=slow)
-    return expack['RUN_SET']['RUN']['accession']
-
-
 def stringify(value):
     """ Helper to make a dict into a line of text """
     return ' '.join(i.strip("'{}: ") for i in str(value).split())
@@ -317,28 +298,38 @@ def compile_srr_info(expack):
 def main():
     argp = argparse.ArgumentParser(description=__doc__)
     subs = argp.add_subparsers(dest='cmd', required=True)
+    subs.add_parser(
+        'xml',
+        help='Print raw xml search result to stdout',
+    )
     subp1 = subs.add_parser(
         'srr',
         help='Look up SRRxxx accession from other SRA accesions',
     )
-    subp1.add_argument('any_accession')
-    subp1.add_argument('--error-file', help='path where to save error infos')
+    subp1.add_argument('--sample_type', help='a sample type')
     subp2 = subs.add_parser(
         'runinfo',
         help='Get info for a run, writes json data to stdout.',
     )
-    subp2.add_argument(
-        'accession',
-        help='SRR or SRS accession',
-    )
+    subp2.add_argument('--sample_type', help='a sample type')
+    argp.add_argument('accession', help='An SRA accession')
     args = argp.parse_args()
 
     match args.cmd:
+        case 'xml':
+            xml = get_entry_raw(args.accession, multi=True, slow=False)
+            tree = ET.fromstring(xml.read().decode())
+            xml_indent(tree)
+            print(ET.tostring(tree).decode())
         case 'srr':
-            with save_error_file(args.error_file):
-                print(get_srr(args.any_accession))
+            data = get_entry(accession=args.accession, multi=True,
+                             slow=False)
+            expack = get_experiment(args.accession, data, args.sample_type)
+            print(expack['RUN_SET']['RUN']['accession'])
         case 'runinfo':
-            expack = get_experiment(args.accession)
+            data = get_entry(accession=args.accession, multi=True,
+                             slow=False)
+            expack = get_experiment(args.accession, data, args.sample_type)
             print(json.dumps(compile_srr_info(expack), indent=4))
         case _:
             argp.error('invalid subcommand')
