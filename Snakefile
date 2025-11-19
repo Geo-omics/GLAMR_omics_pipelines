@@ -96,9 +96,24 @@ def parse_accession(file):
         raise RuntimeError(f'bad accession file? {value=}')
 
 
+rule get_sra_metadata:
+    input: "data/omics/{sample_type}/{sample}/reads/accession"
+    output: "data/omics/{sample_type}/{sample}/reads/sra_metadata.xml"
+    params:
+        accn = parse_input(input[0], parse_accession),
+        ncbi_api_key = os.environ.get('NCBI_API_KEY', '')
+    log: "logs/get_sra_metadata/{sample_type}.{sample}.err"
+    resources: time_min = 5, heavy_network = 1, cpus = 1
+    run:
+        with save_error_file(log[0]):
+            with pypelib.sra.get_entry_raw(params.accn, multi=True, slow=True) as data:
+                with open(output[0], 'wb') as ofile:
+                    ofile.write(data.read())
+
 rule get_reads_prep:
     input:
-        accession = "data/omics/{sample_type}/{sample}/reads/accession"
+        accession = rules.get_sra_metadata.input[0],
+        sra_metadata = rules.get_sra_metadata.output
     output:
         runinfo0 = "data/omics/{sample_type}/{sample}/reads/runinfo0.json",
         runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.json"
@@ -106,19 +121,18 @@ rule get_reads_prep:
         accn = parse_input(input.accession, parse_accession),
         ncbi_api_key = os.environ.get('NCBI_API_KEY', '')
     conda: "config/conda_yaml/kingfisher.yaml"
-    log: "logs/get_reads_prep/{sample_type}-{sample}.log"
+    log: "logs/get_reads_prep/{sample_type}.{sample}.err"
     resources: time_min = 5, heavy_network = 1, cpus = 1
     run:
-        with open(input.accession) as ifile:
-            accn = parse_accession(ifile)
-        with save_error_file(Path(output.runinfo).with_name('sra_error.json')):
-            expack = pypelib.sra.get_experiment(accn, sample_type=wildcards.sample_type, slow=True)
+        data = pypelib.sra.get_entry(file=str(input.sra_metadata), multi=True, slow=True)
+        with save_error_file(log[0]):
+            expack = pypelib.sra.get_experiment(params.accn, data, sample_type=wildcards.sample_type)
 
         info = pypelib.sra.compile_srr_info(expack)
         with open(output.runinfo0, 'w') as ofile:
             json.dump(info, ofile, indent=4)
         srr_accn = expack['RUN_SET']['RUN']['accession']
-        accn_str = accn + ' => ' + srr_accn
+        accn_str = params.accn + ' => ' + srr_accn
 
         print(f'Accession for {wildcards.sample}: {accn_str}')
         shell("""
