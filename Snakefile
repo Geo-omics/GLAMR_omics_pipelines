@@ -218,7 +218,7 @@ rule about_multipack_sra_errors:
 
 rule get_reads:
     input:
-        runinfo = ancient("data/omics/{sample_type}/{sample}/reads/runinfo.tsv")
+        runinfo = ancient(rules.get_reads_prep.output.runinfo)
     output:
         download_dir = temp(directory("data/omics/{sample_type}/{sample}/reads/tmp_downloads"))
     params:
