@@ -2,9 +2,14 @@
 Remove primer sequences from paired-end fastq-formated reads
 """
 import argparse
+from collections import Counter
 from contextlib import ExitStack
+import gzip
+from itertools import batched
 import json
-from subprocess import run
+from pathlib import Path
+from subprocess import run, DEVNULL
+from tempfile import NamedTemporaryFile
 
 from . import get_models
 
@@ -82,11 +87,62 @@ def main_single(
             *args,
             '--discard-untrimmed',
             '--output', single_out,
-            '--info-file', 'trim_info.txt',
+            '--info-file', Path(single_out).with_name('trim_info.txt'),
             single_fastq,
         ]
         print('command:\n', *cmd, file=log)
         run(cmd, check=True, stdout=log)
+
+
+def find_5p_primer(primer, fastq, log):
+    """
+    Get indexes of sequences with imperfect 5' primer
+    """
+    stats = Counter()
+    with NamedTemporaryFile('w+t') as info_file:
+        cmd = [
+            'cutadapt',
+            '-g', primer.sequence,
+            '--info-file', info_file.name,
+            fastq,
+        ]
+        run(cmd, check=True, stdout=DEVNULL, stderr=log)
+        info_file.seek(0)
+        discards = []
+        for idx, line in enumerate(info_file):
+            row = line.rstrip('\n').split('\t')
+            stats[('err', row[1])] += 1
+            if row[1] == '0':
+                # no error
+                _, _, a, b, seq, *_ = row
+                stats[(a, b)] += 1
+                if a == '0' and int(b) == len(primer.sequence):
+                    # keep
+                    continue
+            discards.append(idx)
+    good_count = idx + 1 - len(discards)
+    print(
+        f'{fastq}: keeping {good_count} reads, discarding '
+        f'{len(discards) / (idx + 1):.1%}\nstats: {stats}',
+        file=log
+    )
+    return discards
+
+
+def filter_fastq(discards, infilename, outfile):
+    with gzip.open(infilename, 'rt') as ifile:
+        for idx, (head, seq, plus, qual) in enumerate(batched(ifile, n=4)):
+            if not head.startswith('@'):
+                raise ValueError('not a fastq header')
+            if not plus.startswith('+'):
+                raise ValueError('not a plus line')
+            if idx in discards:
+                continue
+            outfile.write(head)
+            outfile.write(seq)
+            outfile.write(plus)
+            outfile.write(qual)
+    outfile.flush()
 
 
 def main_paired(
@@ -97,6 +153,76 @@ def main_paired(
     rev_out=None,
     log=None,
 ):
+    with ExitStack() as estack:
+        if log:
+            log = estack.enter_context(open(log, 'w'))
+        else:
+            log = None
+
+        fwd_primer, rev_primer, swapped, clean = load_target_info(target_info)
+
+        if swapped:
+            print('WARNING: swapping fwd <-> rev fastq files',
+                  flush=True, file=log)
+            temp = fwd_fastq
+            fwd_fastq = rev_fastq
+            rev_fastq = temp
+            del temp
+
+        fwd_discards = find_5p_primer(fwd_primer, fwd_fastq, log)
+        rev_discards = find_5p_primer(rev_primer, rev_fastq, log)
+        discards = set(fwd_discards).union(rev_discards)
+        print(f'discarding {len(discards)} read pairs', file=log)
+
+        fwd_tmp = NamedTemporaryFile('w+t')
+        rev_tmp = NamedTemporaryFile('w+t')
+        with fwd_tmp as fwd_tmp, rev_tmp as rev_tmp:
+            filter_fastq(discards, fwd_fastq, fwd_tmp)
+            filter_fastq(discards, rev_fastq, rev_tmp)
+
+            args = []
+            try:
+                if not clean['fwd']:
+                    args += ['-g', fwd_primer.sequence]
+                if not clean['fwd_rev']:
+                    args += ['-a', rev_primer.sequence]
+                if not clean['rev']:
+                    args += ['-G', rev_primer.sequence]
+                if not clean['rev_fwd']:
+                    args += ['-A', fwd_primer.sequence]
+            except AttributeError as e:
+                # e.g. primer is None
+                raise RuntimeError(
+                    f'something is marked "not clean" but no corresponding '
+                    f'primer was given? {e}'
+                )
+            if not args:
+                raise RuntimeError('No args?  Something should not be clean!')
+
+            cmd = [
+                'cutadapt',
+                *args,
+                '--discard-untrimmed',
+                # '-u', '17', '-U', '20',
+                '--output', fwd_out,
+                '--paired-output', rev_out,
+                '--info-file', Path(fwd_out).with_name('trim_info.txt'),
+                fwd_tmp.name,
+                rev_tmp.name,
+            ]
+            print('command:\n', *cmd, file=log)
+            run(cmd, check=True, stdout=log)
+
+
+def main_paired_gen_1(
+    target_info=None,
+    fwd_fastq=None,
+    rev_fastq=None,
+    fwd_out=None,
+    rev_out=None,
+    log=None,
+):
+    """ DEPRECATED """
     with ExitStack() as estack:
         if log:
             log = estack.enter_context(open(log, 'w'))
@@ -130,12 +256,12 @@ def main_paired(
 
         cmd = [
             'cutadapt',
-            # *args,
-            # '--discard-untrimmed',
-            '-u', '17', '-U', '20',
+            *args,
+            '--discard-untrimmed',
+            # '-u', '17', '-U', '20',
             '--output', fwd_out,
             '--paired-output', rev_out,
-            '--info-file', 'trim_info.txt',
+            '--info-file', Path(fwd_out).with_name('trim_info.txt'),
             rev_fastq if swapped else fwd_fastq,
             fwd_fastq if swapped else rev_fastq,
         ]

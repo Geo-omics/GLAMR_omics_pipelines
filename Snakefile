@@ -3711,7 +3711,7 @@ rule amplicon_hmm:
     params:
         amplicon_hmm_db ="data/reference/hmm_amplicons/combined.hmm",
         outdir = subpath(input[0], parent=True),
-    resources: cpus=1, mem_mb=20000, time_min=500
+    resources: cpus=4, mem_mb=20000, time_min=500
     benchmark: "benchmarks/amplicon_hmm/{sample}_{direc}.txt"
     log: "logs/amplicon_hmm/{sample}_{direc}.log"
     conda: "config/conda_yaml/hmmer.yaml"
@@ -3817,7 +3817,7 @@ rule remove_primers_pe:
             input.rev,
             output.fwd,
             output.rev,
-            log[0],
+            # log[0],
         )
 
 rule remove_primers_se:
@@ -3878,7 +3878,8 @@ rule amplicon_dada2_target:
             --samples {input.samples} \
             --targets {input.target_tab} \
             --cpus {resources.cpus} \
-            {wildcards.target}
+            {wildcards.target} \
+        || {{ mv -v -- {output} {output}_ERROR; exit 1; }}
         """
 
 def dada2_output_dirs(wc):
