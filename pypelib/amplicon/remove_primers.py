@@ -50,48 +50,6 @@ def cli():
         )
 
 
-def main_single(
-    target_info=None,
-    single_fastq=None,
-    single_out=None,
-    log=None,
-):
-    with ExitStack() as estack:
-        if log:
-            log = estack.enter_context(open(log, 'w'))
-        else:
-            log = None
-
-        fwd_primer, rev_primer, swapped, clean = load_target_info(target_info)
-
-        if swapped:
-            raise ValueError('single data should not be swapped')
-
-        args = []
-        try:
-            if not clean['fwd']:
-                args += ['-g', fwd_primer.sequence]
-            if not clean['rev']:
-                args += ['-a', rev_primer.sequence]
-        except AttributeError as e:
-            # e.g. primer is None
-            raise RuntimeError(
-                f'something is marked "not clean" but no corresponding primer '
-                f'was given? {e}'
-            )
-        if not args:
-            raise RuntimeError('No args?  Something should not be clean!')
-
-        cmd = [
-            'cutadapt',
-            *args,
-            '--discard-untrimmed',
-            '--output', single_out,
-            '--info-file', Path(single_out).with_name('trim_info.txt'),
-            single_fastq,
-        ]
-        print('command:\n', *cmd, file=log)
-        run(cmd, check=True, stdout=log)
 
 
 def find_5p_primer(primer, fastq, log):
@@ -145,6 +103,69 @@ def filter_fastq(discards, infilename, outfile):
     outfile.flush()
 
 
+def main_single(
+    target_info=None,
+    single_fastq=None,
+    single_out=None,
+    log=None,
+):
+    with ExitStack() as estack:
+        if log:
+            log = estack.enter_context(open(log, 'w'))
+        else:
+            log = None
+
+        fwd_pr, rev_pr, swapped, clean, rc = load_target_info(target_info)
+
+        if swapped:
+            raise ValueError('single data should not be swapped')
+
+        if rc:
+            # What we call the reverse primer is actually sequenced at the
+            # single read's 5' end, so just for cutadapts benefit, here we're
+            # swapping the notion of fwd and rev primers
+            fwd_clean = clean['rev']
+            rev_clean = clean['fwd']
+            tmp_pr = fwd_pr
+            fwd_pr = rev_pr
+            rev_pr = tmp_pr
+            del tmp_pr
+        else:
+            fwd_clean = clean['fwd']
+            rev_clean = clean['rev']
+
+        args = []  # args for cutadapt
+        try:
+            if not fwd_clean:
+                args += ['-g', fwd_pr.sequence]
+            if not rev_clean:
+                args += ['-a', rev_pr.sequence]
+        except AttributeError as e:
+            # e.g. primer is None
+            raise RuntimeError(
+                f'something is marked "not clean" but no corresponding primer '
+                f'was given? {e}'
+            )
+        if not args:
+            raise RuntimeError('No args?  Something should not be clean!')
+
+        discards = find_5p_primer(fwd_pr, single_fastq, log)
+        print(f'discarding {len(discards)} read', file=log)
+
+        with NamedTemporaryFile('w+t') as single_tmp:
+            filter_fastq(discards, single_fastq, single_tmp)
+            cmd = [
+                'cutadapt',
+                *args,
+                '--discard-untrimmed',
+                '--output', single_out,
+                '--info-file', Path(single_out).with_name('trim_info.txt'),
+                single_tmp.name,
+            ]
+            print('command:\n', *cmd, file=log)
+            run(cmd, check=True, stdout=log)
+
+
 def main_paired(
     target_info=None,
     fwd_fastq=None,
@@ -159,7 +180,10 @@ def main_paired(
         else:
             log = None
 
-        fwd_primer, rev_primer, swapped, clean = load_target_info(target_info)
+        fwd_pr, rev_pr, swapped, clean, rc = load_target_info(target_info)
+
+        if rc:
+            raise ValueError('RC\'d paired data should not be a thing')
 
         if swapped:
             print('WARNING: swapping fwd <-> rev fastq files',
@@ -169,8 +193,27 @@ def main_paired(
             rev_fastq = temp
             del temp
 
-        fwd_discards = find_5p_primer(fwd_primer, fwd_fastq, log)
-        rev_discards = find_5p_primer(rev_primer, rev_fastq, log)
+        args = []
+        try:
+            if not clean['fwd']:
+                args += ['-g', fwd_pr.sequence]
+            if not clean['fwd_rev']:
+                args += ['-a', rev_pr.sequence]
+            if not clean['rev']:
+                args += ['-G', rev_pr.sequence]
+            if not clean['rev_fwd']:
+                args += ['-A', fwd_pr.sequence]
+        except AttributeError as e:
+            # e.g. primer is None
+            raise RuntimeError(
+                f'something is marked "not clean" but no corresponding '
+                f'primer was given? {e}'
+            )
+        if not args:
+            raise RuntimeError('No args?  Something should not be clean!')
+
+        fwd_discards = find_5p_primer(fwd_pr, fwd_fastq, log)
+        rev_discards = find_5p_primer(rev_pr, rev_fastq, log)
         discards = set(fwd_discards).union(rev_discards)
         print(f'discarding {len(discards)} read pairs', file=log)
 
@@ -180,30 +223,10 @@ def main_paired(
             filter_fastq(discards, fwd_fastq, fwd_tmp)
             filter_fastq(discards, rev_fastq, rev_tmp)
 
-            args = []
-            try:
-                if not clean['fwd']:
-                    args += ['-g', fwd_primer.sequence]
-                if not clean['fwd_rev']:
-                    args += ['-a', rev_primer.sequence]
-                if not clean['rev']:
-                    args += ['-G', rev_primer.sequence]
-                if not clean['rev_fwd']:
-                    args += ['-A', fwd_primer.sequence]
-            except AttributeError as e:
-                # e.g. primer is None
-                raise RuntimeError(
-                    f'something is marked "not clean" but no corresponding '
-                    f'primer was given? {e}'
-                )
-            if not args:
-                raise RuntimeError('No args?  Something should not be clean!')
-
             cmd = [
                 'cutadapt',
                 *args,
                 '--discard-untrimmed',
-                # '-u', '17', '-U', '20',
                 '--output', fwd_out,
                 '--paired-output', rev_out,
                 '--info-file', Path(fwd_out).with_name('trim_info.txt'),
@@ -300,9 +323,17 @@ def load_target_info(target_info):
             raise ValueError(
                 f'Not a rev primer in model {model_name}: {rev_primer}')
 
-    swapped = info['swapped']
+    if 'swapped' in info:
+        swapped = info['swapped']
+    elif info['layout'] == 'single':
+        swapped = False
+    else:
+        raise ValueError('info does not have "swapped" key')
+
     if not isinstance(swapped, bool):
         raise ValueError(f'swapped must be boolean: {swapped}')
+
+    rc = info.get('model_rc', False)
 
     clean = dict(
         fwd=info.get('fwd_clean'),
@@ -310,7 +341,7 @@ def load_target_info(target_info):
         fwd_rev=info.get('fwd_rev_clean'),
         rev_fwd=info.get('rev_fwd_clean'),
     )
-    return fwd_primer, rev_primer, swapped, clean
+    return fwd_primer, rev_primer, swapped, clean, rc
 
 
 if __name__ == '__main__':

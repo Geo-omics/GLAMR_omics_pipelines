@@ -230,7 +230,7 @@ def check_single(single):
     info['model_name'] = single['model'].name
 
     if 'direction' in single:
-        # 1. Did reads get swapped?
+        # 1. Which way was the gene sequenced?
         if single['direction'] == 'fwd':
             # normal
             info['model_rc'] = False
