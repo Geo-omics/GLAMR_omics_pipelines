@@ -4,6 +4,7 @@ Remove primer sequences from paired-end fastq-formated reads
 import argparse
 from collections import Counter
 from contextlib import ExitStack
+from enum import Enum, auto
 import gzip
 from itertools import batched
 import json
@@ -50,9 +51,14 @@ def cli():
         )
 
 
+class Prof(Enum):
+    """ primer test profile """
+    STRICT = auto()
+    RELAXED = auto()
+    CONSISTENT = auto()
 
 
-def find_5p_primer(primer, fastq, log):
+def find_5p_primer(primer, fastq, test_profile, log):
     """
     Get indexes of sequences with imperfect 5' primer
     """
@@ -66,6 +72,7 @@ def find_5p_primer(primer, fastq, log):
         ]
         run(cmd, check=True, stdout=DEVNULL, stderr=log)
         info_file.seek(0)
+        data = []
         discards = []
         for idx, line in enumerate(info_file):
             row = line.rstrip('\n').split('\t')
@@ -74,10 +81,35 @@ def find_5p_primer(primer, fastq, log):
                 # no error
                 _, _, a, b, seq, *_ = row
                 stats[(a, b)] += 1
-                if a == '0' and int(b) == len(primer.sequence):
-                    # keep
+                data.append((idx, int(a), int(b)))
+            else:
+                # always discard those with error
+                discards.append(idx)
+
+    match test_profile:
+        case Prof.STRICT:
+            for idx, a, b in data:
+                if a == '0' and b == len(primer.sequence):
+                    # keep if perfect
                     continue
+                else:
+                    discards.append(idx)
+        case Prof.RELAXED:
+            # keep all
+            pass
+        case Prof.CONSISTENT:
+            (aa, bb), _ = Counter((a, b) for _, a, b in data).most_common()[0]
+            print(f'Most common case: {aa=} {bb=}', file=log)
+            for idx, a, b in data:
+                if a == aa and b == bb:
+                    # keep the most common case
+                    continue
+                else:
+                    discards.append(idx)
+        case _:
+            raise ValueError('invalid test profile')
             discards.append(idx)
+
     good_count = idx + 1 - len(discards)
     print(
         f'{fastq}: keeping {good_count} reads, discarding '
@@ -149,7 +181,7 @@ def main_single(
         if not args:
             raise RuntimeError('No args?  Something should not be clean!')
 
-        discards = find_5p_primer(fwd_pr, single_fastq, log)
+        discards = find_5p_primer(fwd_pr, single_fastq, Prof.CONSISTENT, log)
         print(f'discarding {len(discards)} read', file=log)
 
         with NamedTemporaryFile('w+t') as single_tmp:
@@ -212,8 +244,8 @@ def main_paired(
         if not args:
             raise RuntimeError('No args?  Something should not be clean!')
 
-        fwd_discards = find_5p_primer(fwd_pr, fwd_fastq, log)
-        rev_discards = find_5p_primer(rev_pr, rev_fastq, log)
+        fwd_discards = find_5p_primer(fwd_pr, fwd_fastq, Prof.CONSISTENT, log)
+        rev_discards = find_5p_primer(rev_pr, rev_fastq, Prof.CONSISTENT, log)
         discards = set(fwd_discards).union(rev_discards)
         print(f'discarding {len(discards)} read pairs', file=log)
 
