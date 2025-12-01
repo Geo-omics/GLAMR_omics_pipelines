@@ -202,7 +202,7 @@ def basic_checks(data, file_dir):
 
     errors = []
     if data['good_alignments_count'] / data['alignment_winners_count'] < GOOD:
-        errors.append(f'{file_dir}: too few good alignments', Err.E1)
+        errors.append((f'{file_dir}: too few good alignments', Err.E1))
 
     if 'model' not in data:
         errors.append((
