@@ -3827,7 +3827,7 @@ rule remove_primers_se:
     output:
         single="data/omics/{sample_type}/{sample}/reads/clean.single_reads.fastq.gz"
     params:
-        reads_dir = subpath(output.fwd, parent=True)
+        reads_dir = subpath(output.single, parent=True)
     log: "logs/remove_primers/{sample_type}-{sample}.log"
     run:
         pypelib.amplicon.remove_primers.main_single(
