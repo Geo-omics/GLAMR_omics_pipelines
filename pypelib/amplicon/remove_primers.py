@@ -8,7 +8,9 @@ from enum import Enum, auto
 import gzip
 from itertools import batched
 import json
+from os import environ
 from pathlib import Path
+import shutil
 from subprocess import run, DEVNULL
 from tempfile import NamedTemporaryFile
 
@@ -85,6 +87,10 @@ def find_5p_primer(primer, fastq, test_profile, log):
             else:
                 # always discard those with error
                 discards.append(idx)
+        if environ.get('KEEP_CUTADAPT_INFO'):
+            dst = Path(fastq).with_suffix('.cutadapt_info.txt')
+            shutil.copyfile(info_file.name, dst)
+            print(f'[OK] Saving {dst}', file=log)
 
     match test_profile:
         case Prof.STRICT:
