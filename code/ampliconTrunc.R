@@ -95,7 +95,7 @@ namesOfSamples <- samples$sample
 
 
 # visualize and save quality of forward and reverse reads
-cat('Plotting fwd reads quality for', length(samples), 'samples...\n')
+cat('Plotting fwd reads quality for', nrow(samples), 'samples...\n')
 forwardPlot <- plotQualityProfile(forwardReads)
 plotDataFwd <- forwardPlot$data
 fs::dir_create(path = args$outdir)
@@ -103,7 +103,7 @@ fwd_plot_path = str_glue("{args$outdir}/forward_quality_plot.pdf")
 ggsave(filename=fwd_plot_path, plot=forwardPlot, width=5, height=3, scale=2)
 cat('Saved as:', fwd_plot_path, '\n')
 
-cat('Plotting rev reads quality for', length(samples), 'samples...\n')
+cat('Plotting rev reads quality for', nrow(samples), 'samples...\n')
 reversePlot <- plotQualityProfile(reverseReads)
 plotDataRev <- reversePlot$data
 rev_plot_path = str_glue("{args$outdir}/reverse_quality_plot.pdf")
