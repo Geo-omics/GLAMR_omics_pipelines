@@ -85,10 +85,20 @@ if (nrow(assignments) != nrow(samples)) {
     stop('the sample file listing is missing rows for some samples??')
 }
 
-count <- 0
+# Create symlinks to our fastq files, soley so that we can have the sample id
+# as part of the file name This will make the quality plotting happy, as every
+# file will get its own plot.
+tmpdir = tempdir()
+samples = samples |>
+    add_column(fwd_fastq_tmp=samples$fwd_fastq) |>
+    add_column(rev_fastq_tmp=samples$rev_fastq) |>
+    mutate(fwd_fastq_tmp=str_glue('{tmpdir}/{sample}_fwd.fastq.gz')) |>
+    mutate(rev_fastq_tmp=str_glue('{tmpdir}/{sample}_rev.fastq.gz'))
+link_create(fs::path_real(samples$fwd_fastq), samples$fwd_fastq_tmp, symbolic=TRUE)
+link_create(fs::path_real(samples$rev_fastq), samples$rev_fastq_tmp, symbolic=TRUE)
 
-forwardReads <- samples$fwd_fastq
-reverseReads <- samples$rev_fastq
+forwardReads <- samples$fwd_fastq_tmp
+reverseReads <- samples$rev_fastq_tmp
 
 # extract sample names
 namesOfSamples <- samples$sample
