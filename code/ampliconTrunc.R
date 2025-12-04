@@ -207,6 +207,15 @@ out |>
   rownames_to_column("file") |>
   write_tsv(str_glue("{args$outdir}/filt_and_trim.tsv"))
 
+# If all reads for a sample got filtered out, the corresponding (empty) file is not saved
+filtAndTrimForward = filtAndTrimForward[file.exists(filtAndTrimForward) == TRUE]
+filtAndTrimReverse = filtAndTrimReverse[file.exists(filtAndTrimReverse) == TRUE]
+num_good = length(filtAndTrimForward)
+if (num_good != length(filtAndTrimReverse)) { stop("fwd/rev good count mismatch"); }
+if (num_good < nrow(samples)) {
+    cat("[WARNING]", nrow(samples) - num_good, "samples out of", nrow(samples), "removed because (presumably) all their reads got filtered out.\n")
+}
+
 # learning errors
 cat("Learning errors...\n")
 errorForward <- learnErrors(filtAndTrimForward, multithread=cpus)
