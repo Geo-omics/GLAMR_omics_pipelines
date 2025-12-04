@@ -196,16 +196,15 @@ filtAndTrimReverse <- samples$filt_reads_rev
 names(filtAndTrimForward) <- namesOfSamples
 names(filtAndTrimReverse) <- namesOfSamples
 
-out <- filterAndTrim(forwardReads, filtAndTrimForward, reverseReads, filtAndTrimReverse,
+filterstats <- filterAndTrim(forwardReads, filtAndTrimForward, reverseReads, filtAndTrimReverse,
                      truncLen=c(forTrunc, revTrunc),
                      maxN=0, maxEE=c(2,2), truncQ=2, rm.phix=TRUE,
                      compress=TRUE, multithread=cpus)
 
 # saving the filter and trim to .tsv file
-out |>
-  as.data.frame() |>
-  rownames_to_column("file") |>
-  write_tsv(str_glue("{args$outdir}/filt_and_trim.tsv"))
+rownames(filterstats) = namesOfSamples
+filterstats = as.data.frame(filterstats) |> rownames_to_column('sample')
+write_tsv(filterstats, str_glue("{args$outdir}/filt_and_trim.tsv"))
 
 # If all reads for a sample got filtered out, the corresponding (empty) file is not saved
 filtAndTrimForward = filtAndTrimForward[file.exists(filtAndTrimForward) == TRUE]
@@ -263,14 +262,16 @@ Biostrings::DNAStringSet(colnames(seqtable_nochimeras)) |>
   `names<-`(headers) |>
   Biostrings::writeXStringSet(str_glue("{args$outdir}/rep_seqs.fasta"))
 
-# track reads through pipelines
+# track reads through pipelines and save as .tsv
 getN <- function(x) sum(getUniques(x))
-track <- cbind(out, sapply(dadaForward, getN), sapply(dadaReverse, getN), sapply(mergeReads, getN), rowSums(seqtable_nochimeras))
-colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
-rownames(track) <- namesOfSamples
-
-# track reads saved to .tsv file
-track |>
-  as.data.frame() |>
-  rownames_to_column("sample_id") |>
-  write_tsv(str_glue("{args$outdir}/track_read_counts.tsv"))
+fwd_counts = as.data.frame(sapply(dadaForward, getN))    |> rownames_to_column('sample')
+rev_counts = as.data.frame(sapply(dadaReverse, getN))    |> rownames_to_column('sample')
+merge_cnts = as.data.frame(sapply(mergeReads,  getN))    |> rownames_to_column('sample')
+nochim_cts = as.data.frame(rowSums(seqtable_nochimeras)) |> rownames_to_column('sample')
+track = filterstats |>
+    left_join(fwd_counts, by='sample') |>
+    left_join(rev_counts, by='sample') |>
+    left_join(merge_cnts, by='sample') |>
+    left_join(nochim_cts, by='sample')
+colnames(track) <- c("sample", "input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+write_tsv(track, str_glue("{args$outdir}/track_read_counts.tsv"))
