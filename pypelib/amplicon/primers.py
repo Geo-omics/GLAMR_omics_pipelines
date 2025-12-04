@@ -9,7 +9,7 @@ from subprocess import Popen, PIPE
 from typing import ClassVar
 
 
-DEFAULT_AMPLICON_HMM_DB = '../data/reference/hmm_amplicons/combined.hmm'
+DEFAULT_AMPLICON_HMM_DB = './data/reference/hmm_amplicons/combined.hmm'
 DEFAULT_LOCATE_OUTPUT = 'primer_alignment_full.txt'
 DEFAULT_JSON = 'primers.json'
 
