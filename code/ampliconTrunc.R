@@ -251,15 +251,15 @@ seqtable <- makeSequenceTable(mergeReads)
 # remove chimeras, saved to .tsv file
 cat("Removing chimeras...\n")
 seqtable_nochimeras <- removeBimeraDenovo(seqtable, method="consensus", multithread=cpus, verbose=TRUE)
+asv_ids <- paste('tasv', 1:ncol(seqtable_nochimeras), sep='')
 seqtable_nochimeras |>
   as.data.frame() |>
-  `colnames<-`(openssl::md5(colnames(seqtable_nochimeras))) |>
+  `colnames<-`(asv_ids) |>
   write_tsv(str_glue("{args$outdir}/asv_table.tsv"))
 
 # output representative sequences to fasta
-headers <- openssl::md5(colnames(seqtable_nochimeras))
 Biostrings::DNAStringSet(colnames(seqtable_nochimeras)) |>
-  `names<-`(headers) |>
+  `names<-`(asv_ids) |>
   Biostrings::writeXStringSet(str_glue("{args$outdir}/rep_seqs.fasta"))
 
 # track reads through pipelines and save as .tsv
