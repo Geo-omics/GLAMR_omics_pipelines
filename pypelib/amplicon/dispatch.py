@@ -280,34 +280,48 @@ def get_fastq_files(path_template, dataset=None):
     return files
 
 
-def get_assignment(sample, omics_pipeline_root=None):
-    """ Given a mibios.omics.models.Sample return it's amplicon target """
+def get_assignment(seqsample, omics_pipeline_root=None):
+    """ Given a mibios.omics.models.Sample return its amplicon target """
     if omics_pipeline_root is None:
         omics_pipeline_root = Path()
 
     proj_dir = (omics_pipeline_root / 'data' / 'projects'
-                / sample.dataset.dataset_id)
+                / seqsample.parent.dataset.dataset_id)
 
     with open(proj_dir / DEFAULT_OUT_TARGETS) as ifile:
         ifile.readline()  # ignore header
         for line in ifile:
-            sample_id, target, override = line.strip().split('\t')
+            sample_id, target, override = line.rstrip('\n').split('\t')
             if override:
                 target = override
-            if sample_id == sample.sample_id:
+            if sample_id == seqsample.sample_id:
                 break
         else:
-            raise RuntimeError(f'Not found in {ifile.name}: {sample}')
+            raise RuntimeError(f'Not found in {ifile.name}: {seqsample}')
 
-    hmm, fwdprim, revprim = target
+    hmm, fwdprim, revprim = target.split('.')
     try:
-        hmm = get_models()
+        hmm = get_models()[hmm]
     except KeyError:
         raise RuntimeError(
-            f'Got {hmm} as HMM name for {sample} but it is not a valif name'
+            f'Got {hmm} as HMM name for {seqsample} but it is not a valid name'
         )
 
-    return hmm
+    for i in hmm.fwd_primers:
+        if i.name == fwdprim:
+            fwdprim = i
+            break
+    else:
+        raise RuntimeError(f'not a fwd primer in {hmm}: {fwdprim}')
+
+    for i in hmm.rev_primers:
+        if i.name == revprim:
+            revprim = i
+            break
+    else:
+        raise RuntimeError(f'not a rev primer in {hmm}: {revprim}')
+
+    return hmm, fwdprim, revprim
 
 
 if __name__ == '__main__':
