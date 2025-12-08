@@ -11,6 +11,7 @@ import shutil
 from tempfile import NamedTemporaryFile
 
 from ..utils import UsageError
+from . import get_models
 
 
 SINGLE_MODE_THRESHOLT = 0.8
@@ -277,6 +278,36 @@ def get_fastq_files(path_template, dataset=None):
             if key in row:
                 files.append(row[key])
     return files
+
+
+def get_assignment(sample, omics_pipeline_root=None):
+    """ Given a mibios.omics.models.Sample return it's amplicon target """
+    if omics_pipeline_root is None:
+        omics_pipeline_root = Path()
+
+    proj_dir = (omics_pipeline_root / 'data' / 'projects'
+                / sample.dataset.dataset_id)
+
+    with open(proj_dir / DEFAULT_OUT_TARGETS) as ifile:
+        ifile.readline()  # ignore header
+        for line in ifile:
+            sample_id, target, override = line.strip().split('\t')
+            if override:
+                target = override
+            if sample_id == sample.sample_id:
+                break
+        else:
+            raise RuntimeError(f'Not found in {ifile.name}: {sample}')
+
+    hmm, fwdprim, revprim = target
+    try:
+        hmm = get_models()
+    except KeyError:
+        raise RuntimeError(
+            f'Got {hmm} as HMM name for {sample} but it is not a valif name'
+        )
+
+    return hmm
 
 
 if __name__ == '__main__':
