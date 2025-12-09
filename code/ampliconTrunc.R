@@ -258,13 +258,16 @@ mergeReads <- mergePairs(dadaForward, filtAndTrimForward, dadaReverse, filtAndTr
 # construct sequence table
 seqtable <- makeSequenceTable(mergeReads)
 
-# remove chimeras, saved to .tsv file
+# remove chimeras
 cat("Removing chimeras...\n")
 seqtable_nochimeras <- removeBimeraDenovo(seqtable, method="consensus", multithread=cpus, verbose=TRUE)
+
+# save to .tsv file
 asv_ids <- paste('tasv', 1:ncol(seqtable_nochimeras), sep='')
 seqtable_nochimeras |>
   as.data.frame() |>
   `colnames<-`(asv_ids) |>
+  rownames_to_column('sample') |>
   write_tsv(str_glue("{args$outdir}/asv_table.tsv"))
 
 # output representative sequences to fasta
