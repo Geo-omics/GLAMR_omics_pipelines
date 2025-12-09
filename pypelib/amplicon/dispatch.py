@@ -280,48 +280,47 @@ def get_fastq_files(path_template, dataset=None):
     return files
 
 
-def get_assignment(seqsample, omics_pipeline_root=None):
-    """ Given a mibios.omics.models.Sample return its amplicon target """
+def get_assignments(dataset_id, omics_pipeline_root=None):
+    """ Given a dataset's samples' amplicon targets """
     if omics_pipeline_root is None:
         omics_pipeline_root = Path()
 
-    proj_dir = (omics_pipeline_root / 'data' / 'projects'
-                / seqsample.parent.dataset.dataset_id)
+    proj_dir = omics_pipeline_root / 'data' / 'projects' / dataset_id
 
+    data = {}
     with open(proj_dir / DEFAULT_OUT_TARGETS) as ifile:
         ifile.readline()  # ignore header
         for line in ifile:
             sample_id, target, override = line.rstrip('\n').split('\t')
             if override:
                 target = override
-            if sample_id == seqsample.sample_id:
+            if sample_id in data:
+                raise RuntimeError('duplicate sample id')
+            data[sample_id] = target
+
+    for sample_id, target in data.items():
+        hmm, fwdprim, revprim = target.split('.')
+        try:
+            hmm = get_models()[hmm]
+        except KeyError:
+            raise RuntimeError(f'Got invalid HMM name "{hmm}" for {sample_id}')
+
+        for i in hmm.fwd_primers:
+            if i.name == fwdprim:
+                fwdprim = i
                 break
         else:
-            raise RuntimeError(f'Not found in {ifile.name}: {seqsample}')
+            raise RuntimeError(f'not a fwd primer in {hmm}: {fwdprim}')
 
-    hmm, fwdprim, revprim = target.split('.')
-    try:
-        hmm = get_models()[hmm]
-    except KeyError:
-        raise RuntimeError(
-            f'Got {hmm} as HMM name for {seqsample} but it is not a valid name'
-        )
+        for i in hmm.rev_primers:
+            if i.name == revprim:
+                revprim = i
+                break
+        else:
+            raise RuntimeError(f'not a rev primer in {hmm}: {revprim}')
 
-    for i in hmm.fwd_primers:
-        if i.name == fwdprim:
-            fwdprim = i
-            break
-    else:
-        raise RuntimeError(f'not a fwd primer in {hmm}: {fwdprim}')
-
-    for i in hmm.rev_primers:
-        if i.name == revprim:
-            revprim = i
-            break
-    else:
-        raise RuntimeError(f'not a rev primer in {hmm}: {revprim}')
-
-    return hmm, fwdprim, revprim
+        data[sample_id] = (hmm, fwdprim, revprim)
+    return data
 
 
 if __name__ == '__main__':
