@@ -24,6 +24,7 @@ DEFAULT_OUT_TARGETS = 'amplicon_target_assignments.tsv'
 DEFAULT_OUT_SAMPLES = 'sample_files.tsv'
 
 UNKNOWN = 'UNKNOWN'
+SKIP = 'SKIP'
 
 
 def cli():

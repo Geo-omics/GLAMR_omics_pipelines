@@ -3914,10 +3914,10 @@ def dada2_output_dirs(wc):
             override = override[0] if override else ''
             target = override or target
 
-            if target == 'SKIP':
+            if target == pypelib.amplicon.dispatch.SKIP:
                 skip_count += 1
                 continue
-            elif target in ('UNKNOWN', 'NO_INFO'):
+            elif target == pypelib.amplicon.dispatch.UNKNOWN:
                 bad_count += 1
             elif not target:
                 raise RuntimeError(f'empty target? {line=}')
