@@ -129,14 +129,14 @@ def get_mode(alignments):
         rev_primer = None if i.rev_match is None else i.rev_match.primer
         fwd_data[fwd_primer] += 1
         rev_data[rev_primer] += 1
-        pair_data[(fwd_primer, rev_primer)] += 1
+        pair_data[(fwd_primer, rev_primer, i.direction)] += 1
 
     top_fwd_primer, fwd_count = fwd_data.most_common()[0]
     top_rev_primer, rev_count = rev_data.most_common()[0]
     top_pair, _ = pair_data.most_common()[0]
 
     # Check if there is agreement
-    if (top_fwd_primer, top_rev_primer) != top_pair:
+    if (top_fwd_primer, top_rev_primer) != top_pair[:2]:
         # TODO: what to do?
         print(top_fwd_primer)
         print(top_rev_primer)
@@ -166,7 +166,7 @@ def get_mode(alignments):
         fwd_primer = None if i.fwd_match is None else i.fwd_match.primer
         rev_primer = None if i.rev_match is None else i.rev_match.primer
 
-        if (fwd_primer, rev_primer) == top_pair:
+        if (fwd_primer, rev_primer, i.direction) == top_pair:
             items['top_alignments'].append(i)
             hmmfroms.append(i.hmmfrom)
             hmmtos.append(i.hmmto)
@@ -192,7 +192,7 @@ def get_mode(alignments):
     if len(dirs := set(i.direction for i in items['top_alignments'])) == 1:
         items['direction'] = dirs.pop()
     else:
-        # ???
+        # the pairing logic above should preclude this possibility
         raise RuntimeError('multiple directions among top alignments')
 
     if clean_fwd_scores or dirty_fwd_scores:
