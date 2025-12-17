@@ -280,48 +280,66 @@ def get_fastq_files(path_template, dataset=None):
     return files
 
 
-def get_assignments(dataset_id, omics_pipeline_root=None):
-    """ Given a dataset's samples' amplicon targets """
-    if omics_pipeline_root is None:
-        omics_pipeline_root = Path()
+def get_assignments(dataset_id=None, omics_pipeline_root=None, path=None):
+    """ Parse the assignments file """
+    if dataset_id is None and path is None:
+        raise ValueError('dataset_id or path is required')
 
-    proj_dir = omics_pipeline_root / 'data' / 'projects' / dataset_id
+    if dataset_id:
+        if omics_pipeline_root is None:
+            omics_pipeline_root = Path()
+        path = (omics_pipeline_root / 'data' / 'projects' / dataset_id
+                / DEFAULT_OUT_TARGETS)
+    else:
+        # path is given
+        pass
 
     data = {}
-    with open(proj_dir / DEFAULT_OUT_TARGETS) as ifile:
-        ifile.readline()  # ignore header
-        for line in ifile:
-            sample_id, target, override = line.rstrip('\n').split('\t')
-            if override:
-                target = override
+    with open(path) as ifile:
+        for lnum, line in enumerate(ifile, start=1):
+            # The parsing below tolerates a bit, since the file may be manually
+            # edited
+            line = line.strip()
+            if line.startswith('#') or not line:
+                continue
+
+            # require two fields, override is an optional third field,
+            # ignore anything beyond that (could be used for a comment)
+            sample_id, target, *override = line.split(maxsplit=3)
+
+            if lnum == 1 and sample_id == 'sample' and target == 'target':
+                # header line
+                continue
+
+            override = override[0] if override else ''
+            target = override or target
+
+            if not target:
+                raise RuntimeError(f'empty target at line {lnum} in {path}')
+
             if sample_id in data:
-                raise RuntimeError('duplicate sample id')
+                raise RuntimeError('duplicate sample at line {lnum} in {path}')
+
             data[sample_id] = target
-
-    for sample_id, target in data.items():
-        hmm, fwdprim, revprim = target.split('.')
-        try:
-            hmm = get_models()[hmm]
-        except KeyError:
-            raise RuntimeError(f'Got invalid HMM name "{hmm}" for {sample_id}')
-
-        for i in hmm.fwd_primers:
-            if i.name == fwdprim:
-                fwdprim = i
-                break
-        else:
-            raise RuntimeError(f'not a fwd primer in {hmm}: {fwdprim}')
-
-        for i in hmm.rev_primers:
-            if i.name == revprim:
-                revprim = i
-                break
-        else:
-            raise RuntimeError(f'not a rev primer in {hmm}: {revprim}')
-
-        data[sample_id] = (hmm, fwdprim, revprim)
     return data
 
 
+def target2dada2_dir(target):
+    """
+    Get name of dada2 output directory from target identifier string
+
+    This is used in the Snakefile as well as the GLAMR DB loading code.
+    """
+    hmm, fwdprim, revprim = HMM.parse_target(target)
+    return f'dada2.{hmm.format_target_spec(fwdprim, revprim)}'
+
+
+def spec2targets(spec):
+    try:
+        print(*HMM.spec2targets(spec), sep='\n')
+    except Exception as e:
+        raise UsageError('Error parsing the given spec: {e}') from e
+
+
 if __name__ == '__main__':
-    main()
+    cli()
