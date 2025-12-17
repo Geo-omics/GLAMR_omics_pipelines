@@ -93,7 +93,7 @@ class HMM:
             if (i.start - 5) <= qstart <= (i.start + 5) and qstart < i.end
         ]
         rev = [
-            i for i in self.rev_primers.items()
+            i for i in self.rev_primers
             if i.start < qend and (i.end - 5) <= qend <= (i.end + 5)
         ]
         return tuple(fwd), tuple(rev)
