@@ -3866,7 +3866,7 @@ rule amplicon_dada2_target:
         samples = rules.amplicon_dispatch.output.samples,
         target_tab = rules.amplicon_collect_target_guesses.output.target_tab
     output:
-        directory("data/projects/{dataset}/dada2.{target}.results")
+        directory("data/projects/{dataset}/dada2.{target_spec}")
     params: quality_threshold=25
     resources: cpus=16
     shell:
@@ -3878,7 +3878,7 @@ rule amplicon_dada2_target:
             --samples {input.samples} \
             --targets {input.target_tab} \
             --cpus {resources.cpus} \
-            {wildcards.target} \
+            {wildcards.target_spec} \
         || {{ mv -v -- {output} {output}_ERROR; exit 1; }}
         """
 
@@ -3892,47 +3892,23 @@ def dada2_output_dirs(wc):
     This will also check for missing target assignments and may raise a
     RuntimeError prompting to manually curate the target assignment file.
     """
-    assignments = Path(checkpoints.amplicon_dispatch.get(**wc).output.assignments)
-    with assignments.open() as ifile:
-        targets = set()
-        skip_count = 0
-        bad_count = 0
-        for line in ifile:
-            line = line.rstrip('\n')
-            if line.startswith('#') or not line:
-                continue
+    assignment_file = Path(checkpoints.amplicon_dispatch.get(**wc).output.assignments)
+    assignments = pypelib.amplicon.dispatch.get_assignments(path=assignment_file)
 
-            # The parsing below tolerates a bit, since the file may be manually
-            # edited, require two fields, override is an optional third field,
-            # ignore anything beyond that (could be used for a comment)
-            sample, target, *override = line.split(maxsplit=3)
-
-            if sample == 'sample' and target == 'target':
-                # header line
-                continue
-
-            override = override[0] if override else ''
-            target = override or target
-
-            if target == 'SKIP':
-                skip_count += 1
-                continue
-            elif target in ('UNKNOWN', 'NO_INFO'):
-                bad_count += 1
-            elif not target:
-                raise RuntimeError(f'empty target? {line=}')
-            else:
-                targets.add(target)
-
-    if bad_count:
+    targets = Counter(assignments.values())
+    if bad_count := targets.pop(pypelib.amplicon.dispatch.UNKNOWN, 0):
         raise RuntimeError(
             f'There are {bad_count} samples that do not have an amplicon '
-            f'target assigned.  Manual curation required:\n  {assignments}'
+            f'target assigned.  Manual curation required for {assignment_file}'
         )
-    if skip_count:
+    if skip_count := targets.pop(pypelib.amplicon.dispatch.SKIP, 0):
         print(f'NOTE: {skip_count} samples got excluded from analysis')
 
-    return [str(assignments.parent / f'dada2.{i}.results') for i in targets]
+    dirnames = sorted(set(
+        pypelib.amplicon.dispatch.target2dada2_dir(i)
+        for i in targets
+    ))
+    return [str(assignment_file.parent / i) for i in dirnames]
 
 rule amplicon_pipeline_dataset:
     input:

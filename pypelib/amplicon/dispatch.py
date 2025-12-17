@@ -11,7 +11,7 @@ import shutil
 from tempfile import NamedTemporaryFile
 
 from ..utils import UsageError
-from . import get_models
+from .hmm import HMM
 
 
 SINGLE_MODE_THRESHOLT = 0.8
@@ -24,22 +24,30 @@ DEFAULT_OUT_TARGETS = 'amplicon_target_assignments.tsv'
 DEFAULT_OUT_SAMPLES = 'sample_files.tsv'
 
 UNKNOWN = 'UNKNOWN'
+SKIP = 'SKIP'
 
 
 def cli():
     argp = argparse.ArgumentParser(description=__doc__)
-    argp.add_argument(
+    subp = argp.add_subparsers(
+        dest='subcommand',
+    )
+    makep = subp.add_parser(
+        'make',
+        help='Do the dispatching, so make the three dispatch output files.',
+    )
+    makep.add_argument(
         'project_directory',
         help='The project directory, usually data/projects/<dataset> where the'
              ' last component of the given path is interpreted as the dataset '
              'ID.  This directory is expected to contain an "amplicon" '
              'subdirectory that in turn contains one subdirectory per sample.',
     )
-    argp.add_argument(
+    makep.add_argument(
         'target_tabular_input',
         help='Input file, as made by amplicon.tabular_targets module',
     )
-    argp.add_argument(
+    makep.add_argument(
         '--out-targets',
         metavar='<path>',
         default=DEFAULT_OUT_TARGETS,
@@ -48,7 +56,7 @@ def cli():
              f'should normally be reviewed and amended for correctness and '
              f'completeness.  Defaults to "{DEFAULT_OUT_TARGETS}"',
     )
-    argp.add_argument(
+    makep.add_argument(
         '--out-samples',
         metavar='<path>',
         default='./sample_files.tsv',
@@ -56,21 +64,31 @@ def cli():
              f'tab-separated table listing samples with their paths to raw '
              f'reads.  Defaults to "{DEFAULT_OUT_SAMPLES}"',
     )
+    spec2targetsp = subp.add_parser(
+        'spec2targets',
+        help='List possible primer combinations for given target spec',
+    )
+    spec2targetsp.add_argument('spec')
     args = argp.parse_args()
     try:
-        main(
-            None,
-            args.target_tabular_input,
-            args.project_directory,
-            out_assignments=args.out_targets,
-            out_samples=args.out_samples,
-        )
+        match args.subcommand:
+            case 'make':
+                make(
+                    None,
+                    args.target_tabular_input,
+                    args.project_directory,
+                    out_assignments=args.out_targets,
+                    out_samples=args.out_samples,
+                )
+            case 'spec2targets':
+                spec2targets(args.spec)
+            case _: raise ValueError('invalid subcommand')
     except UsageError as e:
         argp.error(e)
 
 
-def main(
-    fastq_files,
+def make(
+    fastq_files,  # passed by Snakefile, but not used, as we'll get them again
     target_tab,
     project_dir,
     out_assignments=None,
@@ -247,7 +265,7 @@ def get_sample_info(data, project_dir):
 
 def write_sample_info(rows, output_file):
     """
-    Write the sample info outout file
+    Write the sample info output file
 
     This should raise exceptions if any of the paths of fastq files do not
     exist.

@@ -1,3 +1,6 @@
+import re
+
+
 class HMM:
     """
     HMM model
@@ -30,8 +33,8 @@ class HMM:
         self.regions = regions
         self.length = length
 
-        self.fwd_primers = []
-        self.rev_primers = []
+        fwd_primers = []
+        rev_primers = []
         if primers is not None:
             for i in primers:
                 if i.start is None or i.end is None:
@@ -45,18 +48,133 @@ class HMM:
                 else:
                     i.hmm = self
                 if i.is_forward():
-                    self.fwd_primers.append(i)
+                    fwd_primers.append(i)
                 elif i.is_reverse():
-                    self.rev_primers.append(i)
+                    rev_primers.append(i)
                 else:
                     # skip
                     continue
+        self._fwd_primers = tuple(fwd_primers)
+        self._rev_primers = tuple(rev_primers)
+        self._fwd_primer = {i.name: i for i in fwd_primers}
+        self._rev_primer = {i.name: i for i in rev_primers}
 
     def __str__(self):
         return self.name
 
     def __repr__(self):
         return f'<{self.__class__.__name__}: {self.name}>'
+
+    @property
+    def fwd_primers(self):
+        return self._fwd_primers
+
+    @property
+    def rev_primers(self):
+        return self._rev_primers
+
+    @property
+    def fwd_primer(self):
+        """ provide access to primers by name """
+        return self._fwd_primer
+
+    @property
+    def rev_primer(self):
+        """ provide access to primers by name """
+        return self._rev_primer
+
+    def format_target_spec(self, fwd_primer, rev_primer):
+        start, end = self.get_target_interval(fwd_primer, rev_primer)
+        return f'{self.name}.{start}-{end}'
+
+    def format_target(self, fwd_primer, rev_primer):
+        if isinstance(fwd_primer, str):
+            fwd_primer = self.fwd_primer[fwd_primer]
+        elif fwd_primer not in self.fwd_primers:
+            raise ValueError(f'not a fwd primer for {self}')
+        if isinstance(rev_primer, str):
+            rev_primer = self.rev_primer[rev_primer]
+        elif rev_primer not in self.rev_primers:
+            raise ValueError(f'not a rev primer for {self}')
+
+        return f'{self.name}.{fwd_primer.name}.{rev_primer.name}'
+
+    @classmethod
+    def parse_target(cls, target):
+        """
+        Return hmm and primer instances corresponding to target string
+
+        This is the inverse of format_target().
+        """
+        from . import get_models
+        hmm_name, fwdprim, revprim = target.split('.')
+        try:
+            obj = get_models()[hmm_name]
+        except KeyError as e:
+            raise LookupError(f'Invalid HMM name: {e}') from e
+
+        try:
+            fwd_primer = obj.fwd_primer[fwdprim]
+        except KeyError as e:
+            raise LookupError(f'not a fwd primer for {obj}: {e}') from e
+
+        try:
+            rev_primer = obj.rev_primer[revprim]
+        except KeyError as e:
+            raise LookupError(f'not a rev primer for {obj}: {e}') from e
+        return obj, fwd_primer, rev_primer
+
+    def get_target_interval(self, fwd_primer, rev_primer):
+        """ Get start and end positions of the exclusive sequence targeted by
+        given primer pair """
+        if isinstance(fwd_primer, str):
+            fwd_primer = self.fwd_primer[fwd_primer]
+        if isinstance(rev_primer, str):
+            rev_primer = self.rev_primer[rev_primer]
+        return fwd_primer.end + 1, rev_primer.start - 1
+
+    @classmethod
+    def spec2targets(cls, spec):
+        from . import get_models
+        pat = re.compile(r'^(\w+).([0-9]+)-([0-9]+)$')
+        m = pat.match(spec)
+        if m is None:
+            raise ValueError(
+                f'Does not conform to target spec syntax: "{spec}"'
+            )
+
+        hmm_name, start, end = m.groups()
+
+        start = int(start)
+        end = int(end)
+
+        try:
+            hmm = get_models()[hmm_name]
+        except KeyError as e:
+            raise ValueError(f'Invalid HMM name: {e}') from e
+
+        fwd_p_names = [i.name for i in hmm.fwd_primers if i.end + 1 == start]
+        rev_p_names = [i.name for i in hmm.rev_primers if i.start - 1 == end]
+
+        if fwd_p_names and rev_p_names:
+
+            return [
+                f'{hmm_name}.{i}.{j}'
+                for i in sorted(fwd_p_names)
+                for j in sorted(rev_p_names)
+            ]
+        else:
+            msg = []
+            if not fwd_p_names:
+                msg.append('No matching forward primers found.')
+            if not rev_p_names:
+                msg.append('No matching reverse primers found.')
+            print(f'{hmm=}')
+            for i in hmm.fwd_primers:
+                print(f'  fwd: {i} end={i.end}')
+            for i in hmm.rev_primers:
+                print(f'  rev: {i} start={i.start}')
+            raise ValueError(' '.join(msg))
 
     def get_regions(self, qstart, qend):
         """ get regions contained in interval -- any overlap counts """

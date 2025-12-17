@@ -3,7 +3,7 @@
 'Using dada2 with amplicon sequencing data
 
 Usage:
-  amplicon_quality_with_trunc.R [--glamr-root <PATH>] --quality <N> --outdir <PATH> [--cpus <N>] --assignments <PATH> --samples <PATH> --targets <PATH> <target>
+  amplicon_quality_with_trunc.R [--glamr-root <PATH>] --quality <N> --outdir <PATH> [--cpus <N>] --assignments <PATH> --samples <PATH> --targets <PATH> <target_spec>
 
 The positional argument <sample_listing> is the path to a file made by the
 amplicon-dispatch script.
@@ -44,13 +44,19 @@ args <- docopt(doc)
 cpus = as.integer(args$cpus)
 
 
+valid_targets = system2(
+    'python3',
+    args=shQuote(c('-m', 'pypelib.amplicon.dispatch', 'spec2targets', args$target_spec)),
+    stdout=TRUE,
+)
+print(valid_targets)
 assignments <- read.delim(
     args$assignments,
     header=TRUE,
     fill=TRUE,
 ) %>% tibble() %>%
     mutate(assigned=if_else(override == "", target, override, missing=target)) %>%
-    filter(assigned == args$target)
+    filter(assigned %in% valid_targets)
 
 if (nrow(assignments) == 0) {
     stop('no samples where assigned to given target')
