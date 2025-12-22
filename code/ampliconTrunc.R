@@ -3,10 +3,7 @@
 'Using dada2 with amplicon sequencing data
 
 Usage:
-  amplicon_quality_with_trunc.R [--glamr-root <PATH>] --quality <N> --outdir <PATH> [--cpus <N>] --assignments <PATH> --samples <PATH> --targets <PATH> <target_spec>
-
-The positional argument <sample_listing> is the path to a file made by the
-amplicon-dispatch script.
+  ampliconTrunc.R [--glamr-root <PATH>] --quality <N> --outdir <PATH> [--cpus <N>] --assignments <PATH> --samples <PATH> --targets <PATH> <target_spec>
 
 Options:
   -h --help             Show this screen
@@ -49,7 +46,12 @@ valid_targets = system2(
     args=shQuote(c('-m', 'pypelib.amplicon.dispatch', 'spec2targets', args$target_spec)),
     stdout=TRUE,
 )
-print(valid_targets)
+status = attr(valid_targets, 'status')
+if (!is.null(status)) {
+    stop(paste('called process failed with exit status ', status))
+}
+cat('Targets:', valid_targets, '\n')
+
 assignments <- read.delim(
     args$assignments,
     header=TRUE,
@@ -67,21 +69,33 @@ target_tab <- read.delim(args$targets, header=TRUE)
 samples <- read.delim(
     args$samples,
     header=TRUE,
-) %>% tibble() %>%
-    semi_join(assignments, by=join_by('sample')) %>%
-    left_join(target_tab, by=join_by('sample')) %>%
-    mutate(filt_reads_fwd=str_glue('{args$outdir}/filtered/{sample}_fwd.fastq.gz')) %>%
-    mutate(filt_reads_rev=str_glue('{args$outdir}/filtered/{sample}_rev.fastq.gz')) %>%
+) %>% tibble()
+
+if ('single_fastq' %in% colnames(samples)) {
+    cat('Switching to single-ended data2 processing...\n')
+    status = system2(
+        './code/amplicon_single.R',
+        args=commandArgs(trailingOnly=TRUE),
+        wait=TRUE,
+    )
+    quit(save="no", status=status)
+}
+
+samples <- samples |>
+    semi_join(assignments, by=join_by('sample')) |>
+    left_join(target_tab, by=join_by('sample')) |>
+    mutate(filt_reads_fwd=str_glue('{args$outdir}/filtered/{sample}_fwd.fastq.gz')) |>
+    mutate(filt_reads_rev=str_glue('{args$outdir}/filtered/{sample}_rev.fastq.gz')) |>
     # below: paste glamr_root and paths, but respect absolute paths in data,
     # make some effort to avoid double slashes
     mutate(sample_dir=if_else(str_starts(sample_dir, '/'),
                               sample_dir,
                               file.path(str_remove(args$glamr_root, '/$'), sample_dir))
-    ) %>%
+    ) |>
     mutate(fwd_fastq=if_else(str_starts(sample_dir, '/'),
                               fwd_fastq,
                               file.path(str_remove(args$glamr_root, '/$'), fwd_fastq))
-    ) %>%
+    ) |>
     mutate(rev_fastq=if_else(str_starts(sample_dir, '/'),
                               rev_fastq,
                               file.path(str_remove(args$glamr_root, '/$'), rev_fastq))

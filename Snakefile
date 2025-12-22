@@ -3887,7 +3887,7 @@ rule amplicon_dada2_target:
             --targets {input.target_tab} \
             --cpus {resources.cpus} \
             {wildcards.target_spec} \
-        || {{ mv -v -- {output} {output}_ERROR; exit 1; }}
+        || {{ mv -v --backup=numbered -T -- {output} {output}_ERROR; exit 1; }}
         """
 
 def dada2_output_dirs(wc):
