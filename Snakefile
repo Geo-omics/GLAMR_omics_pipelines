@@ -3851,7 +3851,7 @@ checkpoint amplicon_dispatch:
     params:
         project_dir = subpath(output.assignments, parent=True)
     run:
-        pypelib.amplicon.dispatch.main(
+        pypelib.amplicon.dispatch.make(
             input.fastqs,
             input.target_tab,
             params.project_dir,
@@ -3895,26 +3895,31 @@ def dada2_output_dirs(wc):
     assignment_file = Path(checkpoints.amplicon_dispatch.get(**wc).output.assignments)
     assignments = pypelib.amplicon.dispatch.get_assignments(path=assignment_file)
 
+    wc_str = ' '.join(f'{k}={v}' for k, v in wc.items())
     targets = Counter(assignments.values())
     if bad_count := targets.pop(pypelib.amplicon.dispatch.UNKNOWN, 0):
         raise RuntimeError(
-            f'There are {bad_count} samples that do not have an amplicon '
+            f'[{wc_str}] There are {bad_count} samples that do not have an amplicon '
             f'target assigned.  Manual curation required for {assignment_file}'
         )
     if skip_count := targets.pop(pypelib.amplicon.dispatch.SKIP, 0):
-        print(f'NOTE: {skip_count} samples got excluded from analysis')
+        print(f'[INFO]: [{wc_str}] {skip_count} samples got excluded from analysis')
 
     dirnames = sorted(set(
         pypelib.amplicon.dispatch.target2dada2_dir(i)
         for i in targets
     ))
+    if dirnames:
+        print(f'[{wc_str}] dada2 jobs:')
+        print(*dirnames, sep='\n')
+    else:
+        print('[WARNING] [{wc_str}] no dada2 jobs?')
     return [str(assignment_file.parent / i) for i in dirnames]
 
 rule amplicon_pipeline_dataset:
-    input:
-        dada2_output_dirs
-    output:
-        "data/projects/{dataset}/amplicon_pipeline_done"
+    """ The top rule for the amplicon pipeline """
+    input: dada2_output_dirs
+    output: "data/projects/{dataset}/amplicon_pipeline_done"
     shell:
         """
         echo {input} >> {output}
