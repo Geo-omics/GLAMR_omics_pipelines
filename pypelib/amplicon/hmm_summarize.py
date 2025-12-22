@@ -5,9 +5,17 @@ import argparse
 from collections import Counter
 from itertools import groupby
 import json
+from pathlib import Path
 from statistics import median, quantiles
 
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.patches import Patch
+import pandas
+
+from ..utils import UsageError
+from . import dispatch
 from .alignment import HMMRAlignment
+from .hmm import HMM
 
 
 def cli():
@@ -17,17 +25,45 @@ def cli():
     The summary is written to stdout.
     """
     argp = argparse.ArgumentParser(description=__doc__)
-    argp.add_argument(
+    subp = argp.add_subparsers(dest='subcmd')
+    sump = subp.add_parser(
+        'summary',
+        help='Summarize alignments for one sample',
+    )
+    sump.add_argument(
         'inputfile',
         help='Tabular alignment file as made with nhmmscan\'s --tblout option',
     )
-    argp.add_argument(
+    sump.add_argument(
         '--output',
         help='Name of output file. By default print to stdout.',
     )
-    argp.add_argument('--debug', action='store_true', help='debug mode')
+    sump.add_argument('--debug', action='store_true', help='debug mode')
+    plotp = subp.add_parser(
+        'plot',
+        help='Plot sequencing depth for a sample',
+    )
+    plotp.add_argument(
+        'inputfile',
+        help='Tabular alignment file as made with nhmmscan\'s --tblout option',
+    )
+    multip = subp.add_parser(
+        'multiplot',
+        help='Plot sequencing depth for whole dataset',
+    )
+    multip.add_argument(
+        'inputfile',
+        help='The target assignment file for the dataset.',
+    )
     args = argp.parse_args()
-    main(args.inputfile, args.output, args.debug)
+    try:
+        match args.subcmd:
+            case 'summary': main(args.inputfile, args.output, args.debug)
+            case 'plot': plot(args.inputfile)
+            case 'multiplot': multiplot(args.inputfile)
+            case _: raise ValueError('invalid subcommand')
+    except UsageError as e:
+        argp.error(e)
 
 
 def main(infile, outfile=None, debug=False):
@@ -233,6 +269,187 @@ def get_mode(alignments):
     items['hmmfrom_avg'] = median(hmmfroms)
     items['hmmto_avg'] = median(hmmtos)
     return items
+
+
+def plot(inputfile):
+    """ Plot from single HMMR tbl output file """
+    alignments = HMMRAlignment.load(inputfile)
+    depth = {}
+    for a in alignments:
+        if a.model not in depth:
+            depth[a.model] = {'+': Counter(), '-': Counter()}
+        for pos in range(a.hmmfrom, a.hmmto + 1):
+            depth[a.model][a.strand][pos] += 1
+
+    for hmm, data in depth.items():
+        df_data = {}
+        index = pandas.RangeIndex(1, hmm.length + 1)
+        for strand, counts in data.items():
+            df_data[strand] = pandas.Series(counts, index)
+        df = pandas.DataFrame(df_data)
+        ax = df.plot()
+        ax.set_title(hmm.name)
+        ax.set_yscale('log')
+        for i in hmm.fwd_primers:
+            ax.fill_between(
+                [i.start, i.end], 0, 1200,
+                color='green', alpha=0.25,
+            )
+        for i in hmm.rev_primers:
+            ax.fill_between(
+                [i.start, i.end], 0, 1200,
+                color='brown', alpha=0.25,
+            )
+        ax.figure.savefig(f'{hmm.name}.depth.pdf')
+        ax.cla()
+
+
+def multiplot(inputfile, output=None):
+    """
+    Plot HMM alignment summary for whole dataset.
+
+    inputfile: An assignment files as made by the dispatch module
+    """
+    infile = Path(inputfile)
+    samp_dir = infile.parent / 'amplicons'
+    dataset_id = samp_dir.parent.name
+    groupings = None
+    if infile.is_file():
+        assignments = dispatch.get_assignments(path=infile)
+        groupings = {}
+        for sample_id, target in assignments.items():
+            if target in (dispatch.SKIP, dispatch.UNKNOWN):
+                groupings[sample_id] = target
+            else:
+                hmm, _, _ = HMM.parse_target(target)
+                groupings[sample_id] = hmm
+        print('Grouping samples:')
+        for grp, cnt in Counter(groupings.values()).items():
+            print(f'{grp.name:>20}: {cnt:>5}')
+    elif samp_dir.is_dir():
+        print('[NOTICE] no such assignment file entering dataset-auto-mode')
+        print(f'Using sample directories under: {samp_dir}')
+    else:
+        raise UsageError(f'no such file {inputfile} and no such directory '
+                         f'{samp_dir}')
+    if not samp_dir.is_dir():
+        raise UsageError(f'no such directory: {samp_dir}')
+    data = {}
+    for i in samp_dir.glob('samp_*/detect_region/tbl_*.txt'):
+        sample_id = i.parts[-3]
+        direct = i.stem.removeprefix('tbl_')
+        if groupings is None:
+            group = 'all'
+        else:
+            group = groupings[sample_id]
+
+        if group not in data:
+            data[group] = {}
+
+        for a in HMMRAlignment.load(i):
+            if isinstance(group, str):
+                # keep data for any and all models
+                pass
+            else:
+                # group is a HMM
+                if a.model != group:
+                    # skip other model's alignments
+                    continue
+            if a.model not in data[group]:
+                data[group][a.model] = {}
+            if direct not in data[group][a.model]:
+                data[group][a.model][direct] = {}
+            if a.strand not in data[group][a.model][direct]:
+                data[group][a.model][direct][a.strand] = {}
+            if sample_id not in data[group][a.model][direct][a.strand]:
+                data[group][a.model][direct][a.strand][sample_id] = Counter()
+
+            for pos in range(a.hmmfrom, a.hmmto + 1):
+                data[group][a.model][direct][a.strand][sample_id][pos] += 1
+
+    if output is None:
+        output = f'{dataset_id}.depths.pdf'
+    pp = PdfPages(output)
+    for group, grpdat in data.items():
+        for hmm, hmmdat in grpdat.items():
+            index = pandas.RangeIndex(1, hmm.length + 1)
+
+            ax = None
+            cols = ['blue', 'red', 'green', 'orange']
+            ledgend_h = []
+            samples = set()
+            plot_cnt = 0
+            print(f' Plotting {group}/{hmm}... ', end='', flush=True)
+            max_y = 0
+            for direct, dirdat in hmmdat.items():
+                for strand, strdat in dirdat.items():
+                    sample_count = 0
+                    df_data = {}
+                    for sample_id, counts in strdat.items():
+                        df_data[f'{sample_id}_{direct}{strand}'] = \
+                            pandas.Series(counts, index)
+                        sample_count += 1
+                        plot_cnt += 1
+                        samples.add(sample_id)
+
+                    color = cols[len(ledgend_h)]  # use next available color
+                    ledgend_h.append(Patch(
+                        color=color,
+                        label=f'{direct} {strand} ({sample_count})'
+                    ))
+
+                    df = pandas.DataFrame(df_data)
+                    max_y = max(max_y, df.max().max())
+                    ax = df.plot(ax=ax, color=color, linewidth=0.5,
+                                 drawstyle='steps-mid')
+
+            ax.legend(handles=ledgend_h)
+            ax.set_title(
+                '  //  '.join((
+                    dataset_id,
+                    hmm.name,
+                    f'{len(samples)} samples',
+                )),
+                dict(fontsize='small'),
+            )
+            ax.set_yscale('log')
+
+            # draw primer indicators
+            primers = sorted(hmm.fwd_primers + hmm.rev_primers,
+                             key=lambda x: x.start)
+            last_end = -1
+            primer_names = []
+            for i in primers:
+                ax.fill_between(
+                    [i.start, i.end], 0,
+                    max_y * 1.2,  # go a bit above the data lines
+                    color='green' if i.direction == 'forward' else 'brown',
+                    alpha=0.25, linewidth=0.5
+                )
+                # The boxes may overlap and the overlapping area will get a
+                # darker shade, but we keep the primer names separate, one list
+                # of names per overlapping primers
+                if last_end < i.start:
+                    # new set of primer names
+                    primer_names.append((i.start, [i.name]))
+                else:
+                    primer_names[-1][1].append(i.name)
+                last_end = i.end
+
+            for xpos, names in primer_names:
+                ax.text(
+                    xpos,
+                    max_y * 0.8,  # try drawing below most lines
+                    '   /   '.join(names),
+                    fontsize='xx-small', rotation=-90.0,
+                    verticalalignment='top',
+                )
+            print(f'{plot_cnt} lines', end=' ', flush=True)
+            pp.savefig(ax.figure)
+            ax.cla()
+            print('[OK]')
+    pp.close()
+    print(f'Saved as {output}')
 
 
 if __name__ == '__main__':

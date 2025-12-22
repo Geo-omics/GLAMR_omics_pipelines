@@ -3860,6 +3860,14 @@ checkpoint amplicon_dispatch:
         )
 
 
+rule hmm_summary_plots:
+    input: rules.amplicon_dispatch.output.assignments
+    output: pdf = "data/projects/{dataset}/hmm_summary_plots.pdf"
+    params:
+        project_dir = subpath(output.pdf, parent=True)
+    run: pypelib.amplicon.hmm_summarize.multiplot(input[0], output=output.pdf)
+
+
 rule amplicon_dada2_target:
     input:
         assignments = rules.amplicon_dispatch.output.assignments,
