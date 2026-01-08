@@ -24,6 +24,7 @@ HMM_MODEL_DATA = {
         'regions': {
             'AR_BR': (840, 1480),
         },
+        'length': 1624,
     },
     '16S_rRNA_arc': {
         'length': 1477,
@@ -50,9 +51,9 @@ HMM_MODEL_DATA = {
     '23S_rRNA_bac': {'length': 2906},
     '23S_rRNA_arc': {'length': 2978},
     '28S_rRNA_euk': {'length': 3729},
-    '5S_rRNA_arc': {},
-    '5_8S_rRNA_arc': {},
-    '5S_rRNA_bac': {},
-    '5S_rRNA_euk': {},
-    '5_8S_rRNA_euk': {},
+    '5S_rRNA_arc': {'length': 119},
+    '5_8S_rRNA_arc': {'length': 154},
+    '5S_rRNA_bac': {'length': 119},
+    '5S_rRNA_euk': {'length': 119},
+    '5_8S_rRNA_euk': {'length': 154},
 }
