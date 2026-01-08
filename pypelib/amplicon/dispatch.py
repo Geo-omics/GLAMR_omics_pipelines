@@ -69,6 +69,8 @@ def cli():
         help='List possible primer combinations for given target spec',
     )
     spec2targetsp.add_argument('spec')
+    argp.add_argument('--traceback', action='store_true',
+                      help='always print traceback on error')
     args = argp.parse_args()
     try:
         match args.subcommand:
@@ -84,7 +86,10 @@ def cli():
                 spec2targets(args.spec)
             case _: raise ValueError('invalid subcommand')
     except UsageError as e:
-        argp.error(e)
+        if args.traceback:
+            raise e
+        else:
+            argp.error(e)
 
 
 def make(
@@ -356,7 +361,7 @@ def spec2targets(spec):
     try:
         print(*HMM.spec2targets(spec), sep='\n')
     except Exception as e:
-        raise UsageError('Error parsing the given spec: {e}') from e
+        raise UsageError(f'Error parsing the given spec {spec=}: {e}') from e
 
 
 if __name__ == '__main__':
