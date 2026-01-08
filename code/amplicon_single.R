@@ -106,16 +106,21 @@ namesOfSamples <- samples$sample
 
 
 # visualize and save quality of single reads
-cat('Plotting single reads quality for', nrow(samples), 'samples...\n')
-save.image(file="xx.R.image")
-q("no", status=1)
-singlePlot <- plotQualityProfile(singleReads)
-print('BORK A')
+if (file.exists('plot_obj.Robj')) {
+    cat('Loading saved plot object...')
+    load('plot_obj.Robj')
+} else {
+    cat('Plotting single reads quality for', nrow(samples), 'samples...')
+    singlePlot <- plotQualityProfile(singleReads)
+    save(singlePlot, file='plot_obj.Robj')
+}
+cat('[OK]\n')
 plotDataSingle <- singlePlot$data
 fs::dir_create(path = args$outdir)
 single_plot_path = str_glue("{args$outdir}/single_quality_plot.pdf")
+cat('Saving plot as:', single_plot_path, '... ')
 ggsave(filename=single_plot_path, plot=singlePlot, width=5, height=3, scale=2)
-cat('Saved as:', single_plot_path, '\n')
+cat('[OK]\n')
 
 cat('Computing truncation parameters...\n')
 # using weighted mean
