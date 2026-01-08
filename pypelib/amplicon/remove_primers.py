@@ -187,21 +187,28 @@ def main_single(
         if not args:
             raise RuntimeError('No args?  Something should not be clean!')
 
-        discards = find_5p_primer(fwd_pr, single_fastq, Prof.CONSISTENT, log)
-        print(f'discarding {len(discards)} read', file=log)
+        if not fwd_clean:
+            discards = find_5p_primer(
+                fwd_pr,
+                single_fastq,
+                Prof.CONSISTENT,
+                log,
+            )
+            print(f'discarding {len(discards)} reads', file=log)
 
-        with NamedTemporaryFile('w+t') as single_tmp:
+            single_tmp = estack.enter_context(NamedTemporaryFile('w+t'))
             filter_fastq(discards, single_fastq, single_tmp)
-            cmd = [
-                'cutadapt',
-                *args,
-                '--discard-untrimmed',
-                '--output', single_out,
-                '--info-file', Path(single_out).with_name('trim_info.txt'),
-                single_tmp.name,
-            ]
-            print('command:\n', *cmd, file=log)
-            run(cmd, check=True, stdout=log)
+
+        cmd = [
+            'cutadapt',
+            *args,
+            # '--discard-untrimmed',
+            '--output', single_out,
+            # '--info-file', Path(single_out).with_name('trim_info.txt'),
+            single_fastq if fwd_clean else single_tmp.name,
+        ]
+        print('command:\n', *cmd, file=log)
+        run(cmd, check=True, stdout=log)
 
 
 def main_paired(
