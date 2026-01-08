@@ -72,7 +72,7 @@ samples <- read.delim(
 ) %>% tibble()
 
 if ('single_fastq' %in% colnames(samples)) {
-    cat('Switching to single-ended data2 processing...')
+    cat('Switching to single-ended data2 processing...\n')
     status = system2(
         './code/amplicon_single.R',
         args=commandArgs(trailingOnly=TRUE),

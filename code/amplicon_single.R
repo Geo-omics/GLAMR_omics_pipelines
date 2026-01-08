@@ -47,7 +47,7 @@ valid_targets = system2(
     stdout=TRUE,
 )
 status = attr(valid_targets, 'status')
-if (not is.null(status)) {
+if (!is.null(status)) {
     stop(paste('called process failed with exit status ', status))
 }
 
