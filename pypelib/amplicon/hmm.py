@@ -84,8 +84,11 @@ class HMM:
         return self._rev_primer
 
     def format_target_spec(self, fwd_primer, rev_primer):
-        start, end = self.get_target_interval(fwd_primer, rev_primer)
-        return f'{self.name}.{start}-{end}'
+        spec = self.name
+        if fwd_primer is not None and rev_primer is not None:
+            start, end = self.get_target_interval(fwd_primer, rev_primer)
+            spec += f'.{start}-{end}'
+        return spec
 
     def format_target(self, fwd_primer, rev_primer):
         if isinstance(fwd_primer, str):
@@ -107,21 +110,24 @@ class HMM:
         This is the inverse of format_target().
         """
         from . import get_models
-        hmm_name, fwdprim, revprim = target.split('.')
+        hmm_name, *primers = target.split('.')
+        fwd_primer, rev_primer = primers if primers else (None, None)
         try:
             obj = get_models()[hmm_name]
         except KeyError as e:
             raise LookupError(f'Invalid HMM name: {e}') from e
 
-        try:
-            fwd_primer = obj.fwd_primer[fwdprim]
-        except KeyError as e:
-            raise LookupError(f'not a fwd primer for {obj}: {e}') from e
+        if fwd_primer:
+            try:
+                fwd_primer = obj.fwd_primer[fwd_primer]
+            except KeyError as e:
+                raise LookupError(f'not a fwd primer for {obj}: {e}') from e
 
-        try:
-            rev_primer = obj.rev_primer[revprim]
-        except KeyError as e:
-            raise LookupError(f'not a rev primer for {obj}: {e}') from e
+        if rev_primer:
+            try:
+                rev_primer = obj.rev_primer[rev_primer]
+            except KeyError as e:
+                raise LookupError(f'not a rev primer for {obj}: {e}') from e
         return obj, fwd_primer, rev_primer
 
     def get_target_interval(self, fwd_primer, rev_primer):
@@ -135,29 +141,38 @@ class HMM:
 
     @classmethod
     def spec2targets(cls, spec):
+        """ Get list of matching targets from given target spec """
         from . import get_models
-        pat = re.compile(r'^(\w+).([0-9]+)-([0-9]+)$')
+
+        pat = re.compile(
+            r'^(?P<name>\w+)(.(?P<start>[0-9]+)-(?P<end>[0-9]+))?$'
+        )
         m = pat.match(spec)
         if m is None:
             raise ValueError(
                 f'Does not conform to target spec syntax: "{spec}"'
             )
+        m = m.groupdict()
 
-        hmm_name, start, end = m.groups()
-
-        start = int(start)
-        end = int(end)
+        hmm_name = m['name']
+        start = m['start']
+        end = m['end']
 
         try:
             hmm = get_models()[hmm_name]
         except KeyError as e:
             raise ValueError(f'Invalid HMM name: {e}') from e
 
+        if start is None and end is None:
+            return [hmm.name]
+
+        start = int(start)
+        end = int(end)
+
         fwd_p_names = [i.name for i in hmm.fwd_primers if i.end + 1 == start]
         rev_p_names = [i.name for i in hmm.rev_primers if i.start - 1 == end]
 
         if fwd_p_names and rev_p_names:
-
             return [
                 f'{hmm_name}.{i}.{j}'
                 for i in sorted(fwd_p_names)
