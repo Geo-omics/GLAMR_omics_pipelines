@@ -14,6 +14,8 @@ import shutil
 from subprocess import run, DEVNULL
 from tempfile import NamedTemporaryFile
 
+from Bio.Seq import Seq
+
 from . import get_models
 
 
@@ -60,7 +62,7 @@ class Prof(Enum):
     CONSISTENT = auto()
 
 
-def find_5p_primer(primer, fastq, test_profile, log):
+def find_5p_primer(primer_sequence, fastq, test_profile, log):
     """
     Get indexes of sequences with imperfect 5' primer
     """
@@ -68,7 +70,7 @@ def find_5p_primer(primer, fastq, test_profile, log):
     with NamedTemporaryFile('w+t') as info_file:
         cmd = [
             'cutadapt',
-            '-g', primer.sequence,
+            '-g', primer_sequence,
             '--info-file', info_file.name,
             fastq,
         ]
@@ -95,7 +97,7 @@ def find_5p_primer(primer, fastq, test_profile, log):
     match test_profile:
         case Prof.STRICT:
             for idx, a, b in data:
-                if a == '0' and b == len(primer.sequence):
+                if a == '0' and b == len(primer_sequence):
                     # keep if perfect
                     continue
                 else:
@@ -159,25 +161,26 @@ def main_single(
             raise ValueError('single data should not be swapped')
 
         if rc:
+            # Reads look like the reverse reads of paired-ended data.
             # What we call the reverse primer is actually sequenced at the
             # single read's 5' end, so just for cutadapts benefit, here we're
             # swapping the notion of fwd and rev primers
             fwd_clean = clean['rev']
             rev_clean = clean['fwd']
-            tmp_pr = fwd_pr
-            fwd_pr = rev_pr
-            rev_pr = tmp_pr
-            del tmp_pr
+            fwd_pr_sequence = rev_pr.sequence
+            rev_pr_sequence = str(Seq(fwd_pr.sequence).reverse_complement())
         else:
             fwd_clean = clean['fwd']
             rev_clean = clean['rev']
+            fwd_pr_sequence = fwd_pr.sequence
+            rev_pr_sequence = rev_pr.sequence
 
         args = []  # args for cutadapt
         try:
             if not fwd_clean:
-                args += ['-g', fwd_pr.sequence]
+                args += ['-g', fwd_pr_sequence]
             if not rev_clean:
-                args += ['-a', rev_pr.sequence]
+                args += ['-a', rev_pr_sequence]
         except AttributeError as e:
             # e.g. primer is None
             raise RuntimeError(
@@ -187,21 +190,27 @@ def main_single(
         if not args:
             raise RuntimeError('No args?  Something should not be clean!')
 
-        discards = find_5p_primer(fwd_pr, single_fastq, Prof.CONSISTENT, log)
-        print(f'discarding {len(discards)} read', file=log)
+        if not fwd_clean:
+            discards = find_5p_primer(
+                fwd_pr_sequence,
+                single_fastq,
+                Prof.CONSISTENT,
+                log,
+            )
+            print(f'discarding {len(discards)} reads', file=log)
 
-        with NamedTemporaryFile('w+t') as single_tmp:
+            single_tmp = estack.enter_context(NamedTemporaryFile('w+t'))
             filter_fastq(discards, single_fastq, single_tmp)
-            cmd = [
-                'cutadapt',
-                *args,
-                '--discard-untrimmed',
-                '--output', single_out,
-                '--info-file', Path(single_out).with_name('trim_info.txt'),
-                single_tmp.name,
-            ]
-            print('command:\n', *cmd, file=log)
-            run(cmd, check=True, stdout=log)
+
+        cmd = [
+            'cutadapt',
+            *args,
+            '--minimum-length', '50',  # avoid dada2 qual plotting breaking
+            '--output', single_out,
+            single_fastq if fwd_clean else single_tmp.name,
+        ]
+        print('command:\n', *cmd, file=log)
+        run(cmd, check=True, stdout=log)
 
 
 def main_paired(
@@ -231,16 +240,19 @@ def main_paired(
             rev_fastq = temp
             del temp
 
+        fwd_pr_sequence = fwd_pr.sequence
+        rev_pr_sequence = rev_pr.sequence
+
         args = []
         try:
             if not clean['fwd']:
-                args += ['-g', fwd_pr.sequence]
+                args += ['-g', fwd_pr_sequence]
             if not clean['fwd_rev']:
-                args += ['-a', rev_pr.sequence]
+                args += ['-a', str(Seq(rev_pr_sequence).reverse_complement())]
             if not clean['rev']:
-                args += ['-G', rev_pr.sequence]
+                args += ['-G', rev_pr_sequence]
             if not clean['rev_fwd']:
-                args += ['-A', fwd_pr.sequence]
+                args += ['-A', str(Seq(fwd_pr_sequence).reverse_complement())]
         except AttributeError as e:
             # e.g. primer is None
             raise RuntimeError(
@@ -250,8 +262,10 @@ def main_paired(
         if not args:
             raise RuntimeError('No args?  Something should not be clean!')
 
-        fwd_discards = find_5p_primer(fwd_pr, fwd_fastq, Prof.CONSISTENT, log)
-        rev_discards = find_5p_primer(rev_pr, rev_fastq, Prof.CONSISTENT, log)
+        fwd_discards = \
+            find_5p_primer(fwd_pr_sequence, fwd_fastq, Prof.CONSISTENT, log)
+        rev_discards = \
+            find_5p_primer(rev_pr_sequence, rev_fastq, Prof.CONSISTENT, log)
         discards = set(fwd_discards).union(rev_discards)
         print(f'discarding {len(discards)} read pairs', file=log)
 
@@ -264,7 +278,6 @@ def main_paired(
             cmd = [
                 'cutadapt',
                 *args,
-                '--discard-untrimmed',
                 '--output', fwd_out,
                 '--paired-output', rev_out,
                 '--info-file', Path(fwd_out).with_name('trim_info.txt'),
