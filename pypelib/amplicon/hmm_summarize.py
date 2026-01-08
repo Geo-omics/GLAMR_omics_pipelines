@@ -325,7 +325,8 @@ def multiplot(inputfile, output=None):
                 groupings[sample_id] = hmm
         print('Grouping samples:')
         for grp, cnt in Counter(groupings.values()).items():
-            print(f'{grp.name:>20}: {cnt:>5}')
+            grp_name = getattr(grp, 'name', str(grp))
+            print(f'{grp_name:>20}: {cnt:>5}')
     elif samp_dir.is_dir():
         print('[NOTICE] no such assignment file entering dataset-auto-mode')
         print(f'Using sample directories under: {samp_dir}')
