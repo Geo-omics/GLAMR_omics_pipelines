@@ -268,6 +268,14 @@ def get_mode(alignments):
 
     items['hmmfrom_avg'] = median(hmmfroms)
     items['hmmto_avg'] = median(hmmtos)
+
+    for i in ['hmmfrom_avg', 'hmmto_avg']:
+        # Results of median() may be floats or ints even for same number, let's
+        # prefer int: store e.g. 17.0 (float) as 17 (int)
+        val = items[i]
+        if isinstance(val, float) and val.is_integer():
+            items[i] = int(val)
+
     return items
 
 
