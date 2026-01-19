@@ -50,13 +50,14 @@ status = attr(valid_targets, 'status')
 if (!is.null(status)) {
     stop(paste('called process failed with exit status ', status))
 }
+cat('Targets:', valid_targets, '\n')
 
 assignments <- read.delim(
     args$assignments,
     header=TRUE,
     fill=TRUE,
-) |> tibble() %>%
-    mutate(assigned=if_else(override == "", target, override, missing=target)) %>%
+) |> tibble() |>
+    mutate(assigned=if_else(override == "", target, override, missing=target)) |>
     filter(assigned %in% valid_targets)
 
 if (nrow(assignments) == 0) {
@@ -68,7 +69,7 @@ target_tab <- read.delim(args$targets, header=TRUE)
 samples <- read.delim(
     args$samples,
     header=TRUE,
-) %>% tibble() %>%
+) |> tibble() |>
     semi_join(assignments, by=join_by('sample')) %>%
     left_join(target_tab, by=join_by('sample')) %>%
     mutate(filt_reads_single=str_glue('{args$outdir}/filtered/{sample}_single.fastq.gz')) %>%
@@ -77,7 +78,7 @@ samples <- read.delim(
     mutate(sample_dir=if_else(str_starts(sample_dir, '/'),
                               sample_dir,
                               file.path(str_remove(args$glamr_root, '/$'), sample_dir))
-    ) %>%
+    ) |>
     mutate(single_fastq=if_else(str_starts(sample_dir, '/'),
                               single_fastq,
                               file.path(str_remove(args$glamr_root, '/$'), single_fastq))
@@ -86,9 +87,6 @@ samples <- read.delim(
 if (nrow(assignments) != nrow(samples)) {
     stop('the sample file listing is missing rows for some samples??')
 }
-
-# save.image(file="xx.R.image")
-# q("no", status=1)
 
 # Create symlinks to our fastq files, soley so that we can have the sample id
 # as part of the file name This will make the quality plotting happy, as every
@@ -106,15 +104,18 @@ namesOfSamples <- samples$sample
 
 
 # visualize and save quality of single reads
-if (file.exists('plot_obj.Robj')) {
-    cat('Loading saved plot object...')
-    load('plot_obj.Robj')
+plot_cache = Sys.getenv('DADA2_REUSE_QUAL_PLOT')  # for debugging/testing only
+if (file.exists(plot_cache)) {
+    cat('Loading saved plot object (from', plot_cache, ')...')
+    load(plot_cache)
 } else {
+    # env var not set / old_plot is empty str or non-existing filename
     cat('Plotting single reads quality for', nrow(samples), 'samples...')
-    # Sys.sleep(60)
-    # quit(save='yes', status=1)
     singlePlot <- plotQualityProfile(singleReads)
-    save(singlePlot, file='plot_obj.Robj')
+    if (plot_cache != "") {
+        cat('\nSaving quality plot obj to', plot_cache)
+        save(singlePlot, file=plot_cache)
+    }
 }
 cat('[OK]\n')
 fs::dir_create(path = args$outdir)
@@ -141,17 +142,20 @@ single_quality <- singlePlot$data %>%
 
 threshold <- args$quality
 
+# TODO: automatic truncation length or equivalent or similar
 
 # filter and trim
 cat("Filtering reads...\n")
 filtAndTrimSingle <- samples$filt_reads_single
 
 names(filtAndTrimSingle) <- namesOfSamples
-filterstats <- filterAndTrim(singleReads, filtAndTrimSingle,
-                     truncLen=0,  # TODO
-                     maxN=0, maxEE=2, truncQ=2, rm.phix=TRUE,
-                     compress=TRUE,
-                     multithread=cpus,
+filterstats <- filterAndTrim(
+    singleReads, filtAndTrimSingle,
+    truncLen=380,  # TODO
+    maxEE=2,
+    maxN=0, truncQ=2, rm.phix=TRUE,
+    compress=TRUE,
+    multithread=cpus,
 )
 
 # saving the filter and trim to .tsv file

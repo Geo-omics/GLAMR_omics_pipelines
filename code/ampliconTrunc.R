@@ -56,8 +56,8 @@ assignments <- read.delim(
     args$assignments,
     header=TRUE,
     fill=TRUE,
-) %>% tibble() %>%
-    mutate(assigned=if_else(override == "", target, override, missing=target)) %>%
+) |> tibble() |>
+    mutate(assigned=if_else(override == "", target, override, missing=target)) |>
     filter(assigned %in% valid_targets)
 
 if (nrow(assignments) == 0) {
@@ -69,7 +69,7 @@ target_tab <- read.delim(args$targets, header=TRUE)
 samples <- read.delim(
     args$samples,
     header=TRUE,
-) %>% tibble()
+) |> tibble()
 
 if ('single_fastq' %in% colnames(samples)) {
     cat('Switching to single-ended data2 processing...\n')
@@ -125,29 +125,55 @@ namesOfSamples <- samples$sample
 
 
 # visualize and save quality of forward and reverse reads
-cat('Plotting fwd reads quality for', nrow(samples), 'samples...\n')
-forwardPlot <- plotQualityProfile(forwardReads)
-plotDataFwd <- forwardPlot$data
+plot_cache = Sys.getenv('DADA2_REUSE_QUAL_PLOT')  # for debugging/testing only
+if (file.exists(plot_cache)) {
+    cat('Loading saved plot objects (from', plot_cache, ')...')
+    load(plot_cache)
+} else {
+    # env var not set / old_plot is empty str or non-existing filename
+    cat('Plotting fwd reads quality for', nrow(samples), 'samples... ')
+    forwardPlot <- plotQualityProfile(forwardReads)
+    cat('[OK]\nPlotting rev reads quality for', nrow(samples), 'samples... ')
+    reversePlot <- plotQualityProfile(reverseReads)
+    if (plot_cache != "") {
+        cat('\nSaving quality plot obj to', plot_cache)
+        save(singlePlot, file=plot_cache)
+    }
+}
+cat('[OK]\n')
 fs::dir_create(path = args$outdir)
 fwd_plot_path = str_glue("{args$outdir}/forward_quality_plot.pdf")
-ggsave(filename=fwd_plot_path, plot=forwardPlot, width=5, height=3, scale=2)
-cat('Saved as:', fwd_plot_path, '\n')
-
-cat('Plotting rev reads quality for', nrow(samples), 'samples...\n')
-reversePlot <- plotQualityProfile(reverseReads)
-plotDataRev <- reversePlot$data
 rev_plot_path = str_glue("{args$outdir}/reverse_quality_plot.pdf")
-ggsave(filename=rev_plot_path, plot=reversePlot, width=5, height=3, scale=2)
-cat('Saved as:', rev_plot_path, '\n')
+ncols = 4
+nrows = 5
+num_pages = ceiling(length(forwardReads) / (ncols * nrows))
+cat('Saving fwd plot as:', fwd_plot_path, 'with', num_pages, 'pages:')
+pdf(fwd_plot_path, paper='default')
+for (page in 1:num_pages) {
+    print(forwardPlot + ggforce::facet_wrap_paginate(~ file, ncol=ncols, nrow=nrows, page=page))
+    cat(page, ',', sep='')
+}
+dev.off() -> .  # be quiet
+cat('[OK]\n')
+num_pages = ceiling(length(reverseReads) / (ncols * nrows))
+cat('Saving rev plot as:', rev_plot_path, 'with', num_pages, 'pages:')
+pdf(rev_plot_path, paper='default')
+for (page in 1:num_pages) {
+    print(reversePlot + ggforce::facet_wrap_paginate(~ file, ncol=ncols, nrow=nrows, page=page))
+    cat(page, ',', sep='')
+}
+dev.off() -> .  # be quiet
+cat('[OK]\n')
+
 
 cat('Computing truncation parameters...\n')
 # using weighted mean
-fwd_quality <- plotDataFwd %>%
+fwd_quality <- forwardPlot$data %>%
   group_by(Cycle) %>%
   mutate(mean = sum(Score * Count) / sum(Count)) %>%
   slice_max(Count, with_ties = FALSE)
 
-rev_quality <- plotDataRev %>%
+rev_quality <- reversePlot$data %>%
   group_by(Cycle) %>%
   mutate(mean = sum(Score * Count) / sum(Count)) %>%
   slice_max(Count, with_ties = FALSE)
@@ -226,10 +252,14 @@ filtAndTrimReverse <- samples$filt_reads_rev
 names(filtAndTrimForward) <- namesOfSamples
 names(filtAndTrimReverse) <- namesOfSamples
 
-filterstats <- filterAndTrim(forwardReads, filtAndTrimForward, reverseReads, filtAndTrimReverse,
-                     truncLen=c(forTrunc, revTrunc),
-                     maxN=0, maxEE=c(2,2), truncQ=2, rm.phix=TRUE,
-                     compress=TRUE, multithread=cpus)
+filterstats <- filterAndTrim(
+     forwardReads, filtAndTrimForward, reverseReads, filtAndTrimReverse,
+     truncLen=c(forTrunc, revTrunc),
+     maxEE=c(2,2),
+     maxN=0, truncQ=2, rm.phix=TRUE,
+     compress=TRUE,
+     multithread=cpus,
+)
 
 # saving the filter and trim to .tsv file
 rownames(filterstats) = namesOfSamples
