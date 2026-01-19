@@ -25,6 +25,7 @@ DEFAULT_OUT_SAMPLES = 'sample_files.tsv'
 
 UNKNOWN = 'UNKNOWN'
 SKIP = 'SKIP'
+AUTO_OVERRIDE_PREFIX = '__AUTO__'
 
 
 def cli():
@@ -48,13 +49,14 @@ def cli():
         help='Input file, as made by amplicon.tabular_targets module',
     )
     makep.add_argument(
-        '--out-targets',
+        '--out-assignments',
         metavar='<path>',
         default=DEFAULT_OUT_TARGETS,
-        help=f'Path to output sample listing file.  This will a tab-separated '
-             f'table listing samples and their amplicon targets.  The file '
-             f'should normally be reviewed and amended for correctness and '
-             f'completeness.  Defaults to "{DEFAULT_OUT_TARGETS}"',
+        help=f'Path to target assignment output file.  This will a tab-'
+             f'separated table listing samples and their amplicon targets.  '
+             f'The file should normally be reviewed and amended for '
+             f'correctness and completeness.  Defaults to '
+             f'"{DEFAULT_OUT_TARGETS}"',
     )
     makep.add_argument(
         '--out-samples',
@@ -79,7 +81,7 @@ def cli():
                     None,
                     args.target_tabular_input,
                     args.project_directory,
-                    out_assignments=args.out_targets,
+                    out_assignments=args.out_assignments,
                     out_samples=args.out_samples,
                 )
             case 'spec2targets':
@@ -112,6 +114,16 @@ def make(
         finally:
             return value
     data = sorted(data, key=by_samp_id_key)
+
+    if (out_assignments := Path(out_assignments)).is_file():
+        # honor existing SKIP overrides
+        overrides = get_assignments(
+            path=out_assignments,
+            manual_overrides_only=True,
+        )
+        for row in data:
+            if row['sample'] in overrides:
+                row['override'] = overrides[row['sample']]
 
     write_assignments(data, out_assignments)
     write_sample_info(get_sample_info(data, project_dir), out_samples)
@@ -155,7 +167,7 @@ def write_assignments(data, output_file):
             row['target'] = '.'.join([
                 row['model_name'], row['fwd_primer'], row['rev_primer']
             ])
-        row['override'] = ''
+        row.setdefault('override', '')
         stats[row['target']] += 1
 
     print('Dispatching...')
@@ -171,8 +183,8 @@ def write_assignments(data, output_file):
                     f'stray (unknown) target assignments to {top_target}'
                 )
             for row in data:
-                if row['target'] == minor_target:
-                    row['override'] = top_target
+                if row['target'] == minor_target and not row['override']:
+                    row['override'] = AUTO_OVERRIDE_PREFIX + top_target
 
     data = sorted(
         data,
@@ -303,7 +315,12 @@ def get_fastq_files(path_template, dataset=None):
     return files
 
 
-def get_assignments(dataset_id=None, omics_pipeline_root=None, path=None):
+def get_assignments(
+    dataset_id=None,
+    omics_pipeline_root=None,
+    path=None,
+    manual_overrides_only=False,
+):
     """ Parse the assignments file """
     if dataset_id is None and path is None:
         raise ValueError('dataset_id or path is required')
@@ -334,8 +351,15 @@ def get_assignments(dataset_id=None, omics_pipeline_root=None, path=None):
                 # header line
                 continue
 
+            if manual_overrides_only:
+                if override:
+                    if not override[0].startswith(AUTO_OVERRIDE_PREFIX):
+                        data[sample_id] = ' '.join(override)  # incl. comments
+                continue
+
             override = override[0] if override else ''
-            target = override or target
+
+            target = override.removeprefix(AUTO_OVERRIDE_PREFIX) or target
 
             if not target:
                 raise RuntimeError(f'empty target at line {lnum} in {path}')

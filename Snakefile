@@ -3777,22 +3777,35 @@ rule amplicon_guess_target:
     run: pypelib.amplicon.guess_target.main(input.summaries, input.stats, output.target_info)
 
 
-def target_info_files(wc):
+def get_target_info_files(wc):
     """
     input function for amplicon_dispatch
 
     Collects target info files for each amplicon sample in given dataset.
     """
+    assignments=Path(str(rules.amplicon_dispatch.output.assignments).format(dataset=wc.dataset))
+    if assignments.exists():
+        # check for manual overrides
+        skips = [
+            sample for sample, group
+            in pypelib.amplicon.dispatch.get_assignments(path=assignments).items()
+            if group == pypelib.amplicon.dispatch.SKIP
+        ]
+    else:
+        skips = []
+
     project_samples = Path("data/projects/") / wc.dataset / 'amplicons'
     target_info = rules.amplicon_guess_target.output.target_info
     ret = []
     for i in project_samples.glob("samp_*"):
+        if i in skips:
+            continue
         ret.append(target_info.format(sample_type='amplicons', sample=i.name))
     return ret
 
 checkpoint amplicon_collect_target_guesses:
     input:
-        target_info_files
+        get_target_info_files
     output:
         target_tab="data/projects/{dataset}/target_info.tsv"
     params:
@@ -3846,7 +3859,7 @@ checkpoint amplicon_dispatch:
         fastqs = get_dataset_fastq_files,
         target_tab = rules.amplicon_collect_target_guesses.output.target_tab
     output:
-        assignments="data/projects/{dataset}/amplicon_target_assignments.tsv",
+        assignments=update("data/projects/{dataset}/amplicon_target_assignments.tsv"),
         samples="data/projects/{dataset}/amplicon_sample_info.tsv",
     params:
         project_dir = subpath(output.assignments, parent=True)
