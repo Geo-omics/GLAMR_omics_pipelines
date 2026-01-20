@@ -138,11 +138,11 @@ rule get_reads_prep:
         shell("""
             . code/shell_prelude {log}
 
-            [[ -n "{params.ncbi_api_key}" ]] && export NCBI_API_KEY={params.ncbi_api_key}
+            [[ -n {params.ncbi_api_key:q} ]] && export NCBI_API_KEY={params.ncbi_api_key:q}
             [[ -v NCBI_API_KEY ]] || echo "[NOTICE] environment variable NCBI_API_KEY is not set"
 
             [[ -n "${{KINGFISHER_SLEEP:-}}" ]] && sleep $((RANDOM % 30))
-            ./code/kingfisher/bin/kingfisher annotate -r "{srr_accn}" -a -f json -o {output.runinfo}
+            ./code/kingfisher/bin/kingfisher annotate -r {srr_accn:q} -a -f json -o {output.runinfo}
         """)
         with open(output.runinfo) as ifile:
             runinfo = parse_runinfo(ifile)
@@ -246,7 +246,7 @@ rule get_reads:
         """
         . code/shell_prelude {log}
 
-        [[ -n "{params.ncbi_api_key}" ]] && export NCBI_API_KEY={params.ncbi_api_key}
+        [[ -n {params.ncbi_api_key:q} ]] && export NCBI_API_KEY={params.ncbi_api_key:q}
         [[ -v NCBI_API_KEY ]] || echo "[NOTICE] environment variable NCBI_API_KEY is not set"
 
         [[ -n "${{KINGFISHER_SLEEP:-}}" ]] && sleep $((RANDOM % 30))
@@ -260,12 +260,12 @@ rule get_reads:
         $have_sra_toolkit && meths=("${{meths[@]}}" aws-cp) || true
         echo "Available methods: ${{meths[*]}}"
 
-        echo "Using accession {params.srr_accn}"
+        echo "Using accession {params.srr_accn:q}"
         ./code/kingfisher/bin/kingfisher get \
             --download-threads {resources.cpus} \
             --extraction-threads {resources.cpus} \
             --hide-download-progress \
-            -r "{params.srr_accn}" \
+            -r {params.srr_accn:q} \
             -m ${{meths[@]}}  \
             --output-format-possibilities fastq.gz \
             --output-directory {output.download_dir} \
