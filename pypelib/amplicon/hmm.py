@@ -164,25 +164,25 @@ class HMM:
             raise ValueError(f'Invalid HMM name: {e}') from e
 
         if start is None and end is None:
-            return [hmm.name]
+            return (hmm, (), ())
 
         start = int(start)
         end = int(end)
 
-        fwd_p_names = [i.name for i in hmm.fwd_primers if i.end + 1 == start]
-        rev_p_names = [i.name for i in hmm.rev_primers if i.start - 1 == end]
+        fwd_primers = [i for i in hmm.fwd_primers if i.end + 1 == start]
+        rev_primers = [i for i in hmm.rev_primers if i.start - 1 == end]
 
-        if fwd_p_names and rev_p_names:
-            return [
-                f'{hmm_name}.{i}.{j}'
-                for i in sorted(fwd_p_names)
-                for j in sorted(rev_p_names)
-            ]
+        if fwd_primers and rev_primers:
+            return (
+                hmm,
+                sorted(fwd_primers, key=lambda x: x.name),
+                sorted(rev_primers, key=lambda x: x.name),
+            )
         else:
             msg = []
-            if not fwd_p_names:
+            if not fwd_primers:
                 msg.append('No matching forward primers found.')
-            if not rev_p_names:
+            if not rev_primers:
                 msg.append('No matching reverse primers found.')
             print(f'{hmm=}')
             for i in hmm.fwd_primers:

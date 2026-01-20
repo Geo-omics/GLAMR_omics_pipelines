@@ -371,21 +371,28 @@ def get_assignments(
     return data
 
 
-def target2dada2_dir(target):
+def target2spec(target):
     """
-    Get name of dada2 output directory from target identifier string
+    Get formatted spec (HMM+range) from target identifier string
 
     This is used in the Snakefile as well as the GLAMR DB loading code.
     """
     hmm, fwdprim, revprim = HMM.parse_target(target)
-    return f'dada2.{hmm.format_target_spec(fwdprim, revprim)}'
+    return hmm.format_target_spec(fwdprim, revprim)
 
 
 def spec2targets(spec):
     try:
-        print(*HMM.spec2targets(spec), sep='\n')
+        hmm, fwd_primers, rev_primers = HMM.spec2targets(spec)
     except Exception as e:
         raise UsageError(f'Error parsing the given spec {spec=}: {e}') from e
+
+    if not fwd_primers and not rev_primers:
+        print(hmm.name)
+    else:
+        for i in fwd_primers:
+            for j in rev_primers:
+                print(f'{hmm.name}.{i.name}.{j.name}')
 
 
 if __name__ == '__main__':

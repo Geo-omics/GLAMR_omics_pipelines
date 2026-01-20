@@ -11,6 +11,7 @@ import time
 
 import pypelib.amplicon.dispatch
 import pypelib.amplicon.guess_target
+import pypelib.amplicon.hmm_check_asvs
 import pypelib.amplicon.hmm_summarize
 import pypelib.amplicon.remove_primers
 import pypelib.amplicon.tabulate_targets
@@ -3887,25 +3888,41 @@ rule amplicon_dada2_target:
         samples = rules.amplicon_dispatch.output.samples,
         target_tab = rules.amplicon_collect_target_guesses.output.target_tab
     output:
-        directory("data/projects/{dataset}/dada2.{target_spec}")
-    params: quality_threshold=25
+        seqs = "data/projects/{dataset}/dada2.{target_spec}/rep_seqs.fasta",
+        abund = "data/projects/{dataset}/dada2.{target_spec}/asv_table.tsv",
+    params:
+        outdir = subpath(output.abund, parent=True),
+        quality_threshold=25,
     resources: cpus=16
     shell:
         """
         ./code/ampliconTrunc.R \
             --quality {params.quality_threshold} \
-            --outdir {output} \
+            --outdir {params.outdir} \
             --assignments {input.assignments} \
             --samples {input.samples} \
             --targets {input.target_tab} \
             --cpus {resources.cpus} \
             {wildcards.target_spec} \
-        || {{ mv -v --backup=numbered -T -- {output} {output}_ERROR; exit 1; }}
+        || {{ mv -v --backup=numbered -T -- {params.outdir} {params.outdir}_ERROR; exit 1; }}
         """
 
-def dada2_output_dirs(wc):
+rule amplicon_asv_test:
+    input: rules.amplicon_dada2_target.output.seqs
+    output: "data/projects/{dataset}/dada2.{target_spec}/rep_seqs_hmm.txt"
+    params: hmm_db = "data/reference/hmm_amplicons/combined.hmm"
+    run:
+        pypelib.amplicon.hmm_check_asvs.main(
+            params.hmm_db,
+            input[0],
+            wildcards.target_spec,
+            output[0],
+        )
+
+
+def get_dada2_output(wc):
     """
-    input function: get the dada2 output directories
+    input function: get dada2 output files for given dataset
 
     Derives output directory names from the distinct target (from first column)
     in sample listing.
@@ -3926,24 +3943,31 @@ def dada2_output_dirs(wc):
     if skip_count := targets.pop(pypelib.amplicon.dispatch.SKIP, 0):
         print(f'[INFO]: [{wc_str}] {skip_count} samples got excluded from analysis')
 
-    dirnames = sorted(set(
-        pypelib.amplicon.dispatch.target2dada2_dir(i)
+    specs = sorted(set(
+        pypelib.amplicon.dispatch.target2spec(i)
         for i in targets
     ))
-    if dirnames:
-        print(f'[{wc_str}] dada2 jobs:')
-        print(*dirnames, sep='\n')
+    if specs:
+        print(f'{len(specs)} dada2 job(s) for wildcards: {wc_str}:')
+        for i in specs:
+            print(' ', i)
     else:
-        print('[WARNING] [{wc_str}] no dada2 jobs?')
-    return [str(assignment_file.parent / i) for i in dirnames]
+        print('[WARNING] no dada2 jobs for wildcard {wc_str} ???')
+    files = []
+    for i in specs:
+        for j in rules.amplicon_dada2_target.output:
+            files.append(j.format(dataset=wc.dataset, target_spec=i))
+        for j in rules.amplicon_asv_test.output:
+            files.append(j.format(dataset=wc.dataset, target_spec=i))
+    return files
 
 rule amplicon_pipeline_dataset:
     """ The top rule for the amplicon pipeline """
-    input: dada2_output_dirs
+    input: get_dada2_output
     output: "data/projects/{dataset}/amplicon_pipeline_done"
     shell:
         """
-        echo {input} >> {output}
+        for i in {input:q}; do echo "$i" >> {output}; done
         """
 
 rule deeparg_ls: #this rule is using LS mode and annotated genes  
