@@ -262,30 +262,34 @@ def main_paired(
         if not args:
             raise RuntimeError('No args?  Something should not be clean!')
 
-        fwd_discards = \
-            find_5p_primer(fwd_pr_sequence, fwd_fastq, Prof.CONSISTENT, log)
-        rev_discards = \
-            find_5p_primer(rev_pr_sequence, rev_fastq, Prof.CONSISTENT, log)
-        discards = set(fwd_discards).union(rev_discards)
-        print(f'discarding {len(discards)} read pairs', file=log)
+        if clean['fwd']:
+            fwd_discards = set()
+        else:
+            fwd_discards = find_5p_primer(fwd_pr_sequence, fwd_fastq, Prof.CONSISTENT, log)  # noqa:E501
 
-        fwd_tmp = NamedTemporaryFile('w+t')
-        rev_tmp = NamedTemporaryFile('w+t')
-        with fwd_tmp as fwd_tmp, rev_tmp as rev_tmp:
+        if clean['rev']:
+            rev_discards = set()
+        else:
+            rev_discards = find_5p_primer(rev_pr_sequence, rev_fastq, Prof.CONSISTENT, log)  # noqa:E501
+
+        if discards := set(fwd_discards).union(rev_discards):
+            print(f'discarding {len(discards)} read pairs', file=log)
+            fwd_tmp = estack.enter_context(NamedTemporaryFile('w+t'))
+            rev_tmp = estack.enter_context(NamedTemporaryFile('w+t'))
             filter_fastq(discards, fwd_fastq, fwd_tmp)
             filter_fastq(discards, rev_fastq, rev_tmp)
 
-            cmd = [
-                'cutadapt',
-                *args,
-                '--output', fwd_out,
-                '--paired-output', rev_out,
-                '--info-file', Path(fwd_out).with_name('trim_info.txt'),
-                fwd_tmp.name,
-                rev_tmp.name,
-            ]
-            print('command:\n', *cmd, file=log)
-            run(cmd, check=True, stdout=log)
+        cmd = [
+            'cutadapt',
+            *args,
+            '--output', fwd_out,
+            '--paired-output', rev_out,
+            '--info-file', Path(fwd_out).with_name('trim_info.txt'),
+            fwd_tmp.name if discards else fwd_fastq,
+            rev_tmp.name if discards else rev_fastq,
+        ]
+        print('command:\n', *cmd, file=log)
+        run(cmd, check=True, stdout=log)
 
 
 def main_paired_gen_1(
