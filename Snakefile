@@ -143,7 +143,7 @@ rule get_reads_prep:
             [[ -v NCBI_API_KEY ]] || echo "[NOTICE] environment variable NCBI_API_KEY is not set"
 
             [[ -n "${{KINGFISHER_SLEEP:-}}" ]] && sleep $((RANDOM % 30))
-            ./code/kingfisher/bin/kingfisher annotate -r {srr_accn:q} -a -f json -o {output.runinfo}
+            kingfisher annotate -r {srr_accn:q} -a -f json -o {output.runinfo}
         """)
         with open(output.runinfo) as ifile:
             runinfo = parse_runinfo(ifile)
@@ -262,7 +262,7 @@ rule get_reads:
         echo "Available methods: ${{meths[*]}}"
 
         echo "Using accession {params.srr_accn:q}"
-        ./code/kingfisher/bin/kingfisher get \
+        kingfisher get \
             --download-threads {resources.cpus} \
             --extraction-threads {resources.cpus} \
             --hide-download-progress \
@@ -308,6 +308,7 @@ rule raw_reads_stats:
     input: get_raw_reads_files
     output:
         stats = update("data/omics/{sample_type}/{sample}/reads/stats.tsv"),
+    conda: "config/conda_yaml/seqkit.yaml"
     resources: time_min = 1, cpus = 1
     run: pypelib.raw_reads.make_stats(input, output.stats, keep_existing=True)
 
@@ -353,6 +354,7 @@ rule get_reads_paired:
         srr_accession = parse_input(input.runinfo, parse_runinfo, key='run'),
         num_spots = parse_input(input.runinfo, parse_runinfo, key='spots'),
         stats_file = rules.raw_reads_stats.output.stats,
+    conda: "config/conda_yaml/seqkit.yaml"
     log: "logs/get_reads_paired/{sample_type}-{sample}.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
     run: pypelib.raw_reads.post_download_paired(input, output, params)
@@ -369,6 +371,7 @@ rule get_reads_single:
         srr_accession = parse_input(input.runinfo, parse_runinfo, key='run'),
         num_spots = parse_input(input.runinfo, parse_runinfo, key='spots'),
         stats_file = rules.raw_reads_stats.output.stats,
+    conda: "config/conda_yaml/seqkit.yaml"
     log: "logs/get_reads_paired/{sample_type}-{sample}.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
     run: pypelib.raw_reads.post_download_single(input, output, params)
