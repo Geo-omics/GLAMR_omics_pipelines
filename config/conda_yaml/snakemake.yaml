@@ -9,3 +9,5 @@ dependencies:
   - snakemake-executor-plugin-cluster-generic=1.0
   - defusedxml=0.7
   - biopython=1.86
+  - matplotlib=3.10.8
+  - seqkit=2.12 # maybe we can shift the need for this dependency to a rule?
