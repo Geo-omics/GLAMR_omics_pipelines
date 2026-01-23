@@ -17,6 +17,7 @@ import pypelib.amplicon.hmm_summarize
 import pypelib.amplicon.remove_primers
 import pypelib.amplicon.tabulate_targets
 import pypelib.raw_reads
+from pypelib.raw_reads import parse_runinfo
 import pypelib.sra
 from pypelib.utils import load_stats, save_error_file
 
@@ -54,39 +55,6 @@ rule make_rulegraph_bins:
         snakemake run_drep_sep metaG_annotation run_humann_fastp run_sourmash annotate_bins data/sample_data/bracken_counts.tsv --rulegraph --dry-run | dot -Tpdf > {output.pdf}
         snakemake run_drep_sep metaG_annotation run_humann_fastp run_sourmash annotate_bins data/sample_data/bracken_counts.tsv --rulegraph --dry-run | dot -Tpng > {output.png}
         """
-
-
-def parse_runinfo(file, key=None):
-    """
-    Get value from runinfo file
-
-    Helper for rules that need bits from the runinfo file.
-    The runinfo file is a json-formatted file obtained by "kingfisher annotate"
-
-    If key is None, then all data is returned.
-    """
-    with ExitStack() as stack:
-        if isinstance(file, str):
-            # assume it's a snakemake _IOFile, got here via input function
-            # file.open() does not behave well, only works via with block?
-            ifile = open(str(file))
-            stack.enter_context(ifile)
-        else:
-            # assume a TextIOWrapper, got here via parse_input()
-            ifile = file
-            ifile.seek(0)  # file handle re-used across multiple calls
-
-        data = json.load(ifile)  # expecting a list
-        if len(data) == 0:
-            raise RuntimeError(f'empty runinfo? {ifile.name}')
-        if len(data) > 1:
-            # To be implemented if seen in the wild
-            raise RuntimeError(f'multiple exp packages? runinfo: {ifile.name}')
-        data = data[0]  # should get a dict
-        if key is None:
-            return data
-        else:
-            return data[key]
 
 
 def parse_accession(file):
@@ -187,7 +155,6 @@ rule get_reads_prep:
 
             info = dict(
                 spots=stats[Path(check_file).name]['num_seqs'],
-                srr_accession=None,
                 run=None,
             )
 
