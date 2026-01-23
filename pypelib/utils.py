@@ -71,7 +71,7 @@ def load_stats(file_or_path):
 
                 if col == 'file':
                     if value in rows:
-                        raise RuntimeError('duplicate file: {value}')
+                        raise RuntimeError(f'duplicate file: {value}')
                     rows[value] = row
                 else:
                     row[col] = value
