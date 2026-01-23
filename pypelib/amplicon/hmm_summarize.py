@@ -104,7 +104,11 @@ def main(infile, outfile=None, debug=False):
         return
 
     # 4. find primers and mode
-    mode = get_mode(alignments)
+    try:
+        mode = get_mode(alignments)
+    except Exception as e:
+        print(f'for input {infile}: {type(e).__name__}: {e.args=}: ')
+        raise e
     top_alignments = mode.pop('top_alignments')
     mode['top_alignment_count'] = len(top_alignments)
     summary.update(mode)
@@ -174,11 +178,13 @@ def get_mode(alignments):
 
     # Check if there is agreement
     if (top_fwd_primer, top_rev_primer) != top_pair[:2]:
+        # breakpoint()
         # TODO: what to do?
-        print(top_fwd_primer)
-        print(top_rev_primer)
-        print(top_pair)
-        raise NotImplementedError()
+        raise NotImplementedError(dict(
+            top_fwd_primer=top_fwd_primer,
+            top_rev_primer=top_rev_primer,
+            top_pair=top_pair,
+        ))
 
     # return data
     items = dict(
@@ -224,6 +230,7 @@ def get_mode(alignments):
         items['model'] = models.pop().name
     else:
         # the pairing logic above should preclude this possibility
+        # breakpoint()
         raise RuntimeError('multiple models among top alignments')
 
     if len(dirs := set(i.direction for i in items['top_alignments'])) == 1:

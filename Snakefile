@@ -3834,6 +3834,7 @@ def get_target_info_files(wc):
         if i in skips:
             continue
         ret.append(target_info.format(sample_type='amplicons', sample=i.name))
+    print(f'BORK amplicon_collect_target_guesses # of inputs: {len(ret)}')
     return ret
 
 checkpoint amplicon_collect_target_guesses:
@@ -4005,6 +4006,7 @@ def get_dada2_output(wc):
             files.append(j.format(dataset=wc.dataset, target_spec=i))
         for j in rules.amplicon_asv_test.output:
             files.append(j.format(dataset=wc.dataset, target_spec=i))
+    print(f'BORK {len(files)=} {files=}')
     return files
 
 rule amplicon_pipeline_dataset:
