@@ -1,4 +1,4 @@
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import json
 
 
@@ -34,7 +34,7 @@ def save_error_file(path):
         raise  # raise original exception as usual
 
 
-def load_stats(path):
+def load_stats(file_or_path):
     """
     Load and parse data from a "seqkit stats -T" created reads statistics file
 
@@ -43,7 +43,15 @@ def load_stats(path):
     TEXT_COLS = ['file', 'format', 'type']
 
     rows = {}
-    with open(path) as ifile:
+    with ExitStack() as estack:
+        try:
+            ifile = open(file_or_path)
+        except TypeError:
+            # assume we're given an open filehandle
+            ifile = file_or_path
+        else:
+            estack.enter_context(ifile)
+
         line = ifile.readline().rstrip('\n')
         header = line.split('\t')
         for line in ifile:

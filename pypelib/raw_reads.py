@@ -1,6 +1,7 @@
 """
 Check downloaded raw reads fastq files
 """
+from contextlib import ExitStack
 from functools import partial
 from pathlib import Path
 import subprocess
@@ -45,21 +46,32 @@ def check(params=None, stats=None, num_spots=None):
 
 def make_stats(input, output, keep_existing=False):
     """
-    Generate some raw read statistics with seqkit
+    Generate some raw read statistics with "seqkit stats"
 
+    input:
+        Input filename or list of files.
+    output:
+        Output filename or snakemake file thingie.
     keep_existing [bool]:
         If True and the output file exists then do nothing.
     """
     output = Path(str(output))
-
     if keep_existing and output.is_file():
         return
 
-    infiles = [str(i) for i in input]
+    if isinstance(input, str):
+        infiles = [input]
+    else:
+        # assume a list of snakemake input file thingies or similar
+        infiles = [str(i) for i in input]
+
     cmd = ['seqkit', 'stats', '--quiet', '--basename', '-a', '-T', *infiles]
-    with output.open('w+b') as ofile:
+
+    with open(output, 'w+b') as ofile:
         subprocess.run(cmd, stdout=ofile, check=True)
+
         ofile.seek(0)
+
         for lnum, _ in enumerate(ofile, start=1):
             pass
         expect = len(infiles) + 1
@@ -68,7 +80,8 @@ def make_stats(input, output, keep_existing=False):
                 f'[ERROR] seqkit stats wrote {lnum} lines but {expect} are '
                 f'expected'
             )
-    print(f'[OK] {output} written.')
+
+    print(f'[OK] stats written to {output}')
 
 
 def post_download(input, output, params, layout=None):
