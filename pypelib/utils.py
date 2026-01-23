@@ -17,6 +17,9 @@ from tempfile import TemporaryDirectory
 import traceback
 
 
+DEFAULT_OVERRIDE_FILENAME = 'override'
+
+
 @contextmanager
 def save_error_file(path):
     """
@@ -431,3 +434,77 @@ def make_test_dataset(
         # symlink, creating completely new "data" directory
         print('  $ cd', Path('data').resolve().parent)
     print('  $ tar -xf', tarpath)
+
+
+def override(path, **kwargs):
+    for key in kwargs:
+        if not key.isidentifier():
+            raise ValueError('kwargs keys must be identifiers: {key}')
+
+    path = Path(path)
+    if path.is_dir():
+        path = path / DEFAULT_OVERRIDE_FILENAME
+    if path.is_file():
+        with open(path) as ifile:
+            lines = ifile.readlines()
+    else:
+        lines = []
+
+    changed = False
+    for lnum, line in enumerate(lines, start=1):
+        if not line.strip() or line.strip().startswith('#'):
+            continue
+
+        key0, eq, old_value = line.partition('=')
+        if not eq:
+            raise RuntimeError(
+                f'not a key=value assignment on line {lnum}: {path}'
+            )
+        key = key0.strip()
+        if not key.isidentifier():
+            raise RuntimeError(
+                f'key must be an identifier on line {lnum}: {path}'
+            )
+        if key in kwargs:
+            value = str(kwargs.pop(key)).strip()
+            if value is None:
+                value = ''
+            if value == old_value.strip():
+                # keep old line as-is
+                continue
+            # add space if needed
+            spacer = '' if key0[-1].isspace() else ' '
+            lines.pop(lnum - 1)
+            lines.insert(lnum - 1, f'{key0}{spacer}= {value}\n')
+            changed = True
+
+    # add new lines
+    for key, value in kwargs.items():
+        value = str(value).strip()
+        lines.append(f'{key} = {value}\n')
+        changed = True
+
+    if changed:
+        with open(path, 'w') as ofile:
+            ofile.writelines(lines)
+
+
+def get_override(file, key):
+    """
+    Return an override
+
+    If the override file exists and the key is overridden this returns a
+    non-empty string, otherwise None is returned.
+    """
+    try:
+        with open(file) as ifile:
+            for line in ifile:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                key0, _, value = line.partition('=')
+                if key == key0.strip():
+                    if value := value.strip():
+                        return value
+    except FileNotFoundError:
+        return None
