@@ -90,83 +90,84 @@ rule get_reads_prep:
     params:
         ncbi_api_key = os.environ.get('NCBI_API_KEY', '')
     conda: "config/conda_yaml/kingfisher.yaml"
-    log: "logs/get_reads_prep/{sample_type}.{sample}.err"
+    log: "logs/get_reads_prep/{sample_type}.{sample}.log"
     resources: time_min = 5, heavy_network = 1, cpus = 1
     run:
-        if input.sra_metadata:
-            # SRA dataset
-            data = pypelib.sra.get_entry(file=str(input.sra_metadata), multi=True, slow=True)
-            with open(rules.get_sra_metadata.input.accession.format(**wildcards)) as ifile:
-                accn = parse_accession(ifile)
-            with save_error_file(log[0]):
-                expack = pypelib.sra.get_experiment(accn, data, sample_type=wildcards.sample_type)
+        with logme(log):
+            if input.sra_metadata:
+                # SRA dataset
+                data = pypelib.sra.get_entry(file=str(input.sra_metadata), multi=True, slow=True)
+                with open(rules.get_sra_metadata.input.accession.format(**wildcards)) as ifile:
+                    accn = parse_accession(ifile)
+                with save_error_file(log[0]):
+                    expack = pypelib.sra.get_experiment(accn, data, sample_type=wildcards.sample_type)
 
-            info = pypelib.sra.compile_srr_info(expack)
-            with open(output.runinfo0, 'w') as ofile:
-                json.dump(info, ofile, indent=4)
-                ofile.write('\n')
-            srr_accn = expack['RUN_SET']['RUN']['accession']
-            accn_str = accn + ' => ' + srr_accn
+                info = pypelib.sra.compile_srr_info(expack)
+                with open(output.runinfo0, 'w') as ofile:
+                    json.dump(info, ofile, indent=4)
+                    ofile.write('\n')
+                srr_accn = expack['RUN_SET']['RUN']['accession']
+                accn_str = accn + ' => ' + srr_accn
 
-            print(f'Accession for {wildcards.sample}: {accn_str}')
-            shell("""
-                . code/shell_prelude {log}
+                print(f'Accession for {wildcards.sample}: {accn_str}')
+                shell("""
+                    . code/shell_prelude {log}
 
-                [[ -n {params.ncbi_api_key:q} ]] && export NCBI_API_KEY={params.ncbi_api_key:q}
-                [[ -v NCBI_API_KEY ]] || echo "[NOTICE] environment variable NCBI_API_KEY is not set"
+                    [[ -n {params.ncbi_api_key:q} ]] && export NCBI_API_KEY={params.ncbi_api_key:q}
+                    [[ -v NCBI_API_KEY ]] || echo "[NOTICE] environment variable NCBI_API_KEY is not set"
 
-                [[ -n "${{KINGFISHER_SLEEP:-}}" ]] && sleep $((RANDOM % 30))
-                kingfisher annotate -r {srr_accn:q} -a -f json -o {output.runinfo}
-            """)
-            with open(output.runinfo) as ifile:
-                runinfo = parse_runinfo(ifile)
-            if runinfo['number_of_runs_for_sample'] > 1:
-                raise RuntimeError(
-                    f'Multiple runs per sample! {wildcards=} {accn=}\n'
-                    f'{runinfo=}'
-                )
-        else:
-            # non-SRA dataset
-
-            # Compile runinfo from existing raw reads files.  We will
-            # meaningfully populate "layout" and "spots".  There will be
-            # placeholders (None) for keys "srr_accession" and "run" because
-            # some rules' params will asked for them.  NOTE: Care must be taken
-            # that these None values are not used unwittingly in those rules.
-            fwd_reads = rules.get_reads_paired.output.fwd_reads.format(**wildcards)
-            rev_reads = rules.get_reads_paired.output.rev_reads.format(**wildcards)
-            sgl_reads = rules.get_reads_single.output.single_reads.format(**wildcards)
-            if exists(fwd_reads) and exists(rev_reads):
-                layout = 'PAIRED'
-                check_file = fwd_reads
-            elif exists(sgl_reads):
-                layout = 'SINGLE'
-                check_file = sgl_reads
+                    [[ -n "${{KINGFISHER_SLEEP:-}}" ]] && sleep $((RANDOM % 30))
+                    kingfisher annotate -r {srr_accn:q} -a -f json -o {output.runinfo}
+                """)
+                with open(output.runinfo) as ifile:
+                    runinfo = parse_runinfo(ifile)
+                if runinfo['number_of_runs_for_sample'] > 1:
+                    raise RuntimeError(
+                        f'Multiple runs per sample! {wildcards=} {accn=}\n'
+                        f'{runinfo=}'
+                    )
             else:
-                reads_dir = Path(fwd_reads).parent
-                raise RuntimeError(
-                    f'Non-SRA data / manual mode: raw reads file(s) not found '
-                    f'in {reads_dir}'
+                # non-SRA dataset
+
+                # Compile runinfo from existing raw reads files.  We will
+                # meaningfully populate "layout" and "spots".  There will be
+                # placeholders (None) for keys "srr_accession" and "run" because
+                # some rules' params will asked for them.  NOTE: Care must be taken
+                # that these None values are not used unwittingly in those rules.
+                fwd_reads = rules.get_reads_paired.output.fwd_reads.format(**wildcards)
+                rev_reads = rules.get_reads_paired.output.rev_reads.format(**wildcards)
+                sgl_reads = rules.get_reads_single.output.single_reads.format(**wildcards)
+                if exists(fwd_reads) and exists(rev_reads):
+                    layout = 'PAIRED'
+                    check_file = fwd_reads
+                elif exists(sgl_reads):
+                    layout = 'SINGLE'
+                    check_file = sgl_reads
+                else:
+                    reads_dir = Path(fwd_reads).parent
+                    raise RuntimeError(
+                        f'Non-SRA data / manual mode: raw reads file(s) not found '
+                        f'in {reads_dir}'
+                    )
+
+                with NamedTemporaryFile('rt') as statsfile:
+                    pypelib.raw_reads.make_stats(check_file, statsfile.name)
+                    stats = load_stats(statsfile)
+
+                info = dict(
+                    spots=stats[Path(check_file).name]['num_seqs'],
+                    run=None,
                 )
 
-            with NamedTemporaryFile('rt') as statsfile:
-                pypelib.raw_reads.make_stats(check_file, statsfile.name)
-                stats = load_stats(statsfile)
-
-            info = dict(
-                spots=stats[Path(check_file).name]['num_seqs'],
-                run=None,
-            )
-
-            with open(output.runinfo0, 'w') as ofile:
-                info['layout'] = layout
-                json.dump(info, ofile, indent=4)
-                ofile.write('\n')
-            with open(output.runinfo, 'w') as ofile:
-                info['library_layout'] = info.pop('layout')
-                # dump list with one dict, simulating kingfisher annotate
-                json.dump([info], ofile, indent=4)
-                ofile.write('\n')
+                with open(output.runinfo0, 'w') as ofile:
+                    info['layout'] = layout
+                    json.dump(info, ofile, indent=4)
+                    ofile.write('\n')
+                with open(output.runinfo, 'w') as ofile:
+                    info['library_layout'] = info.pop('layout')
+                    # dump list with one dict, simulating kingfisher annotate
+                    json.dump([info], ofile, indent=4)
+                    ofile.write('\n')
 
 rule summarize_sra_errors:
     output: 'sra_error_summary.txt'
