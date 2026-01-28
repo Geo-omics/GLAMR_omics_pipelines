@@ -8,7 +8,7 @@ from pathlib import Path
 from statistics import mean
 import sys
 
-from ..utils import UsageError
+from ..utils import logme, UsageError
 
 
 TEST_FILE_PATTERN = 'guess*{sample_id}.txt'
@@ -42,6 +42,7 @@ def cli():
 INFILE_TAIL = Path('detect_region') / 'target_info.json'
 
 
+@logme()
 def main(infiles, output=None, dataset=None, project_dir=None):
     project_dir = Path(project_dir)
     if not project_dir.is_dir():

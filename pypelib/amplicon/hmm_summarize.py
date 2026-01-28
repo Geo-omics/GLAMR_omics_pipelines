@@ -12,7 +12,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Patch
 import pandas
 
-from ..utils import UsageError
+from ..utils import logme, UsageError
 from . import dispatch
 from .alignment import HMMRAlignment
 from .hmm import HMM
@@ -66,6 +66,7 @@ def cli():
         argp.error(e)
 
 
+@logme()
 def main(infile, outfile=None, debug=False):
     summary = {}
 

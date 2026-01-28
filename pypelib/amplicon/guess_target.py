@@ -8,7 +8,7 @@ import argparse
 import json
 from pathlib import Path
 
-from ..utils import load_stats, UsageError
+from ..utils import load_stats, logme, UsageError
 from . import get_models, Err
 
 
@@ -47,6 +47,7 @@ def cli():
             argp.error(e)
 
 
+@logme()
 def main(summaries, stats_file, outfile=None):
     if isinstance(summaries, str):
         # e.g. invoked via snakemake, single file

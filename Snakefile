@@ -19,7 +19,7 @@ import pypelib.amplicon.tabulate_targets
 import pypelib.raw_reads
 from pypelib.raw_reads import parse_runinfo
 import pypelib.sra
-from pypelib.utils import load_stats, save_error_file
+from pypelib.utils import load_stats, logme, save_error_file
 
 
 configfile: "config.yaml"
@@ -372,7 +372,7 @@ rule get_reads_paired:
     conda: "config/conda_yaml/seqkit.yaml"
     log: "logs/get_reads_paired/{sample_type}-{sample}.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
-    run: pypelib.raw_reads.post_download_paired(input, output, params)
+    run: pypelib.raw_reads.post_download_paired(input, output, params, log=log)
 
 
 rule get_reads_single:
@@ -389,7 +389,7 @@ rule get_reads_single:
     conda: "config/conda_yaml/seqkit.yaml"
     log: "logs/get_reads_paired/{sample_type}-{sample}.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
-    run: pypelib.raw_reads.post_download_single(input, output, params)
+    run: pypelib.raw_reads.post_download_single(input, output, params, log=log)
 
 
 rule clumpify:
@@ -3764,7 +3764,8 @@ rule amplicon_hmm_summarize:
     output: "data/omics/amplicons/{sample}/detect_region/{direc}_summary.json"
     resources: cpus=1, mem_mb=100, time_min=1
     benchmark: "benchmarks/amplicon_hmm_summarize/{sample}_{direc}.txt"
-    run: pypelib.amplicon.hmm_summarize.main(input[0], output[0])
+    log: "logs/amplicon_hmm_summarize/{sample}_{direc}.log"
+    run: pypelib.amplicon.hmm_summarize.main(input[0], output[0], log=log)
 
 
 def get_hmm_summaries(wc):
@@ -3793,7 +3794,8 @@ rule amplicon_guess_target:
     output:
         target_info = "data/omics/{sample_type}/{sample}/detect_region/target_info.json"
     resources: cpus=1, mem_mb=100, time_min=1
-    run: pypelib.amplicon.guess_target.main(input.summaries, input.stats, output.target_info)
+    log: "logs/amplicon_guess_target/{sample_type}_{sample}.log"
+    run: pypelib.amplicon.guess_target.main(input.summaries, input.stats, output.target_info, log=log)
 
 
 def get_target_info_files(wc):
@@ -3829,7 +3831,8 @@ checkpoint amplicon_collect_target_guesses:
         target_tab="data/projects/{dataset}/target_info.tsv"
     params:
         project_dir = subpath(output.target_tab, parent=True)
-    run: pypelib.amplicon.tabulate_targets.main(input, output=output.target_tab, **params, **wildcards)
+    log: "logs/amplicon_collect_target_guesses/{dataset}.log"
+    run: pypelib.amplicon.tabulate_targets.main(input, output=output.target_tab, log=log, **params, **wildcards)
 
 rule remove_primers_pe:
     input:

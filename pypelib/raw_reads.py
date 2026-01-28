@@ -11,7 +11,7 @@ import re
 import shutil
 import subprocess
 
-from .utils import load_stats
+from .utils import load_stats, logme
 
 
 def check(params=None, stats=None, num_spots=None):
@@ -124,6 +124,7 @@ def parse_runinfo(file, key=None):
             return data[key]
 
 
+@logme()
 def post_download(input, output, params, layout=None):
     if download_dir := input.get('download_dir'):
         download_dir = Path(download_dir)
