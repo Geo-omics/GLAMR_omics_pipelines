@@ -16,6 +16,7 @@ from tempfile import NamedTemporaryFile
 
 from Bio.Seq import Seq
 
+from ..utils import logme
 from . import get_models
 
 
@@ -37,22 +38,28 @@ def cli():
     argp.add_argument('--log', help='log file, will otherwise go to stdout')
     args = argp.parse_args()
 
-    if args.raw_rev_fastq:
-        main_paired(
-            target_info=args.target_info,
-            fwd_fastq=args.raw_fwd_fastq,
-            rev_fastq=args.raw_rev_fastq,
-            fwd_out=args.fwd_out,
-            rev_out=args.rev_out,
-            log=args.log,
-        )
-    else:
-        main_single(
-            target_info=args.target_info,
-            single_fastq=args.raw_fwd_fastq,
-            single_out=args.fwd_out,
-            log=args.log,
-        )
+    with ExitStack as estack:
+        if args.log:
+            log = estack.enter_context(open(args.log, 'w'))
+        else:
+            log = None
+
+        if args.raw_rev_fastq:
+            main_paired(
+                target_info=args.target_info,
+                fwd_fastq=args.raw_fwd_fastq,
+                rev_fastq=args.raw_rev_fastq,
+                fwd_out=args.fwd_out,
+                rev_out=args.rev_out,
+                log=log,
+            )
+        else:
+            main_single(
+                target_info=args.target_info,
+                single_fastq=args.raw_fwd_fastq,
+                single_out=args.fwd_out,
+                log=log,
+            )
 
 
 class Prof(Enum):
@@ -143,53 +150,49 @@ def filter_fastq(discards, infilename, outfile):
     outfile.flush()
 
 
+@logme()
 def main_single(
     target_info=None,
     single_fastq=None,
     single_out=None,
     log=None,
 ):
+    fwd_pr, rev_pr, swapped, clean, rc = load_target_info(target_info)
+
+    if swapped:
+        raise ValueError('single data should not be swapped')
+
+    if rc:
+        # Reads look like the reverse reads of paired-ended data.
+        # What we call the reverse primer is actually sequenced at the
+        # single read's 5' end, so just for cutadapts benefit, here we're
+        # swapping the notion of fwd and rev primers
+        fwd_clean = clean['rev']
+        rev_clean = clean['fwd']
+        fwd_pr_sequence = rev_pr.sequence
+        rev_pr_sequence = str(Seq(fwd_pr.sequence).reverse_complement())
+    else:
+        fwd_clean = clean['fwd']
+        rev_clean = clean['rev']
+        fwd_pr_sequence = fwd_pr.sequence
+        rev_pr_sequence = rev_pr.sequence
+
+    args = []  # args for cutadapt
+    try:
+        if not fwd_clean:
+            args += ['-g', fwd_pr_sequence]
+        if not rev_clean:
+            args += ['-a', rev_pr_sequence]
+    except AttributeError as e:
+        # e.g. primer is None
+        raise RuntimeError(
+            f'something is marked "not clean" but no corresponding primer '
+            f'was given? {e}'
+        )
+    if not args:
+        raise RuntimeError('No args?  Something should not be clean!')
+
     with ExitStack() as estack:
-        if log:
-            log = estack.enter_context(open(log, 'w'))
-        else:
-            log = None
-
-        fwd_pr, rev_pr, swapped, clean, rc = load_target_info(target_info)
-
-        if swapped:
-            raise ValueError('single data should not be swapped')
-
-        if rc:
-            # Reads look like the reverse reads of paired-ended data.
-            # What we call the reverse primer is actually sequenced at the
-            # single read's 5' end, so just for cutadapts benefit, here we're
-            # swapping the notion of fwd and rev primers
-            fwd_clean = clean['rev']
-            rev_clean = clean['fwd']
-            fwd_pr_sequence = rev_pr.sequence
-            rev_pr_sequence = str(Seq(fwd_pr.sequence).reverse_complement())
-        else:
-            fwd_clean = clean['fwd']
-            rev_clean = clean['rev']
-            fwd_pr_sequence = fwd_pr.sequence
-            rev_pr_sequence = rev_pr.sequence
-
-        args = []  # args for cutadapt
-        try:
-            if not fwd_clean:
-                args += ['-g', fwd_pr_sequence]
-            if not rev_clean:
-                args += ['-a', rev_pr_sequence]
-        except AttributeError as e:
-            # e.g. primer is None
-            raise RuntimeError(
-                f'something is marked "not clean" but no corresponding primer '
-                f'was given? {e}'
-            )
-        if not args:
-            raise RuntimeError('No args?  Something should not be clean!')
-
         if not fwd_clean:
             discards = find_5p_primer(
                 fwd_pr_sequence,
@@ -213,6 +216,7 @@ def main_single(
         run(cmd, check=True, stdout=log)
 
 
+@logme()
 def main_paired(
     target_info=None,
     fwd_fastq=None,
@@ -221,57 +225,52 @@ def main_paired(
     rev_out=None,
     log=None,
 ):
+    fwd_pr, rev_pr, swapped, clean, rc = load_target_info(target_info)
+
+    if rc:
+        raise ValueError('RC\'d paired data should not be a thing')
+
+    if swapped:
+        print('WARNING: swapping fwd <-> rev fastq files',
+              flush=True, file=log)
+        temp = fwd_fastq
+        fwd_fastq = rev_fastq
+        rev_fastq = temp
+        del temp
+
+    fwd_pr_sequence = fwd_pr.sequence
+    rev_pr_sequence = rev_pr.sequence
+
+    args = []
+    try:
+        if not clean['fwd']:
+            args += ['-g', fwd_pr_sequence]
+        if not clean['fwd_rev']:
+            args += ['-a', str(Seq(rev_pr_sequence).reverse_complement())]
+        if not clean['rev']:
+            args += ['-G', rev_pr_sequence]
+        if not clean['rev_fwd']:
+            args += ['-A', str(Seq(fwd_pr_sequence).reverse_complement())]
+    except AttributeError as e:
+        # e.g. primer is None
+        raise RuntimeError(
+            f'something is marked "not clean" but no corresponding '
+            f'primer was given? {e}'
+        )
+    if not args:
+        raise RuntimeError('No args?  Something should not be clean!')
+
+    if clean['fwd']:
+        fwd_discards = set()
+    else:
+        fwd_discards = find_5p_primer(fwd_pr_sequence, fwd_fastq, Prof.CONSISTENT, log)  # noqa:E501
+
+    if clean['rev']:
+        rev_discards = set()
+    else:
+        rev_discards = find_5p_primer(rev_pr_sequence, rev_fastq, Prof.CONSISTENT, log)  # noqa:E501
+
     with ExitStack() as estack:
-        if log:
-            log = estack.enter_context(open(log, 'w'))
-        else:
-            log = None
-
-        fwd_pr, rev_pr, swapped, clean, rc = load_target_info(target_info)
-
-        if rc:
-            raise ValueError('RC\'d paired data should not be a thing')
-
-        if swapped:
-            print('WARNING: swapping fwd <-> rev fastq files',
-                  flush=True, file=log)
-            temp = fwd_fastq
-            fwd_fastq = rev_fastq
-            rev_fastq = temp
-            del temp
-
-        fwd_pr_sequence = fwd_pr.sequence
-        rev_pr_sequence = rev_pr.sequence
-
-        args = []
-        try:
-            if not clean['fwd']:
-                args += ['-g', fwd_pr_sequence]
-            if not clean['fwd_rev']:
-                args += ['-a', str(Seq(rev_pr_sequence).reverse_complement())]
-            if not clean['rev']:
-                args += ['-G', rev_pr_sequence]
-            if not clean['rev_fwd']:
-                args += ['-A', str(Seq(fwd_pr_sequence).reverse_complement())]
-        except AttributeError as e:
-            # e.g. primer is None
-            raise RuntimeError(
-                f'something is marked "not clean" but no corresponding '
-                f'primer was given? {e}'
-            )
-        if not args:
-            raise RuntimeError('No args?  Something should not be clean!')
-
-        if clean['fwd']:
-            fwd_discards = set()
-        else:
-            fwd_discards = find_5p_primer(fwd_pr_sequence, fwd_fastq, Prof.CONSISTENT, log)  # noqa:E501
-
-        if clean['rev']:
-            rev_discards = set()
-        else:
-            rev_discards = find_5p_primer(rev_pr_sequence, rev_fastq, Prof.CONSISTENT, log)  # noqa:E501
-
         if discards := set(fwd_discards).union(rev_discards):
             print(f'discarding {len(discards)} read pairs', file=log)
             fwd_tmp = estack.enter_context(NamedTemporaryFile('w+t'))

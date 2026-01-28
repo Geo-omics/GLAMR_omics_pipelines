@@ -3853,7 +3853,7 @@ rule remove_primers_pe:
             input.rev,
             output.fwd,
             output.rev,
-            # log[0],
+            log=log,
         )
 
 rule remove_primers_se:
@@ -3870,7 +3870,7 @@ rule remove_primers_se:
             input.target_info,
             input.single,
             output.single,
-            log[0],
+            log=log,
         )
 
 def get_dataset_fastq_files(wc):
