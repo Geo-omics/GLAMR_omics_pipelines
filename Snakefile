@@ -3915,9 +3915,11 @@ rule amplicon_dada2_target:
     params:
         outdir = subpath(output.abund, parent=True),
         quality_threshold=25,
+    log: "logs/dada2/{dataset}_{target_spec}.log"
     resources: cpus=16
     shell:
         """
+        . code/shell_prelude {log}
         ./code/ampliconTrunc.R \
             --quality {params.quality_threshold} \
             --outdir {params.outdir} \
@@ -3925,8 +3927,12 @@ rule amplicon_dada2_target:
             --samples {input.samples} \
             --targets {input.target_tab} \
             --cpus {resources.cpus} \
-            {wildcards.target_spec} \
-        || {{ mv -v --backup=numbered -T -- {params.outdir} {params.outdir}_ERROR; exit 1; }}
+            {wildcards.target_spec}
+        status=$?
+        if [[ $status -ne 0 ]]; then
+            mv -v --backup=numbered -T -- {params.outdir} {params.outdir}_ERROR
+            exit $?
+        fi
         """
 
 rule amplicon_asv_test:
