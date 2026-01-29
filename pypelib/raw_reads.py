@@ -158,8 +158,8 @@ def post_download(input, output, params, layout=None):
         )
     else:
         raise RuntimeError(
-            f'[ERROR] Unexpected directory content, consider deleting and try '
-            f'again: {download_dir}'
+            f'[ERROR] ({params=} {layout=} Unexpected directory content, '
+            f'consider deleting and try again: {download_dir}'
         )
 
     num_spots = params.num_spots
@@ -248,6 +248,17 @@ class NotInterleaved(Exception):
     pass
 
 
+fastq_id_pat = re.compile(
+    r'^@(?P<srr_accn>\w+)\.(?P<seqnum>[0-9]+) (?P<pair_id>.*)$'
+)
+"""
+Raw fastq sequence ID pattern, e.g.:
+@SRR10522209.1 MISEQ04_297_000000000-AMFNM_1_1101_18742_1259 length=301
+or
+@SRR10522209.1 MISEQ04_297_000000000-AMFNM_1_1101_15772_1034/1
+"""
+
+
 def check_interleaved(fastq_file):
     """
     Check if given fastq file is in interleaved format
@@ -258,13 +269,6 @@ def check_interleaved(fastq_file):
     Returns number of read pairs if the file is in interleaved format, raises
     NotInterleaved otherwise.
     """
-    # e.g.:
-    # @SRR10522209.1 MISEQ04_297_000000000-AMFNM_1_1101_18742_1259 length=301
-    # or
-    # @SRR10522209.1 MISEQ04_297_000000000-AMFNM_1_1101_15772_1034/1
-    idpat = re.compile(
-        r'^@(?P<srr_accn>\w+)\.(?P<seqnum>[0-9]+) (?P<pair_id>.*)$'
-    )
     fastq_file = Path(fastq_file)
     with ExitStack() as estack:
         if fastq_file.suffix == '.gz':
@@ -285,14 +289,14 @@ def check_interleaved(fastq_file):
                 return (f'at line {recn * 8} in {fastq_file}\n'
                         f'Match 1 {m1=}\nMatch 2 {m2=}')
 
-            m1 = idpat.match(id1)
+            m1 = fastq_id_pat.match(id1)
             if m1 is None:
                 raise NotInterleaved(
                     f'failed parsing sequence identifier: {id1=} - {errinfo()}'
                 )
             m1 = m1.groupdict()
 
-            m2 = idpat.match(id2)
+            m2 = fastq_id_pat.match(id2)
             if m2 is None:
                 raise NotInterleaved(
                     f'failed parsing sequence identifier: {id2=} - {errinfo()}'
@@ -325,6 +329,21 @@ def check_interleaved(fastq_file):
     return recn
 
 
+def fix_reverse_seq_id(fastq_seq_id):
+    """
+    subtract one from sequence number
+
+    Helper function for deinterleave() to fix fastq headers.
+    """
+    m = fastq_id_pat.match(fastq_seq_id)
+    if m is None:
+        raise ValueError(f'error parsing fastq seq ID line: {fastq_seq_id}')
+
+    srr_accn, seqnum, pair_id = m.groups()
+    seqnum = int(seqnum) - 1  # previous one
+    return f'@{srr_accn}.{seqnum} {pair_id}\n'
+
+
 def deinterleave(fastq_in, fastq_out_fwd, fastq_out_rev):
     """
     De-interleaves a fastq file
@@ -336,7 +355,9 @@ def deinterleave(fastq_in, fastq_out_fwd, fastq_out_rev):
         with gzip.open(fastq_out_fwd, 'wt') as ofwd:
             with gzip.open(fastq_out_rev, 'wt') as orev:
                 for lines in batched(ifile, n=8):
+                    lines = list(lines)
                     for i in lines[:4]:
                         ofwd.write(i)
+                    lines[4] = fix_reverse_seq_id(lines[4])
                     for i in lines[4:]:
                         orev.write(i)
