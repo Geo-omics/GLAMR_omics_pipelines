@@ -90,7 +90,7 @@ rule get_reads_prep:
     params:
         ncbi_api_key = os.environ.get('NCBI_API_KEY', '')
     conda: "config/conda_yaml/kingfisher.yaml"
-    log: "logs/get_reads_prep/{sample_type}.{sample}.log"
+    log: "logs/get_reads/{sample_type}-{sample}-prep.log"
     resources: time_min = 5, heavy_network = 1, cpus = 1
     run:
         with logme(log):
@@ -257,7 +257,7 @@ rule get_reads:
         srr_accn = parse_input(input.runinfo, parse_runinfo, key='run'),
         ncbi_api_key = os.environ.get('NCBI_API_KEY', '')
     conda: "config/conda_yaml/kingfisher.yaml"
-    log: "logs/get_reads/{sample_type}-{sample}.log"
+    log: "logs/get_reads/{sample_type}-{sample}-download.log"
     resources: time_min = 5000, heavy_network = 1, cpus = 8
     shell:
         """
@@ -371,7 +371,7 @@ rule get_reads_paired:
         num_spots = parse_input(input.runinfo, parse_runinfo, key='spots'),
         stats_file = rules.raw_reads_stats.output.stats,
     conda: "config/conda_yaml/seqkit.yaml"
-    log: "logs/get_reads_paired/{sample_type}-{sample}.log"
+    log: "logs/get_reads/{sample_type}-{sample}-paired.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
     run: pypelib.raw_reads.post_download_paired(input, output, params, log=log)
 
@@ -388,7 +388,7 @@ rule get_reads_single:
         num_spots = parse_input(input.runinfo, parse_runinfo, key='spots'),
         stats_file = rules.raw_reads_stats.output.stats,
     conda: "config/conda_yaml/seqkit.yaml"
-    log: "logs/get_reads_paired/{sample_type}-{sample}.log"
+    log: "logs/get_reads/{sample_type}-{sample}-single.log"
     resources: time_min = 5, heavy_network = 0, cpus = 1
     run: pypelib.raw_reads.post_download_single(input, output, params, log=log)
 
