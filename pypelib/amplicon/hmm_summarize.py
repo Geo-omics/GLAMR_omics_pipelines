@@ -391,7 +391,8 @@ def multiplot(inputfile, output=None):
             plot_cnt = 0
             print(f' Plotting {group}/{hmm}... ', end='', flush=True)
             max_y = 0
-            for direct, dirdat in hmmdat.items():
+            # hmmdat sorting: fwd direction before rev so fwd gets first color
+            for direct, dirdat in sorted(hmmdat.items(), key=lambda x: x[0]):
                 for strand, strdat in dirdat.items():
                     sample_count = 0
                     df_data = {}
@@ -411,7 +412,7 @@ def multiplot(inputfile, output=None):
                     df = pandas.DataFrame(df_data)
                     max_y = max(max_y, df.max().max())
                     ax = df.plot(ax=ax, color=color, linewidth=0.5,
-                                 drawstyle='steps-mid')
+                                 alpha=0.25, drawstyle='steps-mid')
 
             ax.legend(handles=ledgend_h)
             ax.set_title(
@@ -422,7 +423,6 @@ def multiplot(inputfile, output=None):
                 )),
                 dict(fontsize='small'),
             )
-            ax.set_yscale('log')
 
             # draw primer indicators
             primers = sorted(hmm.fwd_primers + hmm.rev_primers,
