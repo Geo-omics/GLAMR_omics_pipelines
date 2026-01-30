@@ -133,7 +133,7 @@ class logme:
         print(self.logfile.read())  # print all output
         if exc is not None:
             # print traceback to log file
-            traceback.print_tb(exc_tb, file=self.logfile)
+            traceback.print_exception(exc, file=self.logfile)
         self.logfile.close()
 
     def _recreate_cm(self):
