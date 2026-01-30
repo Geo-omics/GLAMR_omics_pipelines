@@ -356,6 +356,7 @@ def deinterleave(fastq_in, fastq_out_fwd, fastq_out_rev):
             with gzip.open(fastq_out_rev, 'wt') as orev:
                 for lines in batched(ifile, n=8):
                     lines = list(lines)
+                    lines[2] = lines[6] = '+\n'  # rm IDs if any, don't fix
                     for i in lines[:4]:
                         ofwd.write(i)
                     lines[4] = fix_reverse_seq_id(lines[4])
