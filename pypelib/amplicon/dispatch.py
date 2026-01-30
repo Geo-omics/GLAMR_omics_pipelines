@@ -175,7 +175,7 @@ def write_assignments(data, output_file):
         print(f'  {count:>4} samples to target {target}')
 
     if len(stats) == 2:
-        (top_target, top_count), (minor_target, minor_count) = stats
+        (top_target, top_count), (minor_target, minor_count) = stats.items()
         if minor_target == UNKNOWN:
             if (top_count / len(data)) >= SINGLE_MODE_THRESHOLT:
                 print(
