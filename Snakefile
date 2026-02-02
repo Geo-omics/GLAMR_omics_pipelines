@@ -3845,6 +3845,7 @@ rule remove_primers_pe:
         rev="data/omics/{sample_type}/{sample}/reads/clean.rev_reads.fastq.gz",
     params:
         reads_dir = subpath(output.fwd, parent=True)
+    #conda: uses cutadapt installed in the the runtime environment
     log: "logs/remove_primers/{sample_type}-{sample}.log"
     run:
         pypelib.amplicon.remove_primers.main_paired(
@@ -3864,6 +3865,7 @@ rule remove_primers_se:
         single="data/omics/{sample_type}/{sample}/reads/clean.single_reads.fastq.gz"
     params:
         reads_dir = subpath(output.single, parent=True)
+    #conda: uses cutadapt installed in the the runtime environment
     log: "logs/remove_primers/{sample_type}-{sample}.log"
     run:
         pypelib.amplicon.remove_primers.main_single(
@@ -3916,6 +3918,7 @@ rule amplicon_dada2_target:
         outdir = subpath(output.abund, parent=True),
         quality_threshold=25,
     log: "logs/dada2/{dataset}_{target_spec}.log"
+    container: "docker://eandersk/r_microbiome"
     resources: cpus=16
     shell:
         """
