@@ -1,9 +1,12 @@
+import bisect
 from contextlib import (contextmanager, ExitStack, redirect_stdout,
                         redirect_stderr)
+from datetime import datetime, UTC
 from functools import wraps
 from inspect import signature
 import json
 from pathlib import Path
+import re
 import sys
 import traceback
 
@@ -245,3 +248,290 @@ def get_override(file, key):
                         return value
     except FileNotFoundError:
         return None
+
+
+class JobIdReused(Exception):
+    pass
+
+
+def get_info_from_log(log):
+    """
+    Collect certain information from a snakemake run's log file
+
+    Returns list of output files of completed jobs and set of names of rules
+    that were run to completion at least once.
+    """
+    rule_keywords = ['checkpoint', 'rule', 'localrule', 'localcheckpoint']
+    rule_pat = re.compile(
+        r'^(' + r'|'.join(rule_keywords) + r') (?P<rule_name>\w+):\n'
+        r'(?P<keyvals>(\s+\w+: .*\n)+)',
+        re.MULTILINE
+    )
+    finished_pat = re.compile(
+        r'^Finished jobid: (?P<jobid>[0-9]+)',
+        re.MULTILINE,
+    )
+
+    linepos = [0]  # index to get line numbers for error messages
+    with open(log) as ifile:
+        log_txt = ifile.read()
+        ifile.seek(0)
+        for line in ifile:
+            linepos.append(linepos[-1] + len(line))
+
+    def linenum(pos_or_match):
+        if isinstance(pos_or_match, int):
+            pos = pos_or_match
+        else:
+            # assume re.Match object, use start position
+            pos = pos_or_match.start()
+        return bisect.bisect_right(linepos, pos)
+
+    no_output_jobs = set()
+    jobs = {}
+    for m in rule_pat.finditer(log_txt):
+        job = {}
+        job['name'] = m['rule_name']
+        jobid = None
+
+        for line in m['keyvals'].splitlines():
+            key, _, value = line.strip().partition(': ')
+            match key:
+                case 'output':
+                    if 'output' in job:
+                        raise RuntimeError('duplicate output line')
+                    job['output'] = [
+                        i.removesuffix(' (update)')
+                        for i in value.split(', ')
+                    ]
+                case 'jobid':
+                    if jobid is not None:
+                        raise RuntimeError('duplicate jobid in job block')
+                    jobid = int(value)
+                case _:
+                    pass
+
+        if jobid is None:
+            raise RuntimeError(
+                f'jobid missing near line {linenum(m)} {m=}'
+            )
+
+        if jobid in jobs or jobid in no_output_jobs:
+            raise JobIdReused(
+                f'duplicate jobid {jobid} near line {linenum(m)}'
+            )
+
+        if 'output' not in job:
+            # e.g. target rule
+            no_output_jobs.add(jobid)
+            continue
+
+        job['lines'] = (linenum(m.start()), linenum(m.end()))  # for debugging
+        jobs[jobid] = job
+
+    output = []
+    rules = set()
+    for m in finished_pat.finditer(log_txt):
+        jobid = int(m['jobid'])
+        if jobid in no_output_jobs:
+            continue
+        try:
+            job = jobs[jobid]
+        except KeyError:
+            print(f'for log file {log}')
+            print(f'unknown jobid {jobid} near line {linenum(m)}')
+            raise
+        output += jobs[jobid]['output']
+        rules.add(jobs[jobid]['name'])
+
+    return output, rules
+
+
+def read_omics_checkout(checkout_file):
+    """
+    Helper to read and parse the checkout file and return dict mapping files to
+    most recent mtime.
+    """
+    MIN_TIME = datetime.min.replace(tzinfo=UTC)
+    most_recent = {}
+    with open(checkout_file) as ifile:
+        for line in ifile:
+            mtime, _, path = line.rstrip('\n').partition('\t')
+            mtime = datetime.fromisoformat(mtime)
+            if most_recent.get(path, MIN_TIME) < mtime:
+                most_recent[path] = mtime
+    return most_recent
+
+
+def update_omics_checkout(
+    output_files,
+    data_root,
+    checkout_file=None,
+    dry_run=False,
+):
+    """
+    Update checkout file by appending one line for each new or newer file.
+
+    Returns dict of statistics.
+    """
+    # For historical reasons the checkout file lists files relative to
+    # data/omics (the base), but we'll have to allow files under at least
+    # data/projects as well, those paths will start with ../projects instead.
+    # Below, we resolve() to prevent path traversal escape from data root with
+    # Snakemake output files.
+    data_root = Path(data_root).resolve(strict=True)
+    base = data_root / 'omics'
+
+    old_data = {}
+    if checkout_file:
+        checkout_file = Path(checkout_file)
+        if checkout_file.is_file():
+            old_data = read_omics_checkout(checkout_file)
+
+    missing = no_change = ignored = errors = 0
+    new_data = []
+    for file00 in sorted(output_files):
+        file0 = Path(file00)
+        if file0.is_absolute() or file0.parts[0] != 'data':
+            # TODO: some files get saved outside of data_root, unsure how to
+            # handle these
+            ignored += 1
+            continue
+
+        try:
+            file = (data_root.parent / file0).resolve(strict=True)
+        except (FileNotFoundError, NotADirectoryError):
+            # e.g. output file marked temp()
+            # or replay of old log file, data deleted long time ago
+            missing += 1
+            continue
+        except PermissionError:
+            # TODO: needs reporting
+            errors += 1
+            continue
+
+        if not file.is_relative_to(data_root):
+            # TODO: some files get saved outside of data_root, unsure how to
+            # handle these
+            ignored += 1
+            continue
+
+        mtime = file.stat().st_mtime
+        mtime = datetime.fromtimestamp(mtime).astimezone()
+        relpath = Path(file).relative_to(base, walk_up=True)
+
+        if old_mtime := old_data.get(relpath):
+            if mtime == old_mtime:
+                # no change, nothing to do
+                no_change += 1
+                continue
+            elif mtime < old_mtime:
+                # ? maybe data loss
+                raise RuntimeError('old time more recent than current')
+            else:
+                # file got updated, append below
+                pass
+
+        new_data.append((mtime, relpath))
+
+    with ExitStack() as estack:
+        if checkout_file is None or dry_run:
+            ofile = sys.stdout
+        else:
+            ofile = estack.enter_context(open(checkout_file, 'a'))
+
+        for mtime, relpath in new_data:
+            ofile.write(f'{mtime}\t{relpath}\n')
+
+    return {
+        'new': len(new_data),
+        'missing': missing,
+        'no_change': no_change,
+        'ignored': ignored,
+        'errors': errors,
+    }
+
+
+def post_production(log, checkout_file=None, data_root=None, dry_run=False):
+    """
+    Post-snakemake run processing
+
+      * Update the checkout file
+      *
+
+    Intended to be called via onsuccess and onerror.
+
+    log:
+        str or PathLike to snakemake log file.
+    checkout_file:
+        str or PathLike to two-column tab-separated text file listing output
+        files and their modification times.  This can be None if no such file
+        is configured.
+    dry_run [bool]:
+        Set to True for testing if no suitable checkout file is available.
+        This will print output to stdout.
+    """
+    log = Path(log)
+    if data_root is None:
+        # assuming normal OMICS pipeline conventions
+        data_root = log.parent.parent.parent / 'data'
+
+    if not data_root.is_dir():
+        raise FileNotFoundError(f'no such directory: {data_root}')
+
+    outputs, rules = get_info_from_log(log)
+    if outputs and checkout_file or dry_run:
+        stats = update_omics_checkout(
+            outputs,
+            data_root,
+            checkout_file=checkout_file,
+            dry_run=dry_run,
+        )
+        if checkout_file:
+            print(f'[{checkout_file} OK]', end='', flush=True)
+        if any(stats.values()):
+            print(f' <-- same={stats["no_change"]} new={stats["new"]} '
+                  f'ignored={stats["ignored"]} missing={stats["missing"]}',
+                  end='', flush=True)
+            if stats['errors']:
+                print(f' *** errors={stats["errors"]} ***')
+            else:
+                print()
+        else:
+            print(' (no output files)')
+    else:
+        print(' (no output files)')
+    return rules
+
+
+def post_production_replay(log_dir, data_root=None, checkout_file=None,
+                           dry_run=False, skip_on_error=False):
+    """
+    Process all logs in given directory.
+
+    log_dir:
+        Directory containing snakemake log files, like .snakemake/log
+    data_root:
+        Corresponding output data directory for the workflow.
+    checkout_file:
+        The checkout file to be written (will be updated if it exists)
+    skip_on_error [bool]:
+        Skip a log file if certain errors are encountered.
+    """
+    log_dir = Path(log_dir)
+    if not log_dir.is_dir():
+        # as glob() doesn't mind non-existing dirs
+        raise FileNotFoundError(f'no such directory: {log_dir}')
+
+    if data_root is None:
+        data_root = log_dir.parent.parent / 'data'
+
+    for i in sorted(Path(log_dir).glob('*.snakemake.log')):
+        print(f'Processing {i.name} ... ', end='', flush=True)
+        try:
+            post_production(i, checkout_file=checkout_file, dry_run=dry_run)
+        except JobIdReused as e:
+            if skip_on_error:
+                print(f'{e.__class__.__name__}: {e} [SKIP]')
+            else:
+                raise

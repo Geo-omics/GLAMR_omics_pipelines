@@ -19,7 +19,7 @@ import pypelib.amplicon.tabulate_targets
 import pypelib.raw_reads
 from pypelib.raw_reads import parse_runinfo
 import pypelib.sra
-from pypelib.utils import load_stats, logme, save_error_file
+from pypelib.utils import load_stats, logme, post_production, save_error_file
 
 
 configfile: "config.yaml"
@@ -35,6 +35,9 @@ humann_ref_dir = "/geomicro/data2/kiledal/projects/GVHD/data/reference/humann"
 
 # Set which rules can be run on cluster head node
 localrules: make_rulegraph, link_reads_w_sample_names
+
+onerror: post_production(log[0], config.get("checkout_file"))
+onsuccess: post_production(log[0], config.get("checkout_file"))
 
 rule make_rulegraph:
     output:
