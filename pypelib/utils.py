@@ -4,11 +4,16 @@ from contextlib import (contextmanager, ExitStack, redirect_stdout,
 from datetime import datetime, UTC
 from functools import wraps
 from inspect import signature
+from io import StringIO
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 import traceback
+
+from snakemake.deployment.conda import Env
+import yaml
 
 
 DEFAULT_OVERRIDE_FILENAME = 'override'
@@ -250,6 +255,22 @@ def get_override(file, key):
         return None
 
 
+_deps = {}
+
+
+def dependencies(env_dir):
+    pkgname_pat = re.compile(r'^([\w0-9]+)(.*)')
+    deps = set()
+    for i in Path(env_dir).glob('*.yaml'):
+        with open(i) as ifile:
+            spec = yaml.load(ifile, yaml.CLoader)
+            for j in spec['dependencies']:
+                m = pkgname_pat.match(j)
+                pkg, version = m.groups()
+                deps.add(pkg)
+    return deps
+
+
 class JobIdReused(Exception):
     pass
 
@@ -452,7 +473,103 @@ def update_omics_checkout(
     }
 
 
-def post_production(log, checkout_file=None, data_root=None, dry_run=False):
+def get_conda_env_package_versions(env):
+    """
+    Get installed versions of important packages in given conda environment
+
+    env:
+        A snakemake.deployment.conda.Env object.
+
+    Returns dict of package names mapping to version.
+    """
+    pkgname_pat = re.compile(r'^([\w0-9]+)(.*)')
+    packages = []
+
+    with StringIO(env.content.decode()) as ifile:
+        spec = yaml.safe_load(ifile)
+
+    for j in spec['dependencies']:
+        m = pkgname_pat.match(j)
+        pkg, version = m.groups()
+        packages.append(pkg)
+
+    if not packages:
+        raise RuntimeError('parsing env yaml failed, no packaged')
+    regex = '(' + '|'.join(packages) + ')'
+    cmd = ['conda', 'list', '--prefix', env.address, '--export', regex]
+    p = subprocess.run(cmd, check=True, stdout=subprocess.PIPE)
+    out = p.stdout.decode()
+    versions = {}
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith('#'):
+            continue
+        pkg_name, version, *_ = line.split('=')
+        if not pkg_name or not version:
+            raise RuntimeError(f'failed parsing export list: {line}')
+        versions[pkg_name] = version
+
+    return versions
+
+
+def update_versions_file(envs, versions_file=None, dry_run=False):
+    # get git description
+    cmd = ['git', 'describe', '--dirty', '--broken', '--always']
+    p = subprocess.run(cmd, check=True, stdout=subprocess.PIPE)
+    git_descr = p.stdout.decode().splitlines()
+    if len(git_descr) == 1:
+        git_descr = git_descr[0]
+    else:
+        raise RuntimeError(f'parsing output of {cmd} failed {git_descr=}')
+
+    # get actually installed package versions
+    new_data = {}
+    for env in envs:
+        env_name = Path(env.file.path).stem
+        for pkg, version in get_conda_env_package_versions(env).items():
+            if pkg not in new_data:
+                new_data[pkg] = []
+            new_data[pkg].append((env_name, version))
+
+    if versions_file and versions_file.is_file():
+        with open(versions_file) as ifile:
+            all_data = json.load(ifile)
+        data = all_data.get(git_descr, {})  # data for current git checkout
+        if not data:
+            print(f'new git name: {git_descr}')
+    else:
+        all_data = {}
+        data = {}
+
+    # update existing package versions, deduplicate as needed
+    for pkg in data:
+        versions = data[pkg] + new_data.pop(pkg, [])
+        versions = sorted(set(versions))
+        if len(version) == 1:
+            data[pkg] = versions[0]
+        else:
+            data[pkg] = versions
+
+    # add previously unseen packages
+    for pkg, versions in new_data.items():
+        data[pkg] = versions[0] if len(versions) == 1 else versions
+
+    all_data[git_descr] = data
+    output = json.dumps(all_data, indent=4)
+
+    if versions_file and not dry_run:
+        print(f'Writing {versions_file} ...', end='', flush=True)
+        with open(versions_file, 'w') as ofile:
+            ofile.write(output)
+            ofile.write('\n')
+        print('[OK]')
+    else:
+        # for testing
+        print('[dry_run or no versions file configured]')
+        print(output)
+
+
+def post_production(log, config, rules=None, data_root=None, dry_run=False):
     """
     Post-snakemake run processing
 
@@ -463,14 +580,25 @@ def post_production(log, checkout_file=None, data_root=None, dry_run=False):
 
     log:
         str or PathLike to snakemake log file.
+    config:
+        Snakefile's config.
+    rules:
+        The snakemake rules variable, passed from the Snakefile.
+
     checkout_file:
         str or PathLike to two-column tab-separated text file listing output
         files and their modification times.  This can be None if no such file
         is configured.
+    data_root:
+        The data directory.  If None, this will be derived from path to log
+        file.
     dry_run [bool]:
         Set to True for testing if no suitable checkout file is available.
         This will print output to stdout.
     """
+    checkout_file = config.get('checkout_file')
+    versions_file = config.get('versions_file')
+
     log = Path(log)
     if data_root is None:
         # assuming normal OMICS pipeline conventions
@@ -479,7 +607,7 @@ def post_production(log, checkout_file=None, data_root=None, dry_run=False):
     if not data_root.is_dir():
         raise FileNotFoundError(f'no such directory: {data_root}')
 
-    outputs, rules = get_info_from_log(log)
+    outputs, rules_run = get_info_from_log(log)
     if outputs and checkout_file or dry_run:
         stats = update_omics_checkout(
             outputs,
@@ -500,8 +628,31 @@ def post_production(log, checkout_file=None, data_root=None, dry_run=False):
         else:
             print(' (no output files)')
     else:
-        print(' (no output files)')
-    return rules
+        print('[post production] no output files per log')
+
+    # FIXME TODO NOTE DEV ONLY
+    if not rules_run:
+        rules_run = ['get_reads_prep', 'get_reads_single']
+
+    if versions_file:
+        if rules is None:
+            print('[WARNING] rules parameter not supplied, versions file will '
+                  'not be updated')
+        else:
+            envs = []
+            for name, rule in rules._rules.items():
+                rule = rule.rule  # 1st rule is proxy obj
+                if name not in rules_run:
+                    continue
+
+                if env_file := rule.conda_env:
+                    envs.append(Env(rule.workflow, env_file=env_file))
+            if envs:
+                update_versions_file(
+                    envs,
+                    Path(versions_file),
+                    dry_run=dry_run,
+                )
 
 
 def post_production_replay(log_dir, data_root=None, checkout_file=None,

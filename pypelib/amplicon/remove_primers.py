@@ -69,7 +69,7 @@ class Prof(Enum):
     CONSISTENT = auto()
 
 
-def find_5p_primer(primer_sequence, fastq, test_profile, log):
+def find_5p_primer(primer_sequence, fastq, test_profile, log, conda_env):
     """
     Get indexes of sequences with imperfect 5' primer
     """
@@ -81,6 +81,8 @@ def find_5p_primer(primer_sequence, fastq, test_profile, log):
             '--info-file', info_file.name,
             fastq,
         ]
+        if conda_env:
+            cmd = ['conda', 'run', '-p', conda_env] + cmd
         run(cmd, check=True, stdout=DEVNULL, stderr=log)
         info_file.seek(0)
         data = []
@@ -156,6 +158,7 @@ def main_single(
     single_fastq=None,
     single_out=None,
     log=None,
+    conda_env=None,
 ):
     fwd_pr, rev_pr, swapped, clean, rc = load_target_info(target_info)
 
@@ -212,6 +215,8 @@ def main_single(
             '--output', single_out,
             single_fastq if fwd_clean else single_tmp.name,
         ]
+        if conda_env:
+            cmd = ['conda', 'run', '-p', conda_env] + cmd
         print('command:\n', *cmd, file=log)
         run(cmd, check=True, stdout=log)
 
@@ -224,6 +229,7 @@ def main_paired(
     fwd_out=None,
     rev_out=None,
     log=None,
+    conda_env=None,
 ):
     fwd_pr, rev_pr, swapped, clean, rc = load_target_info(target_info)
 
@@ -263,12 +269,12 @@ def main_paired(
     if clean['fwd']:
         fwd_discards = set()
     else:
-        fwd_discards = find_5p_primer(fwd_pr_sequence, fwd_fastq, Prof.CONSISTENT, log)  # noqa:E501
+        fwd_discards = find_5p_primer(fwd_pr_sequence, fwd_fastq, Prof.CONSISTENT, log, conda_env)  # noqa:E501
 
     if clean['rev']:
         rev_discards = set()
     else:
-        rev_discards = find_5p_primer(rev_pr_sequence, rev_fastq, Prof.CONSISTENT, log)  # noqa:E501
+        rev_discards = find_5p_primer(rev_pr_sequence, rev_fastq, Prof.CONSISTENT, log, conda_env)  # noqa:E501
 
     with ExitStack() as estack:
         if discards := set(fwd_discards).union(rev_discards):
@@ -287,6 +293,8 @@ def main_paired(
             fwd_tmp.name if discards else fwd_fastq,
             rev_tmp.name if discards else rev_fastq,
         ]
+        if conda_env:
+            cmd = ['conda', 'run', '-p', conda_env] + cmd
         print('command:\n', *cmd, file=log)
         run(cmd, check=True, stdout=log)
 

@@ -352,6 +352,7 @@ def multiplot(inputfile, output=None):
     if not samp_dir.is_dir():
         raise UsageError(f'no such directory: {samp_dir}')
     data = {}
+
     for i in samp_dir.glob('samp_*/detect_region/tbl_*.txt'):
         sample_id = i.parts[-3]
         direct = i.stem.removeprefix('tbl_')
@@ -430,6 +431,7 @@ def multiplot(inputfile, output=None):
                 )),
                 dict(fontsize='small'),
             )
+            # ax.set_yscale('log')
 
             # draw primer indicators
             primers = sorted(hmm.fwd_primers + hmm.rev_primers,

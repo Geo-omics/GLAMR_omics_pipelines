@@ -36,8 +36,10 @@ humann_ref_dir = "/geomicro/data2/kiledal/projects/GVHD/data/reference/humann"
 # Set which rules can be run on cluster head node
 localrules: make_rulegraph, link_reads_w_sample_names
 
-onerror: post_production(log[0], config.get("checkout_file"))
-onsuccess: post_production(log[0], config.get("checkout_file"))
+# Post-production: no-op unless checkout_file and/or version_file are configured:w
+
+onerror: post_production(log[0], config, rules)
+onsuccess: post_production(log[0], config, rules)
 
 rule make_rulegraph:
     output:
@@ -3849,6 +3851,7 @@ rule remove_primers_pe:
         rev="data/omics/{sample_type}/{sample}/reads/clean.rev_reads.fastq.gz",
     params:
         reads_dir = subpath(output.fwd, parent=True)
+    conda: "config/conda_yaml/cutadapt.yaml"
     log: "logs/remove_primers/{sample_type}-{sample}.log"
     run:
         pypelib.amplicon.remove_primers.main_paired(
@@ -3858,6 +3861,7 @@ rule remove_primers_pe:
             output.fwd,
             output.rev,
             log=log,
+            conda_env=conda_env,
         )
 
 rule remove_primers_se:
@@ -3868,6 +3872,7 @@ rule remove_primers_se:
         single="data/omics/{sample_type}/{sample}/reads/clean.single_reads.fastq.gz"
     params:
         reads_dir = subpath(output.single, parent=True)
+    conda: "config/conda_yaml/cutadapt.yaml"
     log: "logs/remove_primers/{sample_type}-{sample}.log"
     run:
         pypelib.amplicon.remove_primers.main_single(
@@ -3875,6 +3880,7 @@ rule remove_primers_se:
             input.single,
             output.single,
             log=log,
+            conda_env=conda_env,
         )
 
 def get_dataset_fastq_files(wc):
