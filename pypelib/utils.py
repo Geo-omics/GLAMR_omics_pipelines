@@ -168,4 +168,3 @@ def test_logme(good='good', bad='bad'):
     print(good)
     print(bad, file=sys.stderr)
     raise RuntimeError('the ugly')
->>>>>>> 258a535 (pypelib/utils: add logging helper for snakemake rules)
