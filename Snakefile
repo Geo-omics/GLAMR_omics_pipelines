@@ -331,7 +331,7 @@ rule raw_reads_stats:
     """
     input: get_raw_reads_files
     output:
-        stats = update("data/omics/{sample_type}/{sample}/reads/stats.tsv"),
+        stats = update("data/omics/{sample_type}/{sample}/reads/stats.tsv")
     conda: "config/conda_yaml/seqkit.yaml"
     resources: time_min = 1, cpus = 1
     run: pypelib.raw_reads.make_stats(input, output.stats, keep_existing=True)
@@ -3853,7 +3853,7 @@ rule remove_primers_pe:
         rev="data/omics/{sample_type}/{sample}/reads/clean.rev_reads.fastq.gz",
     params:
         reads_dir = subpath(output.fwd, parent=True)
-    #conda: uses cutadapt installed in the the runtime environment
+    conda: "config/conda_yaml/cutadapt.yaml"
     log: "logs/remove_primers/{sample_type}-{sample}.log"
     run:
         pypelib.amplicon.remove_primers.main_paired(
@@ -3863,6 +3863,7 @@ rule remove_primers_pe:
             output.fwd,
             output.rev,
             log=log,
+            conda_env=conda_env,
         )
 
 rule remove_primers_se:
@@ -3873,7 +3874,7 @@ rule remove_primers_se:
         single="data/omics/{sample_type}/{sample}/reads/clean.single_reads.fastq.gz"
     params:
         reads_dir = subpath(output.single, parent=True)
-    #conda: uses cutadapt installed in the the runtime environment
+    conda: "config/conda_yaml/cutadapt.yaml"
     log: "logs/remove_primers/{sample_type}-{sample}.log"
     run:
         pypelib.amplicon.remove_primers.main_single(
@@ -3881,6 +3882,7 @@ rule remove_primers_se:
             input.single,
             output.single,
             log=log,
+            conda_env=conda_env,
         )
 
 def get_dataset_fastq_files(wc):

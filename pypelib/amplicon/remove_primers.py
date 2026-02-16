@@ -11,12 +11,12 @@ import json
 from os import environ
 from pathlib import Path
 import shutil
-from subprocess import run, DEVNULL
+from subprocess import DEVNULL
 from tempfile import NamedTemporaryFile
 
 from Bio.Seq import Seq
 
-from ..utils import logme
+from ..utils import conda_run, logme
 from . import get_models
 
 
@@ -69,7 +69,7 @@ class Prof(Enum):
     CONSISTENT = auto()
 
 
-def find_5p_primer(primer_sequence, fastq, test_profile, log):
+def find_5p_primer(primer_sequence, fastq, test_profile, log, conda_env):
     """
     Get indexes of sequences with imperfect 5' primer
     """
@@ -81,7 +81,7 @@ def find_5p_primer(primer_sequence, fastq, test_profile, log):
             '--info-file', info_file.name,
             fastq,
         ]
-        run(cmd, check=True, stdout=DEVNULL, stderr=log)
+        conda_run(conda_env, cmd, check=True, stdout=DEVNULL, stderr=log)
         info_file.seek(0)
         data = []
         discards = []
@@ -156,6 +156,7 @@ def main_single(
     single_fastq=None,
     single_out=None,
     log=None,
+    conda_env=None,
 ):
     fwd_pr, rev_pr, swapped, clean, rc = load_target_info(target_info)
 
@@ -213,7 +214,7 @@ def main_single(
             single_fastq if fwd_clean else single_tmp.name,
         ]
         print('command:\n', *cmd, file=log)
-        run(cmd, check=True, stdout=log)
+        conda_run(conda_env, cmd, check=True, stdout=log)
 
 
 @logme()
@@ -224,6 +225,7 @@ def main_paired(
     fwd_out=None,
     rev_out=None,
     log=None,
+    conda_env=None,
 ):
     fwd_pr, rev_pr, swapped, clean, rc = load_target_info(target_info)
 
@@ -263,12 +265,12 @@ def main_paired(
     if clean['fwd']:
         fwd_discards = set()
     else:
-        fwd_discards = find_5p_primer(fwd_pr_sequence, fwd_fastq, Prof.CONSISTENT, log)  # noqa:E501
+        fwd_discards = find_5p_primer(fwd_pr_sequence, fwd_fastq, Prof.CONSISTENT, log, conda_env)  # noqa:E501
 
     if clean['rev']:
         rev_discards = set()
     else:
-        rev_discards = find_5p_primer(rev_pr_sequence, rev_fastq, Prof.CONSISTENT, log)  # noqa:E501
+        rev_discards = find_5p_primer(rev_pr_sequence, rev_fastq, Prof.CONSISTENT, log, conda_env)  # noqa:E501
 
     with ExitStack() as estack:
         if discards := set(fwd_discards).union(rev_discards):
@@ -288,62 +290,7 @@ def main_paired(
             rev_tmp.name if discards else rev_fastq,
         ]
         print('command:\n', *cmd, file=log)
-        run(cmd, check=True, stdout=log)
-
-
-def main_paired_gen_1(
-    target_info=None,
-    fwd_fastq=None,
-    rev_fastq=None,
-    fwd_out=None,
-    rev_out=None,
-    log=None,
-):
-    """ DEPRECATED """
-    with ExitStack() as estack:
-        if log:
-            log = estack.enter_context(open(log, 'w'))
-        else:
-            log = None
-
-        fwd_primer, rev_primer, swapped, clean = load_target_info(target_info)
-
-        if swapped:
-            print('WARNING: swapping fwd <-> rev fastq files',
-                  flush=True, file=log)
-
-        args = []
-        try:
-            if not clean['fwd']:
-                args += ['-g', fwd_primer.sequence]
-            if not clean['fwd_rev']:
-                args += ['-a', rev_primer.sequence]
-            if not clean['rev']:
-                args += ['-G', rev_primer.sequence]
-            if not clean['rev_fwd']:
-                args += ['-A', fwd_primer.sequence]
-        except AttributeError as e:
-            # e.g. primer is None
-            raise RuntimeError(
-                f'something is marked "not clean" but no corresponding primer '
-                f'was given? {e}'
-            )
-        if not args:
-            raise RuntimeError('No args?  Something should not be clean!')
-
-        cmd = [
-            'cutadapt',
-            *args,
-            '--discard-untrimmed',
-            # '-u', '17', '-U', '20',
-            '--output', fwd_out,
-            '--paired-output', rev_out,
-            '--info-file', Path(fwd_out).with_name('trim_info.txt'),
-            rev_fastq if swapped else fwd_fastq,
-            fwd_fastq if swapped else rev_fastq,
-        ]
-        print('command:\n', *cmd, file=log)
-        run(cmd, check=True, stdout=log)
+        conda_run(conda_env, cmd, check=True, stdout=log)
 
 
 def load_target_info(target_info):

@@ -3,8 +3,10 @@ from contextlib import (contextmanager, ExitStack, redirect_stdout,
 from functools import total_ordering, wraps
 from inspect import signature
 import json
+from os import PathLike
 from pathlib import Path
 import re
+import shutil
 from subprocess import PIPE, run
 import sys
 import traceback
@@ -86,6 +88,35 @@ def load_stats(file_or_path):
     if not rows:
         raise RuntimeError('no data in file')
     return rows
+
+
+def conda_run(prefix, cmd, *args, **kwargs):
+    """
+    Wrapper around subprocess.run to run command inside conda environment
+
+    prefix:
+        Path to the conda env, the prefix in conda lingo.  If this is None,
+        then the command is run as-is.
+
+    cmd:
+        The first argument to subprocess.run/Popen, , what the subprocess docs
+        call 'args', can be a list of str or a PathLike.
+
+    *args, **kargs:
+        Any other positional and keyword arguments to be passed to run()
+
+    If conda is not installed, the command in run as usual.
+    """
+    if prefix is None or shutil.which('conda') is None:
+        return run(cmd, *args, **kwargs)
+    else:
+        conda_run_cmd = ['conda', 'run', '--prefix', str(prefix)]
+        if isinstance(cmd, PathLike):
+            cmd = conda_run_cmd.append(cmd)
+        else:
+            # a list
+            cmd = conda_run_cmd + cmd
+        return run(cmd, *args, **kwargs)
 
 
 class UsageError(Exception):
