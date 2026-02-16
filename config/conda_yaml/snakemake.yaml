@@ -1,8 +1,8 @@
 # Use this environment to execute the GLAMR pipelines via Snakemake
 name: snakemake
 channels:
-  - bioconda
   - conda-forge
+  - bioconda
   - defaults
 dependencies:
   - snakemake=9.14
