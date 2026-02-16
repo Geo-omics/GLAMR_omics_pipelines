@@ -4,57 +4,131 @@ output: html_notebook
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_knit$set(root.dir = here::here())
+knitr::opts_knit$set(root.dir = here::here("~/GLAMR"))
 library(tidyverse)
 library(glue)
+library(googledrive)
+
+conflicted::conflicts_prefer(dplyr::select(), dplyr::rename(), dplyr::filter(), dplyr::lag(),base::as.data.frame(),base::unique())
 ```
 
+This is primarily for loading external data hosted by NCBI
 ```{r}
-files_to_import <- read_tsv("import/old_imports/import_data.txt")
+# Get latest table from google drive
+googledrive::drive_auth(email = "kiledal@umich.edu",cache = "~/GLAMR/.secrets/")
+as_id("https://docs.google.com/spreadsheets/d/1z2IajV0Ay1lRjH9d0ibNBuf8PY0IbtEz/edit#gid=349037648") %>% 
+  drive_download("import/Great_Lakes_Omics_Datasets.xlsx",overwrite = TRUE)
+
+# Read in sample and study tables
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples",guess_max = 3000)
+sequencing <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "sequencing") %>% 
+  rename(SampleID = "SeqSampleID",
+         Accession_Number = "SRA accession",
+         StudyID = "DatasetID")
+studies <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "studiesdatasets",range = "A1:R1000")
+
+
+
+import_table <- sequencing %>% 
+  #filter(sample_type =="metagenome") %>% 
+  filter(StudyID == "set_108") %>% 
+  mutate(F_reads = NA, R_reads = NA) %>% 
+  pivot_longer(c("F_reads","R_reads"),names_to = "read_type", values_to = "reads") %>%
+  mutate(read_dir = if_else(read_type == "F_reads","fwd","rev")) %>% 
+  rowwise() %>% 
+  mutate(staged_read_fp = glue("import/{sample_type}s/{reads}"),
+         staged_reads_present = file.exists(staged_read_fp),
+         is_compressed = if_else(str_detect(staged_read_fp, ".gz"), TRUE, FALSE),
+         compressed_staged_read_fp = if_else(is_compressed == TRUE, staged_read_fp, paste0(staged_read_fp,".gz")),
+         sample_dir = glue("data/omics/{sample_type}s/{SampleID}"),
+         raw_reads_dir = glue("{sample_dir}/reads"),
+         imported_read_fp = glue("{raw_reads_dir}/raw_{read_dir}_reads.fastq.gz"),
+         previously_imported = dir.exists(sample_dir)) %>% 
+  filter(!is.na(Accession_Number))
+
+new_imports <- import_table %>% 
+  filter(previously_imported == FALSE,
+         staged_reads_present == TRUE | (!is.na(Accession_Number) & !Accession_Number %in% c("NF", "NA")))
+
+new_accessions <- new_imports %>% 
+  select(SampleID, raw_reads_dir, previously_imported, Accession_Number) %>% 
+  distinct() %>% 
+  filter(!is.na(Accession_Number),
+         !Accession_Number %in% c("NF", "NA"))
+
+map(new_accessions$raw_reads_dir,dir.create,recursive = TRUE)
+map2(new_accessions$Accession_Number, paste0(new_accessions$raw_reads_dir,"/accession"), write_lines)
+
+
 ```
 
+This is the main way local data is imported, using either externally generated files_to_import, or files_to_import constructed below on a per input basis
 ```{r}
+#files_to_import <- read_tsv("import/import_data.txt")
+
 import_table <- files_to_import %>% 
   pivot_longer(c("F_reads","R_reads"),names_to = "read_type", values_to = "reads") %>%
   mutate(read_dir = if_else(read_type == "F_reads","fwd","rev")) %>% 
   rowwise() %>% 
-  mutate(sampleID = digest::digest(paste0(Sample,Project),algo = "md5"),
-         staged_read_fp = glue("import/{sample_type}s/{reads}"),
-         staged_reads_present = file.exists(staged_read_fp),
+  mutate(staged_read_fp = glue("import/{sample_type}s/{reads}"),
+         staged_reads_present = fs::file_exists(staged_read_fp),
          is_compressed = if_else(str_detect(staged_read_fp, ".gz"), TRUE, FALSE),
          compressed_staged_read_fp = if_else(is_compressed == TRUE, staged_read_fp, paste0(staged_read_fp,".gz")),
-         sample_dir = glue("data/omics/{sample_type}s/{sampleID}"),
+         sample_dir = glue("data/omics/{sample_type}s/{SampleID}"),
          raw_reads_dir = glue("{sample_dir}/reads"),
          imported_read_fp = glue("{raw_reads_dir}/raw_{read_dir}_reads.fastq.gz"),
          previously_imported = file.exists(imported_read_fp))
 
 new_imports <- import_table %>% 
-  filter(previously_imported == FALSE,
-         staged_reads_present == TRUE)
+   filter(previously_imported == FALSE,
+          staged_reads_present == TRUE)
 
-```
-
-```{r}
-# Create directories
-mapply(dir.create,unique(new_imports$raw_reads_dir),MoreArgs = list(recursive = TRUE, showWarnings = FALSE))
+# Create directories for new samples
+mapply(dir.create,base::unique(new_imports$raw_reads_dir),MoreArgs = list(recursive = TRUE, showWarnings = FALSE))
 
 # Compress uncompressed files
-to_compress <- new_imports %>%
-  filter(is_compressed == FALSE)
+# to_compress <- new_imports %>%
+#   filter(is_compressed == FALSE)
+# 
+# parallel::mcmapply(R.utils::gzip,to_compress$staged_read_fp,mc.cores = 48)
 
-parallel::mcmapply(R.utils::gzip,to_compress$staged_read_fp,mc.cores = 48)
-
-# Copy forward and reverse reads
-mapply(file.rename,new_imports$compressed_staged_read_fp,new_imports$imported_read_fp)
+# symlink forward and reverse reads
+fs::link_create(paste0("../../../../../", new_imports$compressed_staged_read_fp),new_imports$imported_read_fp)
 ```
 
-Check that reads are where they were expected
+cross-link files in project dirs
 ```{r}
+project_dirs <- new_imports %>% 
+  mutate(#project_sample_dir = glue("data/projects/{StudyID}/{SampleID}"),
+        proj_and_type_dir = glue("data/projects/{StudyID}/{sample_type}s/"),
+         project_sample_data_dir = glue("data/projects/{StudyID}/{sample_type}s/{SampleID}"),
+         link_path = glue("../../../../{sample_dir}"))
+
+simple_dirs <- project_dirs %>% 
+  select(sample_dir, proj_and_type_dir, project_sample_data_dir, link_path) %>% distinct()
+
+map(simple_dirs$proj_and_type_dir %>% unique, dir.create, recursive = TRUE)
+
+file.symlink(simple_dirs$link_path, simple_dirs$project_sample_data_dir)
+```
+
+Check that reads are where they were expected & write to import log
+```{r}
+old_imports <- read_tsv("data/import_log.tsv") %>% 
+  mutate(F_primer = as.character(F_primer))
+
+# simplified_old_imports <- old_imports %>% 
+#   filter(import_sucess ==TRUE) %>% 
+#   group_by(sampleID,read_dir) %>% 
+#   top_n(1, as.POSIXct(import_time,format = "%a %b %e %H:%M:%S %Y"))
+
 import_check <- new_imports %>% 
-  mutate(import_sucess = file.exists(imported_read_fp),
+  mutate(import_sucess = file.exists(imported_read_fp) | file.exists(str_glue("{raw_reads_dir}/accession")),
          import_time = date())
 
-write_tsv(import_check,"data/import_log.tsv",append = TRUE)
+all_imports <- bind_rows(old_imports, import_check)
+
+write_tsv(all_imports,"data/import_log.tsv",col_names = TRUE)
 ```
 
 
@@ -68,11 +142,1534 @@ existing_samples <- list.dirs("data/omics/metagenomes",recursive = FALSE)%>%
          rev_reads_present = if_else(file.exists(paste0(sample_dir,"/reads/raw_rev_reads.fastq.gz")),TRUE,FALSE)) %>% 
   left_join(import_table)
 
+# Find samples that didn't import fully/correctly
 incomplete_imports <- existing_samples %>% 
-  filter(fwd_reads_present == FALSE | rev_reads_present==FALSE)
+  filter(fwd_reads_present == FALSE | rev_reads_present==FALSE) %>% 
+  select(sampleID) %>% distinct()
 
-unlink(incomplete_imports$sample_dir,recursive = TRUE)
+# Find samples not in the import logs
+extraneous_samples <- existing_samples %>% 
+  filter(!sampleID %in% import_table$sampleID) %>% 
+  select(sampleID) %>% distinct()
+
+# Combine lists to remove
+samples_to_remove <- bind_rows(incomplete_imports, extraneous_samples) %>% 
+  mutate(sample_dir = glue::glue("data/omics/metagenomes/{sampleID}"))
+
+# Delete the dirs
+unlink(samples_to_remove$sample_dir,recursive = TRUE)
 ```
+
+
+
+
+# Temp fix for JGI metagenomes
+
+```{r}
+jgi_samples <- import_table %>% 
+  filter(StudyID == "set_35")
+
+jgi_alt_dirs <- jgi_samples %>% 
+  select(SampleID, SampleName, sample_dir) %>% 
+  mutate(#link = str_replace(sample_dir, SampleID, SampleName),
+         link = paste0("./", SampleName)) %>% 
+  distinct()
+
+file.symlink(jgi_alt_dirs$link, jgi_alt_dirs$sample_dir)
+
+```
+
+
+## Generate import file for GLERL & USGS metagenomes
+```{r}
+glerl_sample_metadata <- read_tsv("import/staging/2022_GLERL_USGS_metaG/Habs_metagenome_metadata.tsv") %>% 
+  dplyr::rename(sample = "Sample code") %>% 
+  mutate(project = if_else(transect_sample == TRUE, "WLE_transects_2022", "GLERL_USGS_2016_2020"))
+
+simplified_metadata <- glerl_sample_metadata %>% 
+  select(sample, GLAMR_sampleID, project)
+
+glerl_transect_files <- system("ls import/staging/2022_GLERL_USGS_metaG/fastqs_7222-SRC/*.fastq.gz", intern = TRUE) %>% 
+  data.frame(path = .) %>% 
+  mutate(sample = str_remove(path, ".*/") %>% str_remove("-WGSHT.*"),
+         direction = if_else(str_detect(path, "R1_001.fastq.gz"), "fwd", "rev")) %>% 
+  left_join(simplified_metadata) %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         sample_type = "metagenome",
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(glerl_transect_files$path, glerl_transect_files$import_file_path)
+
+files_to_import <- glerl_transect_files %>% 
+  select(sampleID = "GLAMR_sampleID",
+         ProjectID = "project",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  distinct()
+
+```
+
+## Generate import file for second round of GLERL & USGS metagenomes
+```{r}
+glerl_metaG_files <- system("ls import/staging/2023_GLERL_metagenomes/*.fastq.gz", intern = TRUE) %>% 
+  data.frame(path = .) %>% 
+  mutate(SampleName = str_remove(path, ".*/") %>% str_remove_all("_.*"),
+         direction = if_else(str_detect(path, "R1_001.fastq.gz"), "fwd", "rev")) %>% 
+  left_join(samples %>% select(SampleID, SampleName, collection_date, NOAA_Site)) %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{SampleName}_{direction}.fastq.gz"),
+         sample_type = "metagenome",
+         F_reads = str_glue("{SampleName}_fwd.fastq.gz"),
+         R_reads = str_glue("{SampleName}_rev.fastq.gz"),
+         project = "set_41")
+
+fs::link_create(glerl_metaG_files$path, glerl_metaG_files$import_file_path,symbolic = FALSE)
+
+files_to_import <- glerl_metaG_files %>% 
+  select(SampleID,
+         ProjectID = "project",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  distinct()
+
+```
+
+## Generate import table for 2021 ESP samples
+```{r}
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_37", sample_type == "metagenome")
+
+
+reads <- system("ls import/staging/6538-PDU_WGS/fastqs_6538-PDU/*.fastq.gz", intern = TRUE) %>% 
+  data.frame(path = .) %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "R1_001.fastq.gz$"), "fwd", "rev"),
+         SampleName = str_remove(filename, "-WGS.*"),
+         sample_type = "metagenome") %>% 
+  inner_join(samples %>% dplyr::rename(GLAMR_sampleID = "SampleID") %>% select(GLAMR_sampleID, SampleName, StudyID)) %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "2021_ESP",
+         Accession_Number= NA,
+         StudyID = "set_37") %>% 
+  distinct()
+```
+
+## Generate import table for 2022 Lake Victoria samples
+```{r}
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_55", sample_type == "metagenome")
+
+
+reads <- system("ls import/staging/202307_Lake_Victoria/raw_data/*.fastq.gz", intern = TRUE) %>% 
+  data.frame(path = .) %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "R1_001.fastq.gz$"), "fwd", "rev"),
+         SampleName = str_remove(filename, "_L001.*"),
+         sample_type = "metagenome") %>% 
+  inner_join(samples %>% dplyr::rename(GLAMR_sampleID = "SampleID") %>% select(GLAMR_sampleID, SampleName, StudyID)) %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_55",
+         Accession_Number= NA,
+         StudyID = "set_55") %>% 
+  distinct()
+```
+
+## Generate import table for 2023 Kenya samples
+```{r}
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_57", sample_type == "metagenome")
+
+
+reads <- Sys.glob("import/staging/202310_Kenya_metaG/fastqs_9342-GB/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "R1_001.fastq.gz$"), "fwd", "rev"),
+         #SampleName = str_remove(filename, "_L001.*"),
+         sample_type = "metagenome",
+         unglue::unglue_unnest(.,path, "import/staging/202310_Kenya_metaG/fastqs_9342-GB/9342-{SampleName}_S{sample_num}_{read_dir_R}_001.fastq.gz")) %>% 
+  inner_join(samples %>% dplyr::rename(GLAMR_sampleID = "SampleID") %>% select(GLAMR_sampleID, SampleName, StudyID)) %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_57",
+         Accession_Number= NA,
+         StudyID = "set_57") %>% 
+  distinct()
+```
+
+
+## Generate import table for Katia's venom samples
+```{r}
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_63", sample_type == "metagenome")
+
+
+reads <- Sys.glob("import/staging/202403_katia_venom/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "R1_001.fastq.gz$"), "fwd", "rev"),
+         #SampleName = str_remove(filename, "_L001.*"),
+         sample_type = "metagenome",
+         unglue::unglue_unnest(.,path, "import/staging/202403_katia_venom/10384-KL-{SampleName}_{sample_num}_{read_dir_R}_001.fastq.gz"),
+         SampleName = str_glue("{SampleName}_{sample_num}")) %>% 
+  inner_join(samples %>% dplyr::rename(GLAMR_sampleID = "SampleID") %>% dplyr::select(GLAMR_sampleID, SampleName, StudyID)) %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_63",
+         Accession_Number= NA,
+         StudyID = "set_63") %>% 
+  distinct()
+```
+
+## Generate import table for Katia's venom samples, batch 2
+```{r}
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_63", sample_type == "metagenome",
+         str_detect(SampleName, "^11615-KL"))
+
+
+reads <- Sys.glob("import/staging/20240917_venom_batch2/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "R1_001.fastq.gz$"), "fwd", "rev"),
+         #SampleName = str_remove(filename, "_L001.*"),
+         sample_type = "metagenome",
+         unglue::unglue_unnest(.,path, "import/staging/20240917_venom_batch2/11615-KL-{SampleName}_{sample_num}_{read_dir_R}_001.fastq.gz"),
+         SampleName = str_glue("11615-KL-{SampleName}_{sample_num}")) %>% 
+  inner_join(samples %>% dplyr::rename(GLAMR_sampleID = "SampleID") %>% dplyr::select(GLAMR_sampleID, SampleName, StudyID)) %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_63",
+         Accession_Number= NA,
+         StudyID = "set_63") %>% 
+  distinct()
+```
+
+
+## Generate import table for Mike McKay's samples
+```{r}
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_35", sample_type == "metagenome")
+
+
+files_to_import <- data.frame(SampleID = c("samp_4304","samp_4305","samp_4306"),
+                              sample_type = c("metagenome","metagenome","metagenome"),
+                              F_reads = c("samp_4304_fwd.fastq.gz","samp_4305_fwd.fastq.gz","samp_4306_fwd.fastq.gz"),
+                              R_reads = c("samp_4304_rev.fastq.gz","samp_4305_rev.fastq.gz","samp_4306_rev.fastq.gz"),
+                              ProjectID = c("set_35","set_35","set_35"),
+                              StudyID = c("set_35","set_35","set_35"))
+```
+
+
+## Generate import table for late season doli bloom 2022
+```{r}
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_35", sample_type == "metagenome")
+
+
+files_to_import <- data.frame(SampleID = c("samp_4333"),
+                              sample_type = c("metagenome"),
+                              F_reads = c("samp_4333_fwd.fastq.gz"),
+                              R_reads = c("samp_4333_rev.fastq.gz"),
+                              ProjectID = c("set_35"),
+                              StudyID = c("set_35"))
+```
+
+## Generate import table for JGI pilot metaT samples
+
+JGI provides interleaved reads, reformatting to separate fwd & rev
+```{bash}
+#BBtools use more memory than given, amount given by 20% to stay within job specs.
+bbmap_mem=$(echo "scale=-1; ({resources.mem_mb}*0.6)/1" | bc)
+
+# Dedup only outputs interleaved files, this just converts back to paired
+reformat.sh \
+  pigz=16 \
+  ziplevel=9 \
+  in=import/staging/202404_JGI_metaT_pilot/Raw_Data/52999.2.522038.GACCGGCAAA-GTCGGTAGAC.fastq.gz \
+  out1=import/staging/202404_JGI_metaT_pilot/Raw_Data/samp_4489_fwd.fastq.gz \
+  out2=import/staging/202404_JGI_metaT_pilot/Raw_Data/samp_4489_rev.fastq.gz
+
+
+bbmap_mem=$(echo "scale=-1; ({resources.mem_mb}*0.6)/1" | bc)
+reformat.sh \
+  pigz=16 \
+  ziplevel=9 \
+  in=import/staging/202404_JGI_metaT_pilot/Raw_Data/52999.2.522038.CCAGCTTCCA-ACGCTAAAGC.fastq.gz \
+  out1=import/staging/202404_JGI_metaT_pilot/Raw_Data/samp_4490_fwd.fastq.gz \
+  out2=import/staging/202404_JGI_metaT_pilot/Raw_Data/samp_44_rev.fastq.gz
+
+
+```
+
+
+
+```{r}
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_35",
+         sample_type == "metatranscriptome")
+
+# Originally only did this with the first sample (4489), not realizing there were two
+reads <- Sys.glob("import/staging/202404_JGI_metaT_pilot/Raw_Data/samp_4489_*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "fwd"), "fwd", "rev"),
+         #SampleName = str_remove(filename, "_L001.*"),
+         sample_type = "metatranscriptome",
+         SampleID = "samp_4489",
+         GLAMR_sampleID = "samp_4489"
+        ) %>% 
+  inner_join(samples %>% dplyr::rename(GLAMR_sampleID = "SampleID") %>% dplyr::select(GLAMR_sampleID, SampleName, StudyID)) %>% 
+  mutate(import_file_path = str_glue("import/{sample_type}s/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+# So this is adding the second sample (4490)
+reads <- Sys.glob("import/staging/202404_JGI_metaT_pilot/Raw_Data/samp_4490_*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "fwd"), "fwd", "rev"),
+         #SampleName = str_remove(filename, "_L001.*"),
+         sample_type = "metatranscriptome",
+         SampleID = "samp_4490",
+         GLAMR_sampleID = "samp_4490"
+        ) %>% 
+  inner_join(samples %>% dplyr::rename(GLAMR_sampleID = "SampleID") %>% dplyr::select(GLAMR_sampleID, SampleName, StudyID)) %>% 
+  mutate(import_file_path = str_glue("import/{sample_type}s/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_35",
+         Accession_Number= NA,
+         StudyID = "set_35") %>% 
+  distinct()
+```
+
+
+## Generate import table for Britt / Steve / Reagan summer '23 Laurentian cruise metatranscriptomes
+
+```{r}
+
+set_62_info <- samples %>% 
+  filter(StudyID == "set_62") %>% 
+  select(SampleID, SampleName, sample_type, StudyID)
+
+reads <- Sys.glob("import/staging/20240201_Britt_Zepernick_Erie_metaT_from_UM_AGC/*/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "import/staging/20240201_Britt_Zepernick_Erie_metaT_from_UM_AGC/{dir}/{SampleName}_S{sample_num}_R{read_direction}_001.fastq.gz", remove = FALSE) %>% 
+  mutate(direction = if_else(read_direction == 1, "fwd", "rev"),
+         #import_path = str_glue("import/metatranscriptomes/{SampleID}_{read_dir_char}.fastq.gz"),
+         #combined_reads_path
+         sample_num = as.numeric(sample_num)
+         ) %>% 
+  arrange(sample_num) %>% 
+  left_join(set_62_info) %>% 
+  mutate(import_file_path = str_glue("import/{sample_type}s/{SampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{SampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{SampleID}_rev.fastq.gz"))
+
+reads$SampleName %>% unique() %>% clipr::write_clip() # for pasting in GLAMR sheet 
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID, 
+                sample_type, 
+         F_reads, 
+         R_reads,
+         StudyID) %>% 
+  mutate(ProjectID = StudyID,
+         Accession_Number= NA) %>% 
+  dplyr::select(-StudyID) %>% 
+  distinct()
+```
+
+## Generate import table for Rob McManus metatranscriptomic samples
+
+```{r}
+
+set_80_info <- samples %>% 
+  filter(StudyID == "set_80") %>% 
+  select(SampleID, SampleName, sample_type, StudyID)
+
+reads_parsed <- Sys.glob("import/staging/202409_Rob_McManus_Sterner_Project/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "import/staging/202409_Rob_McManus_Sterner_Project/NPS_{location}_{proj_samp_num}_S{sample_num=\\d+}_L001_R{read_direction}_001.fastq.gz", remove = FALSE) %>% 
+  mutate(direction = if_else(read_direction == 1, "fwd", "rev"),
+         orig_sample = str_glue("NPS_{location}_{proj_samp_num}"),
+         #import_path = str_glue("import/metatranscriptomes/{SampleID}_{read_dir_char}.fastq.gz"),
+         #combined_reads_path
+         sample_num = as.numeric(sample_num)
+         ) %>% 
+  arrange(sample_num) 
+
+sample_list <- reads_parsed %>% 
+  select(orig_sample) %>% 
+  distinct() %>% 
+  mutate(SampleID = str_glue("samp_{seq(from = 7281, to = 7304)}"),
+         sample_type = "metatranscriptome",
+         StudyID = "set_80")
+
+reads <- reads_parsed %>% 
+  left_join(sample_list) %>% 
+  mutate(import_file_path = str_glue("import/{sample_type}s/{SampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{SampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{SampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID, 
+                sample_type, 
+         F_reads, 
+         R_reads,
+         StudyID) %>% 
+  mutate(ProjectID = StudyID,
+         Accession_Number= NA) %>% 
+  dplyr::select(-StudyID) %>% 
+  distinct()
+```
+
+
+## Generate import table for Microseira samples (Lake St. Clair, USACE)
+```{r}
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_82", sample_type == "metagenome")
+
+
+reads <- Sys.glob("import/staging/20240917_Microseira_USACE/fastqs_11742-AK/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "R1_001.fastq.gz$"), "fwd", "rev"),
+         #SampleName = str_remove(filename, "_L001.*"),
+         sample_type = "metagenome",
+         unglue::unglue_unnest(.,path, "import/staging/20240917_Microseira_USACE/fastqs_11742-AK/11742-AK-{SampleName=\\d+}_S{sample_num=\\d+}_{read_dir_R}_001.fastq.gz"),
+         SampleName = str_glue("AK-{SampleName}")) %>% 
+  inner_join(samples %>% dplyr::rename(GLAMR_sampleID = "SampleID") %>% dplyr::select(GLAMR_sampleID, SampleName, StudyID)) %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_82",
+         Accession_Number= NA,
+         StudyID = "set_82") %>% 
+  distinct()
+```
+
+
+
+## Generate import file for JGI viromes
+```{r}
+
+virome_reads <- Sys.glob("import/staging/jgi_2022/*virome*/Raw_Data/*.fastq.gz") %>% 
+  data.frame(interleaved_path = .) %>% 
+  unglue::unglue_unnest(interleaved_path, "import/staging/jgi_2022/{SampleName}_FD/Raw_Data/{fastq_name}.fastq.gz",remove = FALSE) %>% 
+  mutate(SampleID = case_when(SampleName == "LEV10virome" ~ "samp_5896",
+                              SampleName == "LEV12virome" ~ "samp_5897",
+                              SampleName == "LEV2virome" ~ "samp_5898",
+                              SampleName == "LEV3virome" ~ "samp_5899",
+                              SampleName == "LEV4virome" ~ "samp_5900",
+                              SampleName == "LEV5virome" ~ "samp_5901"
+                              ),
+         fwd_import_file_path = str_glue("import/metagenomes/{SampleID}_fwd.fastq.gz"),
+         rev_import_file_path = str_glue("import/metagenomes/{SampleID}_rev.fastq.gz"),
+         sample_type = "metagenome",
+         ProjectID = "set_35",
+         F_reads = str_glue("{SampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{SampleID}_rev.fastq.gz"))
+
+
+bbmap_reformat <- function(interleaved, fwd_fastq, rev_fastq, zip_level = 9, pigz_cpus = 16){
+  system(str_glue('
+
+  bbmap_mem={150000*0.6}
+  
+  /geomicro/data2/kiledal/miniconda3/envs/bbmap/bin/reformat.sh pigz={pigz_cpus} ziplevel={zip_level} in={interleaved} out1={fwd_fastq} out2={rev_fastq}'))
+}
+
+# De-interleave reads
+pmap(list(interleaved = virome_reads$interleaved_path, fwd_fastq = virome_reads$fwd_import_file_path, rev_fastq = virome_reads$rev_import_file_path), bbmap_reformat)
+
+
+files_to_import <- virome_reads %>% 
+  select(SampleID,
+         ProjectID,
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  distinct()
+
+```
+
+
+
+
+## Generate import table for JGI SIP metagenomes
+
+```{r}
+# Create table of reads
+reads_parsed <- Sys.glob("import/staging/202411_metagenome_SIP_JGI/*/Filtered_Raw_Data/*.filter-MG-SIP.fastq.gz") %>% 
+  data.frame(interleaved_path = .) %>% 
+  unglue::unglue_unnest(interleaved_path, "import/staging/202411_metagenome_SIP_JGI/{SampleName}/Filtered_Raw_Data/{read_name}.filter-MG-SIP.fastq.gz", remove = FALSE) %>%
+  mutate(#direction = if_else(read_direction == 1, "fwd", "rev"),
+         fwd = str_glue("import/staging/202411_metagenome_SIP_JGI/{SampleName}/Filtered_Raw_Data/{read_name}_fwd.fastq.gz"),
+         rev = str_glue("import/staging/202411_metagenome_SIP_JGI/{SampleName}/Filtered_Raw_Data/{read_name}_rev.fastq.gz"),
+         reads_exist = fs::file_exists(fwd)
+         #orig_sample = str_glue("NPS_{location}_{proj_samp_num}"),
+         #import_path = str_glue("import/metatranscriptomes/{SampleID}_{read_dir_char}.fastq.gz"),
+         #combined_reads_path
+         #sample_num = as.numeric(sample_num)
+         ) %>% 
+  unglue::unglue_unnest(SampleName, "{n_form}_{isotope}N{replicate}_{time_point}_{fraction}_{name_suffix}",remove = FALSE) %>% 
+  type_convert() %>% 
+  arrange(n_form,isotope, replicate, time_point, fraction) %>% 
+  pivot_longer(c("fwd","rev"),names_to = "direction", values_to = "path") %>% 
+  write_tsv("import/staging/202411_metagenome_SIP_JGI/sample_table.tsv")
+
+# Have to deinterleave reads, making targets for snakemake here
+deinterleaved_targets <- reads_parsed %>% select(path) %>% write_tsv("tmp/sip_metagenome_deinterleave.tsv",col_names = FALSE)
+
+set_84_info <- samples %>% 
+  filter(StudyID == "set_84") %>% 
+  select(SampleID, SampleName, sample_type, StudyID)
+
+reads <- reads_parsed %>% 
+  left_join(set_84_info) %>% 
+  mutate(import_file_path = str_glue("import/{sample_type}s/{SampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{SampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{SampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID, 
+                sample_type, 
+         F_reads, 
+         R_reads,
+         StudyID) %>% 
+  mutate(ProjectID = StudyID,
+         Accession_Number= NA) %>% 
+  dplyr::select(-StudyID) %>% 
+  distinct()
+```
+
+## Generate import table for samples missing from JGI SIP metagenome initial download
+
+```{r}
+deinterleaved_reads <- Sys.glob("/nfs/turbo/lsa-gdick2/geomicro/home/rmcman/SIP_N/data/samples/missing_samp/*/reads/*.fastq.gz") %>% 
+  tibble(path = .) %>% 
+  unglue::unglue_unnest(path,"/nfs/turbo/lsa-gdick2/geomicro/home/rmcman/SIP_N/data/samples/missing_samp/{SampleID}/reads/{IDstring}.fastq.gz",remove = FALSE) %>% 
+  mutate(direction = case_when(str_detect(path, "_fwd.fastq.gz") ~ "fwd",
+                               str_detect(path, "_1.fastq.gz") ~ "fwd",
+                               str_detect(path, "_rev.fastq.gz") ~ "rev",
+                               str_detect(path, "_2.fastq.gz") ~ "rev",
+                               )) %>% 
+  filter(!str_detect(path, "_1.fastq.gz"),
+         !str_detect(path, "_2.fastq.gz"))
+
+# pull sample info from GLAMR samples table in postgres
+set_84_info <- samples %>% 
+  filter(StudyID == "set_84") %>% 
+  select(SampleID, SampleName, sample_type, StudyID)
+
+reads <- deinterleaved_reads %>% 
+  left_join(set_84_info) %>% 
+  mutate(import_file_path = str_glue("import/{sample_type}s/{SampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{SampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{SampleID}_rev.fastq.gz"),
+         raw_path = str_glue("data/omics/metagenomes/{SampleID}/reads/raw_{direction}_reads.fastq.gz")
+         )
+
+#reads$import_file_path[fs::link_exists(reads$import_file_path)] %>%  fs::link_delete()
+fs::link_create(reads$path, reads$import_file_path)
+
+# Fix links from Rob's directory
+#fs::link_delete(reads$raw_path)
+#fs::link_create(reads$path,reads$raw_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID, 
+                sample_type, 
+         F_reads, 
+         R_reads,
+         StudyID) %>% 
+  mutate(ProjectID = StudyID,
+         Accession_Number= NA) %>% 
+  dplyr::select(-StudyID) %>% 
+  distinct()
+```
+
+
+## Generate import table for USGS Kabetogama samples from Sergei
+```{r}
+
+
+files <- Sys.glob("import/staging/202412_USGS_Kabetogama_Sergei/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "R1_001.fastq.gz$"), "fwd", "rev"),
+         sample_type = "metagenome",
+         unglue::unglue_unnest(.,path, "import/staging/202412_USGS_Kabetogama_Sergei/{SampleName}_L{lane}_{read_dir_R}_001.fastq.gz")) 
+
+samples_from_files <- files %>% 
+  select(SampleName) %>% distinct()
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_87", sample_type == "metagenome")
+
+reads <- files %>% 
+  inner_join(samples %>% dplyr::rename(GLAMR_sampleID = "SampleID") %>% dplyr::select(GLAMR_sampleID, SampleName, StudyID)) %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_87",
+         Accession_Number= NA,
+         StudyID = "set_87") %>% 
+  distinct()
+```
+
+
+## Generate import table for Wei (LLNL organic P) samples
+```{r}
+files <- Sys.glob("import/staging/202501_wei_organicP/separated/*_reads.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  mutate(filename = basename(path)) %>% 
+         unglue::unglue_unnest(path, "import/staging/202501_wei_organicP/separated/{SampleName}_{direction=fwd|rev}_reads.fastq.gz",remove = FALSE) %>% 
+  mutate(sample_type = if_else(str_detect(SampleName, "_"),"metatranscriptome","metagenome"))
+
+samples_from_files <- files %>% 
+  select(SampleName,sample_type) %>% distinct()
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_88")
+
+reads <- files %>% 
+  inner_join(samples %>% dplyr::rename(GLAMR_sampleID = "SampleID") %>% dplyr::select(GLAMR_sampleID, SampleName, StudyID)) %>% 
+  mutate(import_file_path = str_glue("import/{sample_type}s/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_88",
+         Accession_Number= NA,
+         StudyID = "set_88") %>% 
+  distinct()
+```
+
+## Mock communities for Matthew
+```{r}
+mock_sample_info <- googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/1H63EXG86y2NSWZ3g9N2-kn5xIxxWsMwC5Argex9gfmo/edit?gid=0#gid=0")
+
+files_to_link <- mock_sample_info %>% 
+  select(-GLAMR_path) %>% 
+  filter(file_type != "contigs") %>% 
+  mutate(sample_type = "metagenome",
+         ProjectID = "set_90",
+         StudyID = "set_90",
+         direction = case_when(file_type == "F_reads" ~ "fwd",
+                               file_type == "R_reads" ~ "rev"),
+         GLAMR_sampleID = SampleID
+         )
+
+reads <- files_to_link %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"),
+         file_exists = fs::file_exists(matthew_path))
+
+fs::link_create(reads$matthew_path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+    mutate(sample_type = "metagenome",
+         ProjectID = "set_90",
+         StudyID = "set_90"
+         ) %>% 
+  select(SampleID, sample_type, F_reads, R_reads, ProjectID, StudyID) %>% 
+  distinct()
+
+
+
+```
+
+## Mock communities for Matthew #2, GSA
+```{r}
+mock_sample_info <- googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/1J_eQ___6IVsmtKa0esFXy2zQHFJe54AJZJwn_0SOuOE/edit?usp=sharing") %>% 
+  pivot_longer(c(assembly_path, fwd_reads, rev_reads, info_path_renamed), names_to = "file_type",values_to = "path") 
+
+contigs_df <- mock_sample_info %>% 
+  filter(file_type %in% c("info_path_renamed")) %>% 
+  mutate(contig_path = str_glue("data/omics/metagenomes/{SampleID}/assembly/megahit_noNORM/final.contigs.renamed.fa"))
+
+reads_df <- mock_sample_info %>% 
+  filter(file_type %in% c("fwd_reads", "rev_reads"))
+
+files_to_link <- reads_df %>% 
+  #select(-GLAMR_path) %>% 
+  mutate(sample_type = "metagenome",
+         ProjectID = "set_90",
+         StudyID = "set_90",
+         direction = case_when(file_type == "fwd_reads" ~ "fwd",
+                               file_type == "rev_reads" ~ "rev"),
+         GLAMR_sampleID = SampleID
+         )
+
+reads <- files_to_link %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"),
+         file_exists = fs::file_exists(path))
+
+fs::link_create(reads$path, reads$import_file_path)
+
+contigs_df$contig_path %>% dirname() %>% fs::dir_create()
+fs::link_delete(contigs_df$contig_path)
+fs::link_create(contigs_df$path, contigs_df$contig_path)
+
+files_to_import <- reads %>% 
+    mutate(sample_type = "metagenome",
+         ProjectID = "set_90",
+         StudyID = "set_90"
+         ) %>% 
+  select(SampleID, sample_type, F_reads, R_reads, ProjectID, StudyID) %>% 
+  distinct()
+
+## Link decontaminated reads from non-GSA sampleIDs to GSA sampleIDs for abundance calc and other key output generation
+decon_read_link <- reads_df %>% 
+  mutate(direction = case_when(file_type == "fwd_reads" ~ "fwd",
+                               file_type == "rev_reads" ~ "rev"),
+         decon_read_source = str_glue("../../{other_GLAMR_sample}/reads/decon_{direction}_reads_fastp.fastq.gz"),
+         decon_read_dest = str_glue("~/GLAMR/data/omics/metagenomes/{SampleID}/reads/decon_{direction}_reads_fastp.fastq.gz"))
+
+decon_read_link$decon_read_dest[fs::link_exists(decon_read_link$decon_read_dest)] %>% fs::link_delete()
+fs::link_create(decon_read_link$decon_read_source, decon_read_link$decon_read_dest)
+
+```
+
+
+## Generate import table for WLE heterotrophs from Sherman / Tripathi lab
+```{r}
+files <- Sys.glob("~/GLAMR/import/staging/20250313_WLE_heterotrophs_from_Pankaj_Sherman_Tripathi/*/Genetic Profile/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  mutate(filename = basename(path)) %>% 
+         unglue::unglue_unnest(path, "/geomicro/data2/kiledal/GLAMR/import/staging/20250313_WLE_heterotrophs_from_Pankaj_Sherman_Tripathi/{strain}/Genetic Profile/{file_prefix}_{direction=R1|R2}_001.fastq.gz",remove = FALSE) %>% 
+  mutate(direction = case_when(direction == "R1" ~ "fwd",
+                               direction == "R2" ~ "rev"))
+
+samples_from_files <- files %>% 
+  select(strain) %>% distinct()
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_91")
+
+reads <- files %>% 
+  rename(SampleName = "strain") %>% 
+  inner_join(samples %>% dplyr::rename(GLAMR_sampleID = "SampleID") %>% dplyr::select(GLAMR_sampleID, SampleName, StudyID)) %>% 
+  mutate(sample_type = "metagenome",
+         import_file_path = str_glue("import/{sample_type}s/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_91",
+         Accession_Number= NA,
+         StudyID = "set_91") %>% 
+  distinct()
+```
+
+
+## Generate import table for Botswana HABs for Kenosi and Lihini
+```{r}
+files <- Sys.glob("~/GLAMR/import/staging/2025_kenosi_lihini_botswana_habs/*.fq.gz") %>% 
+  data.frame(path = .) %>% 
+  mutate(filename = basename(path)) %>% 
+         unglue::unglue_unnest(path, "/geomicro/data2/kiledal/GLAMR/import/staging/2025_kenosi_lihini_botswana_habs/Kenosi_Kebabonye_Aluwihare_{SampleName}_filt_{direction=R1|R2}.fq.gz",remove = FALSE) %>% 
+  mutate(direction = case_when(direction == "R1" ~ "fwd",
+                               direction == "R2" ~ "rev"))
+
+samples_from_files <- files %>% 
+  select(SampleName) %>% distinct()
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_92")
+
+reads <- files %>% 
+  inner_join(samples %>% dplyr::rename(GLAMR_sampleID = "SampleID") %>% dplyr::select(GLAMR_sampleID, SampleName, StudyID)) %>% 
+  mutate(sample_type = "metagenome",
+         import_file_path = str_glue("import/{sample_type}s/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_92",
+         Accession_Number= NA,
+         StudyID = "set_92") %>% 
+  distinct()
+```
+
+
+## Set_94: Kat comparison samples
+```{r}
+files <- Sys.glob("import/staging/20250330_katia_lev_extras/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  mutate(filename = basename(path)) %>% 
+         unglue::unglue_unnest(path, "import/staging/20250330_katia_lev_extras/{Accession_Number}_{dir_num}.fastq.gz",remove = FALSE) %>% 
+  mutate(sample_type = "metagenome",
+         direction = case_when(dir_num == 1 ~ "fwd",
+                               dir_num == 2 ~ "rev"),
+         StudyID = "set_94",
+         SampleID = case_when(Accession_Number == "SRR24018575" ~ "samp_8457",
+                              Accession_Number == "SRR24018590" ~ "samp_8458",
+                              Accession_Number == "SRR24018530" ~ "samp_8459",
+                              Accession_Number == "SRR10912874" ~ "samp_8460",
+                              Accession_Number == "SRR10912881" ~ "samp_8461",
+                              Accession_Number == "SRR14297773" ~ "samp_8462",
+                              Accession_Number == "SRR14297779" ~ "samp_8463"),
+         GLAMR_sampleID = SampleID)
+
+reads <- files %>% 
+  mutate(import_file_path = str_glue("import/{sample_type}s/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_94",
+         Accession_Number= NA,
+         StudyID = "set_94") %>% 
+  distinct()
+```
+
+
+## ESP 2023/2024 samples for Paul
+```{r}
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_93", sample_type == "metagenome")
+
+file_info <- Sys.glob("~/GLAMR/import/staging/12907-PDU/fastqs_12907-PDU/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "/geomicro/data2/kiledal/GLAMR/import/staging/12907-PDU/fastqs_12907-PDU/12907-PDU-{pdu_num}_S{samp_num}_R{read}_001.fastq.gz",remove = FALSE) %>% 
+  type_convert() %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "R1_001.fastq.gz$"), "fwd", "rev"),
+         sample_type = "metagenome",
+         SampleName = str_glue("PDU-{pdu_num}"))
+
+unique_samples <- file_info %>% 
+  arrange(pdu_num) %>% 
+  select(SampleName) %>% 
+  distinct()
+
+reads <- file_info %>% 
+  inner_join(samples %>% dplyr::rename(GLAMR_sampleID = "SampleID") %>% dplyr::select(GLAMR_sampleID, SampleName, StudyID)) %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_93",
+         Accession_Number= NA,
+         StudyID = "set_93") %>% 
+  distinct()
+```
+
+## Generate import table for Geomicro lab metaT (SIP and WLE)
+
+```{r}
+# 
+# rob_table <- read_csv("/nfs/turbo/lsa-gdick2/geomicro/home/rmcman/SIP_N/metaT/JGI_down/GLAMR_link_current.csv")
+# rob_globus_manifest <- read_csv("/nfs/turbo/lsa-gdick2/geomicro/home/rmcman/SIP_N/metaT/JGI_down/Globus_Download_518011_File_Manifest.csv")
+# 
+# reports <- Sys.glob("/nfs/turbo/lsa-gdick2/geomicro/home/rmcman/SIP_N/metaT/JGI_down/*/*/QC_Filtered_Raw_Data/*.filtered-report.txt") %>% 
+#   data.frame(report_path = .) %>% 
+#   unglue::unglue_unnest(report_path,"/nfs/turbo/lsa-gdick2/geomicro/home/rmcman/SIP_N/metaT/JGI_down/{StudyID}/{SampleID}/QC_Filtered_Raw_Data/{jgi_sample}.filtered-report.txt", remove = FALSE)
+#   
+# 
+# raw_reads <- rob_table %>% 
+#   filter(str_detect(`directory/path`, "Raw_Data"),
+#          str_detect(filename, ".fastq.gz"),
+#          !str_detect(filename, "rRNA"),
+#          !str_detect(filename, ".filter-MTF")) %>% 
+#   mutate(file_size = fs::file_size(str_glue("/nfs/turbo/lsa-gdick2/geomicro/home/rmcman/SIP_N/metaT/JGI_down/{StudyID}/{SampleID}/Raw_Data/{filename}")))
+# 
+# samples_without_raw_reads <- rob_table %>% 
+#   select(SampleID) %>% 
+#   distinct() %>% 
+#   filter(!SampleID %in% raw_reads$SampleID)
+# 
+# 
+# file_path <- reports$report_path[1]
+
+parse_jgi_filter_report <- function(file_path, sample_name) {
+  library(readr)
+  library(dplyr)
+  library(stringr)
+  
+  # Read report into lines
+  lines <- read_lines(file_path)
+  
+  # Extract library name and sequencing project ID
+  lib_name <- lines[which(str_detect(lines, "^Library:"))] %>% str_remove("Library:\\s+")
+  seq_proj_id <- lines[which(str_detect(lines, "^Sequencing Project Id:"))] %>% str_remove("Sequencing Project Id:\\s+")
+  
+  # Find where the table starts and ends
+  start_idx <- which(str_detect(lines, "^Metric\\s*\\|\\s*Reads"))
+  end_idx   <- which(str_detect(lines, "^Total Removed"))
+  
+  if (length(start_idx) == 0 || length(end_idx) == 0) {
+    stop("Could not find the expected metric table in the report.")
+  }
+  
+  # Keep the header + rows until Total Removed
+  table_lines <- lines[start_idx:end_idx]
+  
+  # Remove dashed separator lines
+  table_lines <- table_lines[!str_detect(table_lines, "^[-]+\\|")]
+  
+  # Split on "|" and trim whitespace from each field
+  table_split <- str_split_fixed(table_lines, "\\|", n = 6)
+  table_df <- as.data.frame(table_split, stringsAsFactors = FALSE)
+  
+  # Assign column names from header row
+  colnames(table_df) <- str_trim(table_df[1, ])
+  colnames(table_df) <- c("metric","reads", "percent_reads_removed", "bases","percent_bases_trimmed" ,"description")
+  
+  # Remove the header row
+  table_df <- table_df[-1, ] %>% mutate(across(everything(), ~str_remove_all(.x, ",|%")),
+                                        across(everything(), ~str_trim(.x, side = c("both", "left", "right")))) %>% 
+    type_convert() %>% 
+    mutate(SampleID = sample_name,
+           library = lib_name,
+           seq_proj_id = seq_proj_id)
+  
+  return(table_df)
+}
+
+
+# reports <- map2_df(reports$report_path, reports$SampleID, parse_jgi_filter_report)
+# 
+# sample_order <- reports %>% 
+#   filter(metric %in% c("Output")) %>% 
+#   arrange(desc(reads))
+# 
+# (reports %>% 
+#   filter(metric %in% c("Input", "Output")) %>% 
+#   mutate(raw_reads_downloaded = !SampleID %in% samples_without_raw_reads$SampleID) %>% 
+#   ggplot(aes(factor(SampleID, sample_order$SampleID,ordered = TRUE), reads, color = raw_reads_downloaded)) +
+#   geom_point() +
+#   scale_y_continuous(labels = scales::label_comma())
+# ) %>% plotly::ggplotly()
+
+
+## Redownloaded from JGI
+
+#*/Raw_Data/*.fastq.gz
+#*"/geomicro/data2/kiledal/GLAMR/import/staging/202508_geomicro_metaT_WLE_and_Nsip_from_JGI/raw_reads/{jgi_name}/Raw_Data/{filename}.fastq.gz"
+
+qc_report <- read_csv("~/GLAMR/import/staging/202508_geomicro_metaT_WLE_and_Nsip_from_JGI/qc_report.csv") %>% 
+  filter(!is.na(`Sample Receipt Date`))
+
+report_paths <- Sys.glob("/nfs/turbo/lsa-gdick2/geomicro/data2/kiledal/GLAMR/import/staging/202508_geomicro_metaT_WLE_and_Nsip_from_JGI/raw_reads/*/QC_Filtered_Raw_Data/*.filtered-report.txt") %>% 
+  data.frame(report_path = .) %>% 
+  unglue::unglue_unnest(report_path,"/nfs/turbo/lsa-gdick2/geomicro/data2/kiledal/GLAMR/import/staging/202508_geomicro_metaT_WLE_and_Nsip_from_JGI/raw_reads/{jgi_name}/QC_Filtered_Raw_Data/{jgi_sample}.filtered-report.txt", remove = FALSE)
+
+reports <- map2_df(report_paths$report_path, report_paths$jgi_name, parse_jgi_filter_report)
+
+(reports %>% 
+  filter(metric %in% c("Input", "Output")) %>% 
+  #mutate(raw_reads_downloaded = !SampleID %in% samples_without_raw_reads$SampleID) %>% 
+  ggplot(aes(library, reads, color = metric)) +
+  geom_point() +
+  scale_y_continuous(labels = scales::label_comma())
+) %>% plotly::ggplotly()
+
+
+
+raw_reads <- Sys.glob("/geomicro/data2/kiledal/GLAMR/import/staging/202508_geomicro_metaT_WLE_and_Nsip_from_JGI/raw_reads/*/Raw_Data/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path,"/geomicro/data2/kiledal/GLAMR/import/staging/202508_geomicro_metaT_WLE_and_Nsip_from_JGI/raw_reads/{jgi_name}/Raw_Data/{filename}.fastq.gz",remove = FALSE) %>% 
+  mutate(size = fs::file_size(path),
+         jgi_name_length = nchar(jgi_name)) %>% 
+  group_by(filename) %>% 
+  slice_max(jgi_name_length,n = 1, with_ties = FALSE) %>% 
+  left_join(reports %>% select(jgi_name = "SampleID", seq_proj_id, library) %>% type_convert() %>% distinct()) %>% 
+  left_join(qc_report %>% select(seq_proj_id = `Sequencing Project Id`, sample_name = `Sample Name`,jgi_sample_receipt_date = `Sample Receipt Date`) %>% distinct())
+
+qcd_reads <- Sys.glob("/geomicro/data2/kiledal/GLAMR/import/staging/202508_geomicro_metaT_WLE_and_Nsip_from_JGI/raw_reads/*/QC_Filtered_Raw_Data/*.filter-MTF.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path,"/geomicro/data2/kiledal/GLAMR/import/staging/202508_geomicro_metaT_WLE_and_Nsip_from_JGI/raw_reads/{jgi_name}/QC_Filtered_Raw_Data/{filename}.fastq.gz",remove = FALSE) %>% 
+  mutate(size = fs::file_size(path),
+         jgi_name_length = nchar(jgi_name)) %>% 
+  group_by(filename) %>% 
+  slice_max(jgi_name_length,n = 1, with_ties = FALSE)
+
+missing_raw <- base::setdiff(qcd_reads$jgi_name, raw_reads$jgi_name)
+
+
+### Actually import the reads
+
+# Create table of reads
+reads_parsed <- raw_reads %>% 
+  rename(interleaved_path = path) %>% 
+  mutate(project = case_when(str_detect(jgi_name, "[eE]rie") & jgi_sample_receipt_date > lubridate::mdy("01-01-2025") ~ "timeseries",
+                             jgi_sample_receipt_date < lubridate::mdy("01-01-2025") ~ "pilot",
+                             !str_detect(jgi_name, "[eE]rie") & jgi_sample_receipt_date > lubridate::mdy("01-01-2025") ~ "SIP"
+                             )
+         ) %>% 
+  filter(project != "pilot") %>% 
+  arrange(jgi_sample_receipt_date,project, jgi_name) %>% 
+  ungroup() %>% 
+  mutate(sample_type = "metatranscriptome",
+         glamr_sample_num = 9544 + row_number(),
+         SampleID = paste0("samp_",glamr_sample_num),
+         import_interleaved = str_glue("import/{sample_type}s/{SampleID}_interleaved.fastq.gz"),
+         import_fwd = str_glue("import/{sample_type}s/{SampleID}_fwd.fastq.gz"),
+         import_rev = str_glue("import/{sample_type}s/{SampleID}_fwd.fastq.gz"),
+         F_reads = str_glue("{SampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{SampleID}_rev.fastq.gz"),
+         glamr_biosample = str_glue("bios_{glamr_sample_num}"),
+         ProjectID = case_when(project == "SIP" ~ "set_84",
+                                   project == "timeseries" ~ "set_35"
+                                   )
+         ) %>% 
+  write_rds("import/staging/202508_geomicro_metaT_WLE_and_Nsip_from_JGI/glamr_import_table.rds") %>% 
+  write_tsv("import/staging/202508_geomicro_metaT_WLE_and_Nsip_from_JGI/glamr_import_table.tsv")
+  
+fs::link_create(reads_parsed$interleaved_path, reads_parsed$import_interleaved,symbolic = FALSE)
+
+files_to_import <- reads_parsed %>% 
+  mutate(StudyID = ProjectID,
+         Accession_Number= NA) %>% 
+  dplyr::select(SampleID,
+         sample_type, 
+         F_reads, 
+         R_reads,
+         ProjectID, 
+         StudyID, 
+         Accession_Number) %>% 
+  distinct()
+
+
+```
+
+## 202510: Lake Victoria (Kate Brown et al)
+```{r}
+
+# samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+#   filter(StudyID =="set_93", sample_type == "metagenome")
+
+file_info <- Sys.glob("~/GLAMR/import/staging/202510_Winam_Gulf_KateBrown/fastqs_10522-GB/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "/geomicro/data2/kiledal/GLAMR/import/staging/202510_Winam_Gulf_KateBrown/fastqs_10522-GB/10522-GB-{researcher_num}_S{samp_num}_R{read}_001.fastq.gz",remove = FALSE) %>% 
+  type_convert() %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "R1_001.fastq.gz$"), "fwd", "rev"),
+         sample_type = "metagenome",
+         SampleName = str_glue("GB-{researcher_num}"),
+         StudyID = "set_115") %>% 
+  arrange(researcher_num) %>% 
+  left_join(data.frame(researcher_num = seq(1,18),
+                       GLAMR_sampleID = paste0("samp_",seq(from = 9874,to = 9891,by =1))))
+
+unique_samples <- file_info %>% 
+  arrange(researcher_num) %>% 
+  select(SampleName) %>% 
+  distinct()
+
+reads <- file_info %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_115",
+         Accession_Number= NA,
+           StudyID = "set_115") %>% 
+  distinct()
+```
+
+
+## 202510: 2022 WLE metagenomes (geomicro lab)
+```{r}
+
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples") %>% 
+  filter(StudyID =="set_93", sample_type == "metagenome")
+
+file_info <- Sys.glob("~/GLAMR/import/staging/20251014_geomicro_2022WLE_metagenomes/fastqs_14315-AK/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "/geomicro/data2/kiledal/GLAMR/import/staging/20251014_geomicro_2022WLE_metagenomes/fastqs_14315-AK/14315-AK-{researcher_num}_S{samp_num}_R{read}_001.fastq.gz",remove = FALSE) %>% 
+  type_convert() %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "R1_001.fastq.gz$"), "fwd", "rev"),
+         sample_type = "metagenome",
+         SampleName = str_glue("AK-{researcher_num}"),
+         StudyID = "set_115") %>% 
+  arrange(researcher_num) %>% 
+  left_join(data.frame(researcher_num = seq(1,16),
+                       GLAMR_sampleID = paste0("samp_",seq(from = 9892,to = 9907,by =1))))
+
+unique_samples <- file_info %>% 
+  arrange(researcher_num) %>% 
+  select(SampleName) %>% 
+  distinct()
+
+reads <- file_info %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_114",
+         Accession_Number= NA,
+           StudyID = "set_114") %>% 
+  distinct()
+```
+
+## 202510: concrete metagenomes
+```{r}
+
+file_info <- Sys.glob("~/GLAMR/import/staging/202510_concrete_metagenomes/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "/geomicro/data2/kiledal/GLAMR/import/staging/202510_concrete_metagenomes/{SampleName}_R{read}.fastq.gz",remove = FALSE) %>% 
+  type_convert() %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "R1.fastq.gz$"), "fwd", "rev"),
+         sample_type = "metagenome",
+         StudyID = "set_116") %>% 
+  arrange(SampleName) %>% 
+  bind_cols(data.frame(GLAMR_sampleID = paste0("samp_", rep(seq(from = 10453, to = 10549, by = 1), each = 2))))
+
+unique_samples <- file_info %>% 
+  arrange(SampleName) %>% 
+  select(SampleName) %>% 
+  distinct()
+
+reads <- file_info %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_116",
+         Accession_Number= NA,
+           StudyID = "set_116") %>% 
+  distinct()
+```
+
+
+## 202510: baits sequencing, lake erie sediment cores
+```{r}
+
+file_info <- Sys.glob("~/GLAMR/import/staging/20251023_mybaits_erie_sediments/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "/geomicro/data2/kiledal/GLAMR/import/staging/20251023_mybaits_erie_sediments/TSP02_{SampleName}_R{read}.fastq.gz",remove = FALSE) %>% 
+  type_convert() %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "R1.fastq.gz$"), "fwd", "rev"),
+         sample_type = "metagenome",
+         StudyID = "set_117") %>% 
+  arrange(SampleName) %>% 
+  bind_cols(data.frame(GLAMR_sampleID = paste0("samp_", rep(seq(from = 10550, to = 10638, by = 1), each = 2))))
+
+unique_samples <- file_info %>% 
+  arrange(SampleName) %>% 
+  select(SampleName) %>% 
+  distinct()
+
+reads <- file_info %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_117",
+         Accession_Number= NA,
+           StudyID = "set_117") %>% 
+  distinct()
+```
+
+
+## 202511: SHARC 2023 16S
+```{r}
+
+sharc_demux <- read_csv("import/staging/202511_SHARC_16S_DenUyl/DemuxStats_12908-PDU.csv") %>% 
+  rename(SampleName = "Description")
+
+file_info <- Sys.glob("~/GLAMR/import/staging/202511_SHARC_16S_DenUyl/fastqs_12908-PDU/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "/geomicro/data2/kiledal/GLAMR/import/staging/202511_SHARC_16S_DenUyl/fastqs_12908-PDU/{Sample_ID}_S{samp_num}_R{read}_001.fastq.gz",remove = FALSE) %>% 
+  type_convert() %>% 
+  left_join(sharc_demux) %>% 
+  arrange(samp_num) %>% 
+  mutate(filename = basename(path),
+         direction = if_else(read == 1, "fwd", "rev"),
+         sample_type = "amplicon",
+         StudyID = case_when(str_detect(SampleName, "Zymo")~"set_93",
+                             str_detect(SampleName, "SHARC")~"set_93",
+                             str_detect(SampleName, "DALLE")~"set_98")
+         ) %>%
+  bind_cols(data.frame(GLAMR_sampleID = paste0("samp_", rep(seq(from = 11071, to = 11166, by = 1), each = 2))))
+
+unique_samples <- file_info %>%
+  select(SampleName) %>% 
+  distinct()
+
+reads <- file_info %>% 
+  mutate(import_file_path = str_glue("import/{sample_type}s/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads, StudyID) %>% 
+  mutate(ProjectID = StudyID,
+         Accession_Number= NA) %>% 
+  distinct()
+```
+
+
+
+## 202602: Acidification metagenomes
+```{r}
+
+file_info <- Sys.glob("import/staging/20260202_acidification_field_metaG/fastqs_15131-CB/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "import/staging/20260202_acidification_field_metaG/fastqs_15131-CB/{run}-{initials}-{samp_num1}_S{samp_num2}_R{read}_001.fastq.gz",remove = FALSE) %>% 
+  type_convert() %>% 
+  mutate(SampleName = str_glue("{run}-{initials}-{samp_num1}"),
+         filename = basename(path),
+         direction = if_else(str_detect(filename, "R1_001.fastq.gz$"), "fwd", "rev"),
+         sample_type = "metagenome",
+         StudyID = "set_122") %>% 
+  arrange(samp_num1) %>% 
+  bind_cols(data.frame(GLAMR_sampleID = paste0("samp_", rep(seq(from = 11167, to = 11193, by = 1), each = 2)))) %>% 
+  write_tsv("~/GLAMR/import/staging/20260202_acidification_field_metaG/glamr_import_table.tsv")
+
+unique_samples <- file_info %>% 
+  arrange(samp_num1) %>% 
+  select(SampleName) %>% 
+  distinct()
+
+reads <- file_info %>% 
+  mutate(import_file_path = str_glue("import/metagenomes/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_122",
+         Accession_Number= NA,
+           StudyID = "set_122") %>% 
+  distinct()
+```
+
+
+## 202602: morgan microcystin degradation transcriptomes
+```{r}
+
+file_info <- Sys.glob("import/staging/20260206_morgan_microcystin_acidovorax/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "import/staging/20260206_morgan_microcystin_acidovorax/{SampleName}_S{samp_num2}_R{read}_001.fastq.gz",remove = FALSE) %>% 
+  type_convert() %>% 
+  mutate(filename = basename(path),
+         direction = if_else(str_detect(filename, "R1_001.fastq.gz$"), "fwd", "rev"),
+         sample_type = "metatranscriptome",
+         StudyID = "set_123") %>% 
+  arrange(samp_num2) %>% 
+  bind_cols(data.frame(GLAMR_sampleID = paste0("samp_", rep(seq(from = 11194, to = 11203, by = 1), each = 2)))) %>% 
+  write_tsv("import/staging/20260206_morgan_microcystin_acidovorax/glamr_import_table.tsv")
+
+unique_samples <- file_info %>% 
+  select(SampleName) %>% 
+  distinct()
+
+reads <- file_info %>% 
+  mutate(import_file_path = str_glue("import/{sample_type}s/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+file.link(reads$path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_123",
+         Accession_Number= NA,
+           StudyID = "set_123") %>% 
+  distinct()
+```
+
+
+## 202602: Acidification metatranscriptomes
+```{r}
+
+file_info <- Sys.glob("import/staging/20260209_acidification_project_metaT/fastqs_15132-CB/*.fastq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "import/staging/20260209_acidification_project_metaT/fastqs_15132-CB/{run}-{initials}-{samp_num1}_S{samp_num2}_R{read}_001.fastq.gz",remove = FALSE) %>% 
+  type_convert() %>% 
+  mutate(SampleName = str_glue("{run}-{initials}-{samp_num1}"),
+         filename = basename(path),
+         direction = if_else(str_detect(filename, "R1_001.fastq.gz$"), "fwd", "rev"),
+         sample_type = "metatranscriptome",
+         StudyID = "set_122",
+         file_size = fs::file_size(path)) %>% 
+  arrange(samp_num1) %>% 
+  bind_cols(data.frame(GLAMR_sampleID = paste0("samp_", rep(seq(from = 11204, to = 11256, by = 1), each = 2)))) %>% 
+  write_tsv("import/staging/20260209_acidification_project_metaT/glamr_import_table.tsv")
+
+unique_samples <- file_info %>% 
+  arrange(samp_num1) %>% 
+  select(SampleName) %>% 
+  distinct()
+
+reads <- file_info %>% 
+  mutate(import_file_path = str_glue("import/{sample_type}s/{GLAMR_sampleID}_{direction}.fastq.gz"),
+         link_path = str_glue("../../{path}"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd.fastq.gz"),
+         R_reads = str_glue("{GLAMR_sampleID}_rev.fastq.gz"))
+
+fs::link_create(reads$link_path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads) %>% 
+  mutate(ProjectID = "set_122",
+         Accession_Number= NA,
+           StudyID = "set_122") %>% 
+  distinct()
+```
+
+
+# Generic project dir linking
+
+```{r}
+# Find all sample dirs and make a table of the project folders where they should be linked
+all_existing_sample_dirs <- system("ls -d data/omics/*/*", intern = TRUE) %>% 
+  data.frame(path = .) %>% 
+  bind_cols(.,unglue::unglue_data(.$path, "data/omics/{sample_type}/{SampleID}")) %>% 
+  left_join(samples %>% select(SampleID, StudyID)) %>% 
+  filter(!is.na(StudyID)) %>% 
+  mutate(link_path = paste0("../../../../",path),
+         project_dir_path = str_glue("/geomicro/data2/kiledal/GLAMR/data/projects/{StudyID}/{sample_type}/{SampleID}"))
+
+# Check to see if already linked
+existing_sample_dirs <- all_existing_sample_dirs %>% 
+  #filter(StudyID == "set_15") %>% 
+  mutate(project_link_exists = fs::link_exists(project_dir_path))  %>% 
+  filter(!project_link_exists)
+
+
+existing_sample_dirs$project_dir_path %>% dirname() %>% unique() %>% map(.,dir.create,recursive = TRUE)
+
+# If need to remove existing links
+#file.remove(existing_sample_dirs$project_dir_path)
+
+fs::link_create(existing_sample_dirs$link_path, existing_sample_dirs$project_dir_path)
+```
+
+
+
+
+
+Had to re-do at some point, find all files modified today and remove
+```{}
+import_dir_reads <- system("ls import/metagenomes/*.fastq.gz",intern = TRUE) %>% 
+  data.frame(path = .) %>% 
+  mutate(mod_date = file.mtime(path),
+         mod_today = mod_date > as.Date("2023-01-19")) %>% 
+  filter(mod_today == TRUE)
+  
+file.remove(import_dir_reads$path)
+
+
+```
+
+
+# Re-generate import log
+
+```{r}
+
+# Read in sample and study table downloaded from Google Drive
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples",guess_max = 3000)
+
+# Read in log built when (some) samples/files were actually imported
+import_log <- read_tsv("data/import_log.tsv") %>%
+  group_by(SampleID) %>% 
+  filter(previously_imported == FALSE, 
+         import_sucess == TRUE) %>% 
+  mutate(import_time = lubridate::parse_date_time(import_time, orders = "a b d H M S y")) %>% 
+  slice_max(import_time,n = 1,with_ties = FALSE)
+
+# Build import log table
+imported_samples <- Sys.glob("data/omics/*/*") %>% # list sample directories
+  data.frame(sample_dir = .) %>% 
+  bind_cols(., .$sample_dir %>% unglue::unglue_data("data/omics/{sample_type}s/{SampleID}")) %>% # parse sample dir paths
+  left_join(import_log %>% select(SampleID, import_time)) %>% 
+  mutate(imported_from = if_else(file.exists(file.path(sample_dir, "reads/accession")), "SRA", "local_reads"), # imported from SRA if accession present, otherwise assume manually added
+         raw_reads_dir = str_glue("data/omics/{sample_type}s/{SampleID}/reads"),
+         imported_reads_fp = file.path(sample_dir, "reads/raw_fwd_reads.fastq.gz"), # path to raw reads
+         decon_reads_fp = file.path(sample_dir, "reads/decon_fwd_reads_fastp.fastq.gz"), # path to decontaminated reads, important because re-downloadable raw reads are deleted after decon to save storage,
+         raw_reads_fp = file.path(sample_dir, "reads/raw_fwd_reads.fastq.gz"),
+         accession_fp = str_glue("data/omics/{sample_type}s/{SampleID}/reads/accession"),
+         import_success = fs::file_exists(imported_reads_fp) | fs::file_exists(decon_reads_fp), # Import successful if reads present, either raw or decontam (check for both because raw deleted after QC for samples downloaded from external sources)
+         import_time = if_else(is.na(import_time), # Use import time record if possible, otherwise oldest mod. time of either reads or accession file
+                               min(file.info(raw_reads_fp)$mtime,
+                                   file.info(accession_fp)$mtime,na.rm = TRUE),
+                               import_time)) %>% 
+  filter(SampleID %in% samples$SampleID) %>% 
+  left_join(samples %>% select(SampleID, StudyID, ProjectID)) %>% 
+  relocate(SampleID, StudyID, ProjectID, sample_type, sample_dir, 
+           imported_from, import_success, import_time, imported_reads_fp) %>% 
+  write_tsv("data/imported_samples.tsv")
+
+```
+
+
+
 
 
 
