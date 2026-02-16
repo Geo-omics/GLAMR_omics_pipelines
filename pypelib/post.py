@@ -58,6 +58,10 @@ def get_info_from_log(log):
         r'^Finished jobid: (?P<jobid>[0-9]+)',
         re.MULTILINE,
     )
+    version_pat = re.compile(
+        rf'^{PipelineVersion.LOG_MSG_PREFIX}(?P<version>.*)$',
+        re.MULTILINE,
+    )
 
     linepos = [0]  # index to get line numbers for error messages
     with open(log) as ifile:
@@ -73,6 +77,11 @@ def get_info_from_log(log):
             # assume re.Match object, use start position
             pos = pos_or_match.start()
         return bisect.bisect_right(linepos, pos)
+
+    if m := version_pat.search(log_txt):
+        pl_version = m['version']
+    else:
+        pl_version = None
 
     no_output_jobs = set()
     jobs = {}
@@ -132,7 +141,7 @@ def get_info_from_log(log):
             data[rulename] = []
         data[rulename] += jobs[jobid]['output']
 
-    return data
+    return data, pl_version
 
 
 def read_omics_checkout(checkout_file):
@@ -619,8 +628,7 @@ def update_versions_file(rules, versions_file=None, dry_run=False):
         print('[OK] no changes to versions file')
 
 
-def post_production(log, config, rules=None, data_root=None, dry_run=False,
-                    version_before_mtime=False):
+def post_production(log, config, rules=None, data_root=None, dry_run=False):
     """
     Post-snakemake run processing
 
@@ -726,7 +734,6 @@ def replay(log_dir, data_root=None, checkout_file=None, dry_run=False,
             post_production(
                 i,
                 dict(checkout_file=checkout_file),  # config stand-in
-                version_before_mtime=True,
                 dry_run=dry_run,
             )
         except JobIdReused as e:
@@ -858,7 +865,6 @@ if __name__ == '__main__':
                 log,
                 config,
                 data_root=Path(args.data_root),
-                version_before_mtime=True,
                 dry_run=args.dry_run,
             )
         case 'conda':

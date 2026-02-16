@@ -244,6 +244,21 @@ class PipelineVersion:
         else:
             return self.base < other.base
 
+    LOG_MSG_PREFIX = 'omics pipeline version: '
+
+    @classmethod
+    def write_to_log(cls, path):
+        """ Append current version message to a file """
+        with open(path, 'a') as ofile:
+            try:
+                pl_version = PipelineVersion.current()
+            except Exception as e:
+                ofile.write(
+                    f'[WARNING] failed getting omics pipeline version: '
+                    f'{e.__class__.__name__}: {e}\n'
+                )
+            ofile.write(f'{cls.LOG_MSG_PREFIX}{pl_version}\n')
+
     @classmethod
     def current(cls):
         """ get the current version """
