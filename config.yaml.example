@@ -1,0 +1,15 @@
+# Suggested deployment configuration:
+jobs: 100
+local-cores: 1
+use-conda: true
+conda-frontend: mamba
+use-singularity: true
+default-resources: [cpus=1, mem_mb=4000, time_min=120]
+resources: [cpus=64, mem_mb=100000]
+max-status-checks-per-second: 1
+
+# checkout_file: Path to file that keep track of output files
+checkout_file: data/output_files_checkout.tsv
+
+# versions_file: Path to file that keep track of conda package versions
+versions_file: data/versions.json
