@@ -1,9 +1,11 @@
 from contextlib import (contextmanager, ExitStack, redirect_stdout,
                         redirect_stderr)
-from functools import wraps
+from functools import total_ordering, wraps
 from inspect import signature
 import json
 from pathlib import Path
+import re
+from subprocess import PIPE, run
 import sys
 import traceback
 
@@ -168,3 +170,132 @@ def test_logme(good='good', bad='bad'):
     print(good)
     print(bad, file=sys.stderr)
     raise RuntimeError('the ugly')
+
+
+@total_ordering
+class PipelineVersion:
+    """
+    Models pipeline versions
+
+    Assumes we're run out of a git repository and that there is at least one
+    annotated tag with a version name, e.g. "v1.2.3" in the history.
+    """
+    git_describe_long_pat = re.compile(
+        r'^v(?P<base>[0-9.]+)-(?P<commit_count>[0-9]+)-g(?P<hash>[0-9a-f]+)'
+        r'(-(?P<suffix>\w+))?$'
+    )
+
+    def __init__(self, version_string):
+        """
+        Get an instance from output of 'git describe --long'
+        """
+        m = self.git_describe_long_pat.match(version_string)
+        if m is None:
+            raise ValueError(f'invalid version string: {version_string}')
+        self.base = tuple(int(i) for i in m['base'].split('.'))
+        self.count = int(m['commit_count'])
+        self.hash = m['hash']
+        self.suffix = m['suffix']
+
+    def __repr__(self):
+        return f"{type(self).__name__}('{self}')"
+
+    def __str__(self):
+        base = '.'.join(map(str, self.base))
+        val = f'v{base}-{self.count}-g{self.hash}'
+        if self.suffix:
+            val += f'-{self.suffix}'
+        return val
+
+    def __hash__(self):
+        return hash((self.base, self.count, self.hash, self.suffix))
+
+    def __eq__(self, other):
+        if other is None:
+            return False
+        return all((
+            self.base == other.base,
+            self.count == other.count,
+            self.hash == other.hash,
+            self.suffix == other.suffix,
+        ))
+
+    def __lt__(self, other):
+        if self.base == self.base:
+            if self.count == other.count:
+                if self.hash == other.hash:
+                    # non-suffix sorts before suffix, otherwise
+                    # suffices are incomparable
+                    if self.suffix is None and other.suffix:
+                        return True
+                    elif self.suffix and other.suffix and self.suffix != other.suffix:  # noqa:E501
+
+                        raise ValueError(
+                            'versions differing by suffix are non-comparable'
+                        )
+                    else:
+                        False  # they're equal
+                else:
+                    raise ValueError(
+                        'versions differing only by hash are non-comparable'
+                    )
+            else:
+                return self.count < other.count
+        else:
+            return self.base < other.base
+
+    @classmethod
+    def current(cls):
+        """ get the current version """
+        return cls.from_commit(None)
+
+    @classmethod
+    def from_commit(cls, commit_hash):
+        """
+        Get version for given git commit hash
+
+        commit_hash [str]: This can also be None to get the current version.
+        """
+        cmd = ['git', 'describe', '--always', '--long']
+        if commit_hash is None:
+            cmd += ['--dirty', '--broken']
+        else:
+            cmd.append(commit_hash)
+
+        p = run(cmd, check=True, stdout=PIPE)
+        version_txt = p.stdout.decode().splitlines()
+        if len(version_txt) == 1:
+            return cls(version_txt[0].strip())
+        else:
+            raise RuntimeError(
+                f'parsing output of {cmd} failed {version_txt=}'
+            )
+
+    @classmethod
+    def from_timestamp(cls, timestamp):
+        if timestamp is None:
+            commit_hash = None
+        else:
+            commit_hash = cls.get_commit_before(timestamp)
+        return cls.from_commit(commit_hash)
+
+    @staticmethod
+    def get_commit_before(timestamp):
+        """
+        Get ID of most recent commit before given datetime
+
+        timestamp:
+            ISO-formatted str of timestamp or similar formatting that git
+            understands.
+
+        This assumes running from within a git repository.
+        """
+        cmd = ['git', 'rev-list', '--max-count', '1', '--before', timestamp]
+        p = run(cmd, check=True, stdout=PIPE)
+        lines = p.stdout.decode().splitlines()
+        if len(lines) == 1:
+            return lines[0].strip()
+        else:
+            raise RuntimeError(
+                f'expected single line of stdout but got {lines=}'
+            )
