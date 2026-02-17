@@ -3,9 +3,31 @@ channels:
   - bioconda
   - conda-forge
 dependencies:
-  - pip=25.1
-  - cupy=13.4.1
-  - python=3.10
+  - python=3.8
+  - samtools=1.6
+  - pip=22.1.2
+  - bzip2=1.0.8
+  - c-ares=1.18.1
+  - ca-certificates=2022.07.19
+  - certifi=2022.6.15
+  - curl=7.84.0
+  - krb5=1.19.2
+  - libcurl=7.84.0
+  - libedit=3.1.20210910
+  - libev=4.33
+  - libffi=3.3
+  - libnghttp2=1.46.0
+  - libssh2=1.10.0
+  - ncurses=6.3
+  - openssl=1.1.1q
+  - readline=8.1.2
+  - sqlite=3.39.2
+  - tk=8.6.12
+  - tzdata=2022a
+  - xz=5.2.5
+  - zlib=1.2.12
   - pip:
       - https://github.com/liu-congcong/MetaDecoder/releases/download/v1.0.13/metadecoder-1.0.13-py3-none-any.whl
+      - cupy-cuda116==10.6.0
+      - setuptools==65.3.0
 prefix: /home/kiledal/miniconda3/envs/metadecoder
