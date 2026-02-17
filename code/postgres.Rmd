@@ -1,6 +1,8 @@
 ---
 title: "R Notebook"
 output: html_notebook
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -38,17 +40,30 @@ get_pg_table_samples <- function(db, table, sampleid_col){
 
 Get the latest table from google drive
 ```{r}
+googledrive::drive_deauth()
+googledrive::drive_auth(path = "~/GLAMR/.secrets/glamr-425619-f6508150aa53.json")
+
 as_id("https://docs.google.com/spreadsheets/d/1z2IajV0Ay1lRjH9d0ibNBuf8PY0IbtEz/edit#gid=349037648") %>% 
   drive_download("import/Great_Lakes_Omics_Datasets.xlsx",overwrite = TRUE)
 ```
 
 
 ```{r}
-samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples",guess_max = 3000)
+biosamples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples",guess_max = 3000)
+seqsamples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "sequencing",guess_max = 3000)
 studies <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "studiesdatasets",range = "A1:V1000")
 coassemblies <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "coassembly_groups",guess_max = 3000)
 defined_sites <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "sampling_sites") %>% filter(!is.na(lat))
 units_and_notes <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "metadata_units_and_notes")
+
+# Merge biosamples and seqsamples table 
+samples <- seqsamples %>% 
+  select(SampleID = SeqSampleID,BioSampleID,sample_type,`SRA accession`,`NCBI Biosample`,GOLD_analysis_projectID,GOLD_sequencing_projectID,sequencing_type,amplicon_target,F_primer,R_primer) %>% 
+  left_join(biosamples %>% rename(BioSampleID = SampleID)) %>% 
+  mutate(sample = SampleID) %>% 
+  relocate(SampleID,sample, BioSampleID, StudyID, sample_type, collection_date, lat, lon) %>% 
+  filter(!is.na(SampleID))
+
 ```
 
 #### Write sample information to postgres database
@@ -70,6 +85,7 @@ cleaned_up_sample_table <- samples %>%
   filter(!is.na(SampleID))
 
 # Add GVHD samples 
+googlesheets4:::gs4_auth(path = "~/GLAMR/.secrets/glamr-425619-f6508150aa53.json")
 gvhd_samples <- googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/1jZLyocWDgjRKwjv0JgBQscLtgD2rIjkApoI2mjLGGqw/edit?gid=0#gid=0")
 
 # Add coassemblies 
@@ -77,7 +93,7 @@ coassemblies_clean <- coassemblies %>%
   mutate(sample_type = "metagenome") %>% 
   select(SampleID = "group_id",description,sample_type, coassembly_samples = "samples", notes)
 
-combined_sample_table <- bind_rows(cleaned_up_sample_table, gvhd_samples,coassemblies_clean)
+combined_sample_table <- bind_rows(cleaned_up_sample_table, gvhd_samples,coassemblies_clean) %>% mutate(sample = SampleID) %>% relocate(sample)
 
 # Write table to database
 sql('DROP VIEW public.bin_summary') %>% DBI::dbSendQuery(pg, .) # have to drop dependencies first
@@ -85,6 +101,66 @@ dbWriteTable(pg,"glamr_samples", combined_sample_table,overwrite = TRUE)
 studies %>% 
   filter(!is.na(dataset)) %>% 
   dbWriteTable(pg,"glamr_datasets", value = .,overwrite = TRUE)
+```
+
+
+# Create bin summary view table
+```{r}
+checkm_pg <- tbl(pg, "checkm")
+gtdb_pg <- tbl(pg, "GTDB")
+drep_pg <- tbl(pg, "drep")
+sampinfo_pg <- tbl(pg, "glamr_samples")
+
+
+bin_info_view <- checkm_pg %>% 
+  select(sample, bin, Completeness, Contamination, `Strain heterogeneity`) %>% 
+  #mutate(SampleID = str_remove(bin, "[A-z].*_d\\+$")) %>% 
+  left_join(sampinfo_pg %>% select(sample = "SampleID", StudyID)) %>% 
+  left_join(gtdb_pg %>% select(sample, bin, classification, domain, phylum, class, order, family, genus, species, red_value)) %>% 
+  left_join(drep_pg %>% select(sample, bin, secondary_cluster, is_cluster_rep)) %>% 
+  show_query()
+
+sql_query <- glue::glue_sql("
+CREATE VIEW bin_summary AS
+WITH extracted AS (
+  SELECT
+    \"bin\",
+    \"Completeness\",
+    \"Contamination\",
+    \"Strain heterogeneity\",
+    (regexp_matches(\"bin\", '^(.+_\\d+)_(.+?)_(\\d+)$'))[1] AS \"sample\",
+    (regexp_matches(\"bin\", '^(.+_\\d+)_(.+?)_(\\d+)$'))[2] AS \"binner\",
+    (regexp_matches(\"bin\", '^(.+_\\d+)_(.+?)_(\\d+)$'))[3] AS \"bin_number\"
+  FROM \"checkm\")
+SELECT
+  extracted.\"bin\",
+  extracted.\"sample\",
+  \"glamr_samples\".\"StudyID\",
+  extracted.\"binner\",
+  extracted.\"bin_number\",
+  extracted.\"Completeness\",
+  extracted.\"Contamination\",
+  extracted.\"Strain heterogeneity\",
+  \"GTDB\".\"classification\",
+  \"GTDB\".\"domain\",
+  \"GTDB\".\"phylum\",
+  \"GTDB\".\"class\",
+  \"GTDB\".\"order\",
+  \"GTDB\".\"family\",
+  \"GTDB\".\"genus\",
+  \"GTDB\".\"species\",
+  \"GTDB\".\"red_value\",
+  \"drep\".\"secondary_cluster\",
+  \"drep\".\"is_cluster_rep\"
+FROM extracted
+LEFT JOIN \"glamr_samples\"
+  ON extracted.\"sample\" = \"glamr_samples\".\"SampleID\"
+LEFT JOIN \"GTDB\"
+  ON extracted.\"bin\" = \"GTDB\".\"bin\"
+LEFT JOIN \"drep\"
+  ON extracted.\"bin\" = \"drep\".\"bin\";", .con = pg)
+
+DBI::dbSendQuery(pg, sql_query)
 ```
 
 
@@ -153,7 +229,6 @@ gc()
 
 ## Read counts
 ```{r}
-
 # Get read counts already loaded into the database
 existing_read_counts <- tbl(pg, "read_count") %>% collect()
 
@@ -610,6 +685,150 @@ sql('CREATE INDEX "read_mapping_LCA_summary_genus" ON "read_mapping_LCA_summary"
 ```
 
 
+## Kraken: GTDB
+```{r}
+# Get GTDB annotations that are already loaded into the database
+existing_krakenGTDB_reports <- get_pg_table_samples(pg, "krakenGTDB", "sample")
+
+# Find all local results
+krakenGTDB_reports_local <- Sys.glob("data/omics/*/*/kraken_fastp/gtdb_*_brackenReport.txt") %>% 
+  data.frame(path = .) %>% 
+  bind_cols(.,unglue::unglue_data(.$path,"data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample2}_brackenReport.txt")) %>% 
+  bind_cols(file.info(.$path))
+
+# Filter list of summary tsvs to only those not already loaded into the database
+new_krakenGTDB_reports <- krakenGTDB_reports_local %>% 
+  filter(
+      !sample %in% existing_krakenGTDB_reports$sample & (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_")))
+
+# Load an example summary tsv to get the column types
+abund_test <- read_tsv("data/omics/metagenomes/samp_447/kraken_fastp/gtdb_E20150029_brackenReport.txt",
+                       col_names = c("percent_abund","count_w_subtax", "count_direct","rank","tax_id","name")) %>% 
+  mutate(sample = "samp_447",name = str_remove(name, "^[a-z]__"))
+column_types <- as.col_spec(abund_test)
+
+# First upload to establish the table
+    # postgres_col_types = c(percent_abund = "numeric",
+    #                        count_w_subtax = "bigint",
+    #                        count_direct = "bigint",
+    #                        rank = "char",
+    #                        tax_id = "int",
+    #                        name = "text"
+    #                        )
+    # 
+    # read_tsv("data/omics/metagenomes/samp_447/kraken_fastp/gtdb_E20150029_brackenReport.txt",
+    #                    col_names = c("percent_abund","count_w_subtax", "count_direct","rank","tax_id","name")) %>% 
+    #   mutate(sample = "samp_447",name = str_remove(name, "^[a-z]__")) %>% 
+    #   relocate(sample) %>%
+    #   dbWriteTable(pg, "krakenGTDB", ., overwrite = FALSE, field.types = postgres_col_types)
+
+# Function for reading the summary tsv and saving it to the database
+read_krakenGTDB_to_pg <- function(path, sample) {
+  print(sample)
+  tryCatch({
+    read_tsv(path,
+             col_names = c("percent_abund","count_w_subtax", "count_direct","rank","tax_id","name")) %>% 
+      mutate(sample = sample,name = str_remove(name, "^[a-z]__")) %>% 
+      relocate(sample) %>% 
+      dbWriteTable(pg, "krakenGTDB", ., overwrite = FALSE, append = TRUE)
+  }, error = function(e) {
+    cat("Error occurred while processing file:", path, "\n")
+    cat("Error message:", conditionMessage(e), "\n")
+  })
+}
+
+#test <- read_drep_to_pg(drep_paths$path[1],sample = drep_paths$sample[1])
+
+
+# Load new summaries into the database
+# Drop existing indices [speeds up loading of new data]
+# sql('DROP INDEX public.krakenGTDB_tax_id') %>% DBI::dbSendQuery(pg, .)
+# sql('DROP INDEX public.krakenGTDBsample') %>% DBI::dbSendQuery(pg, .)
+# sql('DROP INDEX public.krakenGTDBname') %>% DBI::dbSendQuery(pg, .)
+
+# Append new data
+walk2(new_krakenGTDB_reports$path, 
+      new_krakenGTDB_reports$sample, 
+      read_krakenGTDB_to_pg,
+      .progress = TRUE)
+
+# Recreate indices
+sql('CREATE INDEX "krakenGTDB_tax_id" ON "krakenGTDB" ("tax_id")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "krakenGTDBsample" ON "krakenGTDB" ("sample")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "krakenGTDBname" ON "krakenGTDB" ("name")') %>% DBI::dbSendQuery(pg, .)
+```
+## Kraken: REFSEQ
+```{r}
+# Get GTDB annotations that are already loaded into the database
+existing_krakenREFSEQ_reports <- get_pg_table_samples(pg, "krakenREFSEQ", "sample")
+
+# Find all local results
+krakenREFSEQ_reports_local <- Sys.glob("data/omics/*/*/kraken_fastp/refseq_*_brackenReport.txt") %>% 
+  data.frame(path = .) %>% 
+  bind_cols(.,unglue::unglue_data(.$path,"data/omics/{sample_type}/{sample}/kraken_fastp/refseq_{sample2}_brackenReport.txt")) %>% 
+  bind_cols(file.info(.$path))
+
+# Filter list of summary tsvs to only those not already loaded into the database
+new_krakenREFSEQ_reports <- krakenREFSEQ_reports_local %>% 
+  filter(
+      !sample %in% existing_krakenREFSEQ_reports$sample & (str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_")))
+
+# Load an example summary tsv to get the column types
+abund_test <- read_tsv("data/omics/metagenomes/samp_447/kraken_fastp/refseq_E20150029_brackenReport.txt",
+                       col_names = c("percent_abund","count_w_subtax", "count_direct","rank","tax_id","name")) %>% 
+  mutate(sample = "samp_447",name = str_remove(name, "^[a-z]__"))
+column_types <- as.col_spec(abund_test)
+
+# First upload to establish the table
+    # postgres_col_types = c(percent_abund = "numeric",
+    #                        count_w_subtax = "bigint",
+    #                        count_direct = "bigint",
+    #                        rank = "text",
+    #                        tax_id = "int",
+    #                        name = "text"
+    #                        )
+    # 
+    # read_tsv("data/omics/metagenomes/samp_447/kraken_fastp/refseq_E20150029_brackenReport.txt",
+    #                    col_names = c("percent_abund","count_w_subtax", "count_direct","rank","tax_id","name")) %>%
+    #   mutate(sample = "samp_447",name = str_remove(name, "^[a-z]__")) %>%
+    #   relocate(sample) %>%
+    #   dbWriteTable(pg, "krakenREFSEQ", ., overwrite = FALSE, field.types = postgres_col_types)
+
+# Function for reading the summary tsv and saving it to the database
+read_krakenREFSEQ_to_pg <- function(path, sample) {
+  print(sample)
+  tryCatch({
+    read_tsv(path,
+             col_names = c("percent_abund","count_w_subtax", "count_direct","rank","tax_id","name")) %>% 
+      mutate(sample = sample,name = str_remove(name, "^[a-z]__")) %>% 
+      relocate(sample) %>% 
+      dbWriteTable(pg, "krakenREFSEQ", ., overwrite = FALSE, append = TRUE)
+  }, error = function(e) {
+    cat("Error occurred while processing file:", path, "\n")
+    cat("Error message:", conditionMessage(e), "\n")
+  })
+}
+
+#test <- read_drep_to_pg(drep_paths$path[1],sample = drep_paths$sample[1])
+
+
+# Load new summaries into the database
+# Drop existing indices [speeds up loading of new data]
+sql('DROP INDEX public.krakenREFSEQ_tax_id') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.krakenREFSEQsample') %>% DBI::dbSendQuery(pg, .)
+sql('DROP INDEX public.krakenREFSEQname') %>% DBI::dbSendQuery(pg, .)
+
+# Append new data
+walk2(new_krakenREFSEQ_reports$path, 
+      new_krakenREFSEQ_reports$sample, 
+      read_krakenREFSEQ_to_pg,
+      .progress = TRUE)
+
+# Recreate indices
+sql('CREATE INDEX "krakenREFSEQ_tax_id" ON "krakenREFSEQ" ("tax_id")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "krakenREFSEQsample" ON "krakenREFSEQ" ("sample")') %>% DBI::dbSendQuery(pg, .)
+sql('CREATE INDEX "krakenREFSEQname" ON "krakenREFSEQ" ("name")') %>% DBI::dbSendQuery(pg, .)
+```
 
 ## GTDB
 ```{r}
@@ -776,11 +995,6 @@ sql('CREATE INDEX "drep_sample" ON "drep" ("sample")') %>% DBI::dbSendQuery(pg, 
 
 
 # Contig bin membership
-
-```{r}
-contig_bins <- read_rds("data/omics/metagenomes/samp_447/bins/contig_bins.rds")
-```
-
 ```{r}
 contig_bin_membership <- tbl(pg, "contig_bin_membership")
 
@@ -1418,65 +1632,6 @@ sql('CREATE INDEX "amplicon_region_summary_sample" ON "amplicon_region_summary" 
 sql('CREATE INDEX "amplicon_region_summary_direction" ON "amplicon_region_summary" ("read_direction")') %>% DBI::dbSendQuery(pg, .)
 ```
 
-# Create bin summary view table
-```{r}
-checkm_pg <- tbl(pg, "checkm")
-gtdb_pg <- tbl(pg, "GTDB")
-drep_pg <- tbl(pg, "drep")
-sampinfo_pg <- tbl(pg, "glamr_samples")
-
-
-bin_info_view <- checkm_pg %>% 
-  select(sample, bin, Completeness, Contamination, `Strain heterogeneity`) %>% 
-  #mutate(SampleID = str_remove(bin, "[A-z].*_d\\+$")) %>% 
-  left_join(sampinfo_pg %>% select(sample = "SampleID", StudyID)) %>% 
-  left_join(gtdb_pg %>% select(sample, bin, classification, domain, phylum, class, order, family, genus, species, red_value)) %>% 
-  left_join(drep_pg %>% select(sample, bin, secondary_cluster, is_cluster_rep)) %>% 
-  show_query()
-
-sql_query <- glue::glue_sql("
-CREATE VIEW bin_summary AS
-WITH extracted AS (
-  SELECT
-    \"bin\",
-    \"Completeness\",
-    \"Contamination\",
-    \"Strain heterogeneity\",
-    (regexp_matches(\"bin\", '^(.+_\\d+)_(.+?)_(\\d+)$'))[1] AS \"sample\",
-    (regexp_matches(\"bin\", '^(.+_\\d+)_(.+?)_(\\d+)$'))[2] AS \"binner\",
-    (regexp_matches(\"bin\", '^(.+_\\d+)_(.+?)_(\\d+)$'))[3] AS \"bin_number\"
-  FROM \"checkm\")
-SELECT
-  extracted.\"bin\",
-  extracted.\"sample\",
-  \"glamr_samples\".\"StudyID\",
-  extracted.\"binner\",
-  extracted.\"bin_number\",
-  extracted.\"Completeness\",
-  extracted.\"Contamination\",
-  extracted.\"Strain heterogeneity\",
-  \"GTDB\".\"classification\",
-  \"GTDB\".\"domain\",
-  \"GTDB\".\"phylum\",
-  \"GTDB\".\"class\",
-  \"GTDB\".\"order\",
-  \"GTDB\".\"family\",
-  \"GTDB\".\"genus\",
-  \"GTDB\".\"species\",
-  \"GTDB\".\"red_value\",
-  \"drep\".\"secondary_cluster\",
-  \"drep\".\"is_cluster_rep\"
-FROM extracted
-LEFT JOIN \"glamr_samples\"
-  ON extracted.\"sample\" = \"glamr_samples\".\"SampleID\"
-LEFT JOIN \"GTDB\"
-  ON extracted.\"bin\" = \"GTDB\".\"bin\"
-LEFT JOIN \"drep\"
-  ON extracted.\"bin\" = \"drep\".\"bin\";", .con = pg)
-
-DBI::dbSendQuery(pg, sql_query)
-```
-
 
 # Tax abund summary from contig LCA
 ```{r}
@@ -1555,7 +1710,7 @@ existing_benchmark_samples <- tbl(pg,"benchmarks") %>%
   collect()
 
 # Find all benchmark tsvs
-benchmark_tsvs <- Sys.glob("benchmarks/*/*.txt") %>% 
+benchmark_txts <- Sys.glob("benchmarks/*/*.txt") %>% 
   data.frame(path = .) %>% 
   bind_cols(.,unglue::unglue_data(.$path,"benchmarks/{rule}/{filename}.txt")) %>% 
   mutate(sample = str_extract(filename, "(samp[_-]\\d+|GVHDsamp[_-]\\d+|coassembly[_-]\\d+)"),
@@ -1781,6 +1936,7 @@ antismash_assembly_files <- Sys.glob("data/omics/metagenomes/*/antismash8_assemb
   unglue::unglue_unnest(path, "data/omics/{sample_type}/{sample}/antismash8_assembly/summaries/region_summary.tsv",remove = FALSE)
 
 new_antismash_assembly_files <- antismash_assembly_files %>% 
+  ungroup() %>% 
   filter(!sample %in% antismash_assembly_samples$sample,
          str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_")) %>% 
   mutate(fs::file_info(path))
