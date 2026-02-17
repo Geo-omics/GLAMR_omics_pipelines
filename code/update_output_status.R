@@ -3,17 +3,12 @@
 setwd("~/GLAMR")
 library(tidyverse)
 library(DBI)
+library(googlesheets4)
 
-# googlesheets4::gs4_deauth()
-# googlesheets4::gs4_auth(email = "kiledal@umich.edu",cache = "~/GLAMR/.secrets")
+ # googlesheets4::gs4_deauth()
+ googlesheets4::gs4_auth(path = ".secrets/glamr-425619-f6508150aa53.json")
 
-options(gargle_oath_cache = "~/GLAMR/.secrets",
-        gargle_oauth_email = "kiledal@umich.edu",
-        use_oob = TRUE,
-        gargle_oauth_client_type = "web")
-
-
-output_key <- googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/1rkLra_xXPHjYinXzY1UpC6Mg5nzybcvG3HcGQaW8Tvc/edit#gid=0") %>% 
+output_key <- googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/1rkLra_xXPHjYinXzY1UpC6Mg5nzybcvG3HcGQaW8Tvc/edit#gid=0",) %>% 
   separate_longer_delim(sample_types,delim = ",")
 
 pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "localhost", port = "5432", user = "glamr_admin", password = "glamr2023")
