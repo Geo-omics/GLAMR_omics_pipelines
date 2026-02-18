@@ -7,3 +7,7 @@ default-resources: [cpus=1, mem_mb=4000, time_min=120]
 resources: [cpus=64, mem_mb=100000]
 max-status-checks-per-second: 1
 work_dir: /tmp
+checkout_file: data/output_files_checkout.tsv
+versions_file: data/versions.json
+collect_benchmarks: data/benchmarks.tsv
+ncbi_api_key_file: ncbi_api.key
