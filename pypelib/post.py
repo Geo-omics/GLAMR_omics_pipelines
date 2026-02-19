@@ -628,7 +628,68 @@ def update_versions_file(rules, versions_file=None, dry_run=False):
         print('[OK] no changes to versions file')
 
 
-def post_production(log, config, rules=None, data_root=None, dry_run=False):
+def load_benchmark(path):
+    with open(path) as ifile:
+        head = ifile.readline().split()
+        row = ifile.readline().split()
+        return dict(zip(head, row, strict=True))
+
+
+def collect_benchmarks(workflow, dry_run=False):
+    """
+    Collect benchmarks from jobs into single table with added job data
+
+    This does nothing unless 'collect_benchmark' set in the config.
+    """
+    if outpath := workflow.config.get('collect_benchmarks'):
+        outpath = Path(outpath)
+    elif dry_run:
+        outpath = None
+    else:
+        return
+
+    # columns we're adding
+    base_cols = ['rule', 'wildcards', 'timestamp', 'threads', 'jobsize']
+    # columns from benchmarks
+    bm_cols = ['s', 'h:m:s', 'max_rss', 'max_vms', 'max_uss', 'max_pss',
+               'io_in', 'io_out', 'mean_load', 'cpu_time']
+    rows = []
+    for j in filter(lambda x: bool(x.benchmark), workflow.dag.finished_jobs):
+        bm_file = Path(j.benchmark)
+        jobsize = sum(
+            Path(i).stat().st_size
+            for i in j.input
+        )
+        jobstats = load_benchmark(bm_file)
+        bm_mtime = datetime.fromtimestamp(bm_file.stat().st_mtime)
+        rows.append([
+            j.name,
+            ','.join(j.wildcards),
+            bm_mtime.isoformat(),
+            str(j.threads),
+            str(jobsize),
+            *(jobstats[col] for col in bm_cols)
+        ])
+
+    with ExitStack() as estack:
+        if dry_run:
+            ofile = None
+        else:
+            ofile = estack.enter_context(outpath.open('a'))
+
+        if dry_run or ofile.tell() == 0:
+            # write header if it's a new file
+            print(*base_cols, *bm_cols, sep='\t', file=ofile)
+
+        for row in rows:
+            print(*row, sep='\t', file=ofile)
+
+    if not dry_run:
+        print(f'[OK] {len(rows)} benchmarks written to {outpath}')
+
+
+def post_production(log, config, rules=None, workflow=None, *, data_root=None,
+                    dry_run=False):
     """
     Post-snakemake run processing
 
@@ -704,6 +765,9 @@ def post_production(log, config, rules=None, data_root=None, dry_run=False):
                 if name in outputs and rule.rule.conda_env
             ]
         update_versions_file(used_conda_rules, versions_file, dry_run)
+
+    if workflow:
+        collect_benchmarks(workflow, dry_run=dry_run)
 
 
 def replay(log_dir, data_root=None, checkout_file=None, dry_run=False,

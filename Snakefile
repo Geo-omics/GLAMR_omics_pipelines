@@ -40,8 +40,8 @@ localrules: make_rulegraph, link_reads_w_sample_names
 onstart: PipelineVersion.write_to_log(log[0])
 
 # Post-production: no-op unless checkout_file and/or version_file are configured
-onerror: post_production(log[0], config, rules)
-onsuccess: post_production(log[0], config, rules)
+onerror: post_production(log[0], config, rules, workflow)
+onsuccess: post_production(log[0], config, rules, workflow)
 
 
 rule make_rulegraph:
@@ -3854,6 +3854,7 @@ rule remove_primers_pe:
     params:
         reads_dir = subpath(output.fwd, parent=True)
     conda: "config/conda_yaml/cutadapt.yaml"
+    benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
     log: "logs/remove_primers/{sample_type}-{sample}.log"
     run:
         pypelib.amplicon.remove_primers.main_paired(
@@ -3875,6 +3876,7 @@ rule remove_primers_se:
     params:
         reads_dir = subpath(output.single, parent=True)
     conda: "config/conda_yaml/cutadapt.yaml"
+    benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
     log: "logs/remove_primers/{sample_type}-{sample}.log"
     run:
         pypelib.amplicon.remove_primers.main_single(
