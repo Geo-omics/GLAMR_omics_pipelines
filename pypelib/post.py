@@ -541,12 +541,17 @@ class VersionInfoFile:
             ofile.write('\n')
 
 
-def update_versions_file(rules, versions_file=None, dry_run=False):
+def update_versions_file(workflow, dry_run=False):
     """
     Make new or update an existing version file
 
     This will only work from within a proper snakemake run.
     """
+    versions_file = workflow.config.get('version_file')
+    if versions_file is None and not dry_run:
+        # not configured, nothing to be done
+        return
+
     try:
         from snakemake.deployment.conda import Env
         from snakemake.settings.types import DeploymentMethod
@@ -558,15 +563,10 @@ def update_versions_file(rules, versions_file=None, dry_run=False):
         print('[WARNING] conda is not installed, version file not updated')
         # return
 
-    if rules:
-        if DeploymentMethod.CONDA not in rules[0].workflow.deployment_settings.deployment_method:  # noqa:E501
-            print('[WARNING] conda is not a deployment method, versions file '
-                  'not updated')
-            return
-    else:
-        # no rules used conda but the snakemake runtime environment may still
-        # be conda
-        pass
+    if DeploymentMethod.CONDA not in workflow.deployment_settings.deployment_method:  # noqa:E501
+        print('[WARNING] conda is not a deployment method, versions file '
+              'not updated')
+        return
 
     # get pipeline version
     pipeline_version = PipelineVersion.current()
@@ -580,6 +580,13 @@ def update_versions_file(rules, versions_file=None, dry_run=False):
     else:
         # start from scratch
         vinfo = VersionInfoFile()
+
+    # distinct conda-using rules used for finished jobs
+    rules = set(
+        job.rule for job
+        in workflow.dag.finished_jobs
+        if job.rule.conda_env
+    )
 
     envs = [Path(BASE_SNAKEMAKE_CONDA_ENV)]
     env_rules_map = {}  # tracks which rules use which conda env
@@ -688,7 +695,7 @@ def collect_benchmarks(workflow, dry_run=False):
         print(f'[OK] {len(rows)} benchmarks written to {outpath}')
 
 
-def post_production(log, config, rules=None, workflow=None, *, data_root=None,
+def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
                     dry_run=False):
     """
     Post-snakemake run processing
@@ -701,26 +708,23 @@ def post_production(log, config, rules=None, workflow=None, *, data_root=None,
 
     log:
         str or PathLike to snakemake log file.
-    config:
-        Snakefile's config.  This should have keys "checkout_file" and/or
-        "versions_file".  If both are missing this function does not do
-        anything unless dry_run is True.
-    rules:
-        The snakemake rules variable, passed from the Snakefile.
-
-    checkout_file:
-        str or PathLike to two-column tab-separated text file listing output
-        files and their modification times.  This can be None if no such file
-        is configured.
+    workflow:
+        Workflow instance passed from Snakefile.  If this is None, then some
+        functionality will be disabled.
     data_root:
         The data directory.  If None, this will be derived from path to log
         file.
+    checkout_file:
+        str or PathLike to two-column tab-separated text file listing output
+        files and their modification times.  This can be None if no such file
+        is configured.  This will take precedence if a workflow is also passed
+        and has the checkout_file config setting set.
     dry_run [bool]:
         Set to True for testing if no suitable checkout file is available.
         This will print output to stdout.
     """
-    checkout_file = config.get('checkout_file')
-    versions_file = config.get('versions_file')
+    if workflow is not None:
+        checkout_file = checkout_file or workflow.config.get('checkout_file')
 
     if checkout_file or dry_run:
         log = Path(log)
@@ -753,18 +757,8 @@ def post_production(log, config, rules=None, workflow=None, *, data_root=None,
         else:
             print('[post production] no output files per log')
 
-    if versions_file or dry_run:
-        if rules is None:
-            used_conda_rules = []
-        else:
-            # get rules with conda envs that were used to produce output
-            # rule.rule: the outer rule is a RuleProxy object
-            used_conda_rules = [
-                rule.rule
-                for name, rule in rules._rules.items()
-                if name in outputs and rule.rule.conda_env
-            ]
-        update_versions_file(used_conda_rules, versions_file, dry_run)
+    if workflow and workflow.config.get('version_file'):
+        update_versions_file(workflow, dry_run=dry_run)
 
     if workflow:
         collect_benchmarks(workflow, dry_run=dry_run)
@@ -797,7 +791,8 @@ def replay(log_dir, data_root=None, checkout_file=None, dry_run=False,
         try:
             post_production(
                 i,
-                dict(checkout_file=checkout_file),  # config stand-in
+                workflow=None,
+                checkout_file=checkout_file,
                 dry_run=dry_run,
             )
         except JobIdReused as e:
@@ -923,12 +918,11 @@ if __name__ == '__main__':
             if not log.is_file():
                 argp.error(f'no such file: {log}')
             config = {}
-            if args.checkout_file:
-                config['checkout_file'] = args.checkout_file
             post_production(
                 log,
-                config,
+                workflow=None,
                 data_root=Path(args.data_root),
+                checkout_file=args.checkout_file,
                 dry_run=args.dry_run,
             )
         case 'conda':
