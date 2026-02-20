@@ -262,7 +262,12 @@ def update_omics_checkout(
             idx = bisect.bisect(git_commits, mtime, key=lambda x: x[0])
             commit = git_commits[idx - 1][1]
             if commit not in version_str_cache:
-                version_str_cache[commit] = PipelineVersion.from_commit(commit)
+                try:
+                    version_str_cache[commit] = PipelineVersion.from_commit(commit)  # noqa:E501
+                except Exception:
+                    print(f'[DEBUG] getting pipeline version for {commit} for '
+                          f'{mtime=} {rule=} {file00=}')
+                    raise
             version = version_str_cache[commit]
 
         new_data.append((mtime, version, rule, relpath))

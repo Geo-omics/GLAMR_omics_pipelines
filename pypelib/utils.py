@@ -222,6 +222,8 @@ class PipelineVersion:
         """
         m = self.git_describe_long_pat.match(version_string)
         if m is None:
+            # e.g. no version tag was set before and git describe only returns
+            # an abbreviated hash
             raise ValueError(f'invalid version string: {version_string}')
         self.base = tuple(int(i) for i in m['base'].split('.'))
         self.count = int(m['commit_count'])
