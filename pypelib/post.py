@@ -740,7 +740,14 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
         if not data_root.is_dir():
             raise FileNotFoundError(f'no such directory: {data_root}')
 
-        outputs, pl_version = get_info_from_log(log)
+        if False and workflow:
+            dag = workflow.dag
+            breakpoint()
+            outputs = ... 
+            pl_version = PipelineVersion.current()
+        else:
+            outputs, pl_version = get_info_from_log(log)
+
         if outputs and checkout_file or dry_run:
             stats = update_omics_checkout(
                 outputs,

@@ -16,6 +16,7 @@ import pypelib.amplicon.hmm_check_asvs
 import pypelib.amplicon.hmm_summarize
 import pypelib.amplicon.remove_primers
 import pypelib.amplicon.tabulate_targets
+from pypelib.config import finish_config_setup
 from pypelib.post import post_production
 import pypelib.raw_reads
 from pypelib.raw_reads import parse_runinfo
@@ -24,7 +25,7 @@ from pypelib.utils import load_stats, logme, PipelineVersion, save_error_file
 
 
 configfile: "config.yaml"
-config.setdefault('binning_bam_dir', '/nosuchdirectory')
+finish_config_setup(config)
 
 report: "code/report/workflow.rst"
 
