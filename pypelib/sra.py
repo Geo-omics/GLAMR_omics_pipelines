@@ -19,6 +19,12 @@ if api_key := environ.get('NCBI_API_KEY'):
     Entrez.api_key = api_key
 
 
+def set_api_key(key):
+    # allow the env to override this
+    if key and not Entrez.api_key:
+        Entrez.api_key = key
+
+
 def el2dict(elem):
     """ Convert ElementTree into a dict """
     if (text := elem.text) is not None:

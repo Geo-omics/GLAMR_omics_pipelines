@@ -16,6 +16,7 @@ import pypelib.amplicon.hmm_check_asvs
 import pypelib.amplicon.hmm_summarize
 import pypelib.amplicon.remove_primers
 import pypelib.amplicon.tabulate_targets
+from pypelib.config import finish_config_setup
 from pypelib.post import post_production
 import pypelib.raw_reads
 from pypelib.raw_reads import parse_runinfo
@@ -24,7 +25,7 @@ from pypelib.utils import load_stats, logme, PipelineVersion, save_error_file
 
 
 configfile: "config.yaml"
-config.setdefault('binning_bam_dir', '/nosuchdirectory')
+finish_config_setup(config)
 
 report: "code/report/workflow.rst"
 
@@ -79,11 +80,11 @@ rule get_sra_metadata:
     output: "data/omics/{sample_type}/{sample}/reads/sra_metadata.xml"
     params:
         accn = parse_input(input.accession, parse_accession),
-        ncbi_api_key = os.environ.get('NCBI_API_KEY', '')
     log: "logs/get_sra_metadata/{sample_type}.{sample}.err"
     resources: time_min = 5, heavy_network = 1, cpus = 1
     run:
         with save_error_file(log[0]):
+            pypelib.sra.set_api_key(config.get('ncbi_api_key'))
             with pypelib.sra.get_entry_raw(params.accn, multi=True, slow=True) as data:
                 with open(output[0], 'wb') as ofile:
                     ofile.write(data.read())
@@ -96,7 +97,6 @@ rule get_reads_prep:
         runinfo0 = "data/omics/{sample_type}/{sample}/reads/runinfo0.json",
         runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.json"
     params:
-        ncbi_api_key = os.environ.get('NCBI_API_KEY', '')
     conda: "config/conda_yaml/kingfisher.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-prep.log"
     resources: time_min = 5, heavy_network = 1, cpus = 1
@@ -104,6 +104,8 @@ rule get_reads_prep:
         with logme(log):
             if input.sra_metadata:
                 # SRA dataset
+                ncbi_api_key = config.get('ncbi_api_key', '')
+                pypelib.sra.set_api_key(ncbi_api_key)
                 data = pypelib.sra.get_entry(file=str(input.sra_metadata), multi=True, slow=True)
                 with open(rules.get_sra_metadata.input.accession.format(**wildcards)) as ifile:
                     accn = parse_accession(ifile)
@@ -118,13 +120,12 @@ rule get_reads_prep:
                 accn_str = accn + ' => ' + srr_accn
 
                 print(f'Accession for {wildcards.sample}: {accn_str}')
+                kingfisher_slowdown = 'yes' if config.get('kingfisher_slowdown') else ''
                 shell("""
                     . code/shell_prelude {log}
 
-                    [[ -n {params.ncbi_api_key:q} ]] && export NCBI_API_KEY={params.ncbi_api_key:q}
-                    [[ -v NCBI_API_KEY ]] || echo "[NOTICE] environment variable NCBI_API_KEY is not set"
-
-                    [[ -n "${{KINGFISHER_SLEEP:-}}" ]] && sleep $((RANDOM % 30))
+                    [[ -n "{ncbi_api_key:q}" ]] && export NCBI_API_KEY={ncbi_api_key:q}
+                    [[ -n "{kingfisher_slowdown}" ]] && sleep $((RANDOM % 30))
                     kingfisher annotate -r {srr_accn:q} -a -f json -o {output.runinfo}
                 """)
                 with open(output.runinfo) as ifile:
@@ -263,39 +264,41 @@ rule get_reads:
     params:
         read_dir = subpath(input.runinfo, parent=True),
         srr_accn = parse_input(input.runinfo, parse_runinfo, key='run'),
-        ncbi_api_key = os.environ.get('NCBI_API_KEY', '')
     conda: "config/conda_yaml/kingfisher.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-download.log"
     resources: time_min = 5000, heavy_network = 1, cpus = 8
-    shell:
-        """
-        . code/shell_prelude {log}
+    run:
+        ncbi_api_key = config.get('ncbi_api_key', '')
+        kingfisher_slowdown = 'yes' if config.get('kingfisher_slowdown') else ''
+        shell("""
+            . code/shell_prelude {log}
 
-        [[ -n {params.ncbi_api_key:q} ]] && export NCBI_API_KEY={params.ncbi_api_key:q}
-        [[ -v NCBI_API_KEY ]] || echo "[NOTICE] environment variable NCBI_API_KEY is not set"
+            # NOTE: :q avoids code injection but still need the "" to avoid
+            # shell syntax error e.g. [[ -n  ]] if variable is empty str
+            [[ -n "{ncbi_api_key:q}" ]] && export NCBI_API_KEY={ncbi_api_key:q}
 
-        [[ -n "${{KINGFISHER_SLEEP:-}}" ]] && sleep $((RANDOM % 30))
+            [[ -n "{kingfisher_slowdown}" ]] && sleep $((RANDOM % 30))
 
-        # Adding methods in same order as in kingfisher documentation:
-        command -v prefetch && have_sra_toolkit=true || have_sra_toolkit=false
-        meths=()
-        command -v ascp && meths=(ena-ascp) || true
-        $have_sra_toolkit && meths=("${{meths[@]}}" ena-ftp prefetch) || true
-        command -v aria2c && $have_sra_toolkit && meths=("${{meths[@]}}" aws-http) || true
-        $have_sra_toolkit && meths=("${{meths[@]}}" aws-cp) || true
-        echo "Available methods: ${{meths[*]}}"
+            # Adding methods in same order as in kingfisher documentation:
+            command -v prefetch && have_sra_toolkit=true || have_sra_toolkit=false
+            meths=()
+            command -v ascp && meths=(ena-ascp) || true
+            $have_sra_toolkit && meths=("${{meths[@]}}" ena-ftp prefetch) || true
+            command -v aria2c && $have_sra_toolkit && meths=("${{meths[@]}}" aws-http) || true
+            $have_sra_toolkit && meths=("${{meths[@]}}" aws-cp) || true
+            echo "Available methods: ${{meths[*]}}"
 
-        echo "Using accession {params.srr_accn:q}"
-        kingfisher get \
-            --download-threads {resources.cpus} \
-            --extraction-threads {resources.cpus} \
-            --hide-download-progress \
-            -r {params.srr_accn:q} \
-            -m ${{meths[@]}}  \
-            --output-format-possibilities fastq.gz \
-            --output-directory {output.download_dir} \
-            --check-md5sums
-        """
+            echo "Using accession {params.srr_accn:q}"
+            kingfisher get \
+                --download-threads {resources.cpus} \
+                --extraction-threads {resources.cpus} \
+                --hide-download-progress \
+                -r {params.srr_accn:q} \
+                -m ${{meths[@]}}  \
+                --output-format-possibilities fastq.gz \
+                --output-directory {output.download_dir} \
+                --check-md5sums
+        """)
 
 checkpoint get_runinfo:
     input: rules.get_reads_prep.output.runinfo
