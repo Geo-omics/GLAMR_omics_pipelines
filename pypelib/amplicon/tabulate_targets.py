@@ -70,7 +70,7 @@ def main(infiles, output=None, dataset=None, project_dir=None):
         samp_id, row = item
         try:
             snum = int(samp_id.removeprefix('samp_'))
-        finally:
+        except ValueError:
             snum = samp_id
         return (row['layout'], row['model_name'], row['fwd_primer'],
                 row['rev_primer'], snum)
