@@ -728,8 +728,17 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
         Set to True for testing if no suitable checkout file is available.
         This will print output to stdout.
     """
-    if workflow is not None:
-        checkout_file = checkout_file or workflow.config.get('checkout_file')
+    if workflow:
+        if not any((
+            workflow.config.get('checkout_file'),
+            workflow.config.get('versions_file'),
+            workflow.config.get('collect_benchmarks'),
+        )):
+            # nothing to do
+            return
+
+    if workflow:
+        checkout_file = workflow.config.get('checkout_file')
 
     if checkout_file or dry_run:
         log = Path(log)
@@ -740,7 +749,13 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
         if not data_root.is_dir():
             raise FileNotFoundError(f'no such directory: {data_root}')
 
-        outputs, pl_version = get_info_from_log(log)
+        if workflow:
+            outputs = {j.name: j.output for j in workflow.dag.finished_jobs}
+            pl_version = PipelineVersion.current()
+        else:
+            # replay from log file
+            outputs, pl_version = get_info_from_log(log)
+
         if outputs and checkout_file or dry_run:
             stats = update_omics_checkout(
                 outputs,
