@@ -1,14 +1,19 @@
-from contextlib import (contextmanager, ExitStack, redirect_stdout,
+from contextlib import (chdir, contextmanager, ExitStack, redirect_stdout,
                         redirect_stderr)
 from functools import total_ordering, wraps
+import gzip
 from inspect import signature
 import json
+from itertools import batched
 from os import PathLike
 from pathlib import Path
+import random
 import re
 import shutil
 from subprocess import PIPE, run
 import sys
+import tarfile
+from tempfile import TemporaryDirectory
 import traceback
 
 
@@ -347,3 +352,82 @@ class PipelineVersion:
             raise RuntimeError(
                 f'expected single line of stdout but got {lines=}'
             )
+
+
+def make_test_dataset(
+    parent,
+    num_samples=3,
+    num_reads=1500,
+    sample_type='amplicons',
+    random_seed=67,
+):
+    """ compile a small test dataset from a given parent data set """
+    random.seed(random_seed)
+    parent_dir = Path('data/projects/') / parent
+    parent_samp_dirs = random.sample(
+        sorted((parent_dir / sample_type).glob('samp_*')),
+        k=num_samples,
+    )
+    parent_raws = [
+        (i.name, list((i / 'reads').glob('raw_*_reads.fastq.gz')))
+        for i in parent_samp_dirs
+    ]
+
+    min_num_reads = int(num_reads * 0.8)
+    max_num_reads = int(num_reads * 1.2)
+    sra_accn_pat = re.compile(rb'@SRR[0-9]+')  # expected start of fastq record
+
+    pref, _, number = parent.partition('_')
+    name = f'{pref}_T{number}'  # name of test data set
+    with TemporaryDirectory() as tmpd:
+        tmpd = Path(tmpd)
+        samp_dir = tmpd / 'data' / 'omics' / sample_type
+        samp_dir.mkdir(parents=True)
+        link_dir = tmpd / 'data' / 'projects' / name / sample_type
+        link_dir.mkdir(parents=True)
+
+        for parent_samp, parent_raw_files in parent_raws:
+            pref, _, samp_number = parent_samp.partition('_')
+            samp_name = f'{pref}_T{samp_number}'
+            test_accn = b'@TEST' + str(samp_number).encode()
+
+            reads_dir = samp_dir / samp_name / 'reads'
+            reads_dir.mkdir(parents=True)
+            link_target = Path('..') / '..' / '..' / 'omics' / sample_type / samp_name  # noqa:E501
+            (link_dir / samp_name).symlink_to(link_target)
+
+            read_count = random.randrange(min_num_reads, max_num_reads)
+            for p in parent_raw_files:
+                test_raw = reads_dir / p.name
+                with gzip.open(p) as ifile, gzip.open(test_raw, 'wb') as ofile:
+                    # 4 lines per read in fastq file
+                    reads = batched(ifile, 4, strict=True)
+                    for num, (head, seq, plus, qual) in enumerate(reads):
+                        if num >= read_count:
+                            break
+
+                        # also replacing these to avoid any confusion w/read
+                        # data
+                        head = sra_accn_pat.sub(test_accn, head)
+                        ofile.write(head)
+                        ofile.write(seq)
+                        ofile.write(plus)
+                        ofile.write(qual)
+
+        def reset(tarinfo):
+            tarinfo.uid = tarinfo.gid = 0
+            tarinfo.uname = tarinfo.gname = 'root'
+            return tarinfo
+
+        tarpath = Path(f'{name}.tar.gz').absolute()
+        with chdir(tmpd):
+            print(f'Writing {tarpath.name} ...', end='', flush=True)
+            with tarfile.open(tarpath, 'w:gz') as tarf:
+                tarf.add('data', filter=reset)
+    print('[OK]')
+    print('To unpack test data in the real data location, run:')
+    if Path('data').is_symlink():
+        # Have to unpack at the real place as tar -xf would overwrite the
+        # symlink, creating completely new "data" directory
+        print('  $ cd', Path('data').resolve().parent)
+    print('  $ tar -xf', tarpath)
