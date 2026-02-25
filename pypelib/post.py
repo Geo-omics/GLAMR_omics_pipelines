@@ -369,9 +369,21 @@ def get_conda_env_package_versions(env):
     return versions
 
 
+def get_container_info(container_img):
+    """
+    Get info bits from a container for the versions file
+
+    container_img: a snakemake (singularity) Image instance
+    """
+    cmd = ['apptainer', 'inspect', '--json', container_img.path]
+    p = run(cmd, stdout=PIPE, check=True)
+    data = json.loads(p.stdout)
+    return data['data']['attributes']['labels']
+
+
 class EnvPackageInfo:
     """
-    Information on a conda environment
+    Information on a runtime environment
 
     Installed package versions and which snakemake rules used the env.
     """
@@ -558,19 +570,15 @@ def update_versions_file(workflow, dry_run=False):
         return
 
     try:
-        from snakemake.deployment.conda import Env
         from snakemake.settings.types import DeploymentMethod
     except ImportError:
         print('[WARNING] Snakemake not installed, versions file not updated')
         return
 
-    if shutil.which('conda') is None:
-        print('[WARNING] conda is not installed, version file not updated')
-        # return
-
-    if DeploymentMethod.CONDA not in workflow.deployment_settings.deployment_method:  # noqa:E501
-        print('[WARNING] conda is not a deployment method, versions file '
-              'not updated')
+    meths = workflow.deployment_settings.deployment_method
+    if meths.isdisjoint({DeploymentMethod.APPTAINER, DeploymentMethod.CONDA}):
+        print('[WARNING] apptainer/conda not used as deployment methods, '
+              'versions file not updated')
         return
 
     # get pipeline version
@@ -586,45 +594,52 @@ def update_versions_file(workflow, dry_run=False):
         # start from scratch
         vinfo = VersionInfoFile()
 
-    # distinct conda-using rules used for finished jobs
-    rules = set(
-        job.rule for job
-        in workflow.dag.finished_jobs
-        if job.rule.conda_env
-    )
-
-    envs = [Path(BASE_SNAKEMAKE_CONDA_ENV)]
-    env_rules_map = {}  # tracks which rules use which conda env
-    for rule in rules:
-        if rule.conda_env in env_rules_map:
-            env_rules_map[rule.conda_env].append(rule.name)
+    rtenvs = {('conda_env', Path(BASE_SNAKEMAKE_CONDA_ENV)): None}
+    # get distinct container or conda-using rules used for finished jobs
+    for j in workflow.dag.finished_jobs:
+        if j.conda_env:
+            key = ('conda_env', j.conda_env)
+        elif j.container_img:
+            key = ('container', j.container_img)
         else:
-            env_rules_map[rule.conda_env] = [rule.name]
-            envs.append(Env(rule.workflow, env_file=rule.conda_env))
+            continue
+        if key not in rtenvs:
+            rtenvs[key] = set()
+        rtenvs[key].add(j.rule.name)
 
     # get currently installed package versions
-    for env in envs:
-        if isinstance(env, Path):
-            env_name = env.stem
-            env_rules = None
-        else:
-            # snakemake Env
-            env_name = Path(env.file.path).stem
-            env_rules = env_rules_map[env.file.path]
+    for (env_type, rtenv_obj), rules in rtenvs.items():
+        if env_type == 'conda_env':
+            if isinstance(rtenv_obj, Path):
+                conda_env = rtenv_obj  # a pathlib.Path
+                env_name = conda_env.stem
+            else:
+                conda_env = rtenv_obj  # a snakemake Env instance
+                # snakemake doesn't given them proper names anywhere
+                env_name = Path(conda_env.file.path).stem
 
-        try:
-            packages = get_conda_env_package_versions(env)
-        except NoConda as e:
-            print(f'[WARNING] {e}: not updating versions file for env '
-                  f'"{env_name}"')
-            continue
+            try:
+                packages = get_conda_env_package_versions(conda_env)
+            except NoConda as e:
+                print(f'[WARNING] {e}: not updating versions file for env '
+                      f'"{env_name}"')
+                continue
+
+        elif env_type == 'container':
+            container = rtenv_obj  # a snakemake (singularity) Image instance
+            env_name = rtenv_obj.url
+            # get the "label" not any installed package versions (FIXME)
+            packages = get_container_info(container)
+
+        else:
+            raise ValueError('invalid env type')
 
         if not packages:
             continue
 
         vinfo.update(
             pipeline_version,
-            EnvPackageInfo(env_name, rules=env_rules, packages=packages)
+            EnvPackageInfo(env_name, rules=rules, packages=packages)
         )
 
     if vinfo.changed:
