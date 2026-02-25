@@ -40,7 +40,7 @@ localrules: make_rulegraph, link_reads_w_sample_names
 
 onstart: PipelineVersion.write_to_log(log[0])
 
-# Post-production: no-op unless checkout_file and/or version_file are configured
+# Post-production: no-op unless checkout_file and/or versions_file are configured
 onerror: post_production(log[0], workflow)
 onsuccess: post_production(log[0], workflow)
 

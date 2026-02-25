@@ -432,8 +432,8 @@ class VersionInfoFile:
         self.changed = False
 
     @classmethod
-    def from_file(cls, version_file_path):
-        with open(version_file_path) as ifile:
+    def from_file(cls, versions_file_path):
+        with open(versions_file_path) as ifile:
             file_data = json.load(ifile)
 
         data = {}
@@ -552,7 +552,7 @@ def update_versions_file(workflow, dry_run=False):
 
     This will only work from within a proper snakemake run.
     """
-    versions_file = workflow.config.get('version_file')
+    versions_file = workflow.config.get('versions_file')
     if versions_file is None and not dry_run:
         # not configured, nothing to be done
         return
@@ -777,7 +777,7 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
         else:
             print('[post production] no output files per log')
 
-    if workflow and workflow.config.get('version_file'):
+    if workflow and workflow.config.get('versions_file'):
         update_versions_file(workflow, dry_run=dry_run)
 
     if workflow:
