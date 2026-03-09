@@ -4,7 +4,7 @@ output: html_notebook
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_knit$set(root.dir = here::here("~/GLAMR"))
+knitr::opts_knit$set(root.dir = here::here("~/projects/GLAMR_omics_pipelines/"))
 library(tidyverse)
 library(glue)
 library(googledrive)
@@ -76,8 +76,10 @@ import_table <- files_to_import %>%
          compressed_staged_read_fp = if_else(is_compressed == TRUE, staged_read_fp, paste0(staged_read_fp,".gz")),
          sample_dir = glue("data/omics/{sample_type}s/{SampleID}"),
          raw_reads_dir = glue("{sample_dir}/reads"),
-         imported_read_fp = glue("{raw_reads_dir}/raw_{read_dir}_reads.fastq.gz"),
-         previously_imported = file.exists(imported_read_fp))
+         imported_read_fp = case_when(str_detect(staged_read_fp, "pacbio[hH]ifi") ~ glue("{raw_reads_dir}/pacbio-hifi_reads.fastq.gz"),
+                                      .default = glue("{raw_reads_dir}/raw_{read_dir}_reads.fastq.gz")),
+         previously_imported = file.exists(imported_read_fp)) %>% 
+  filter(read_dir == "fwd")
 
 new_imports <- import_table %>% 
    filter(previously_imported == FALSE,
@@ -1582,6 +1584,50 @@ files_to_import <- reads %>%
            StudyID = "set_122") %>% 
   distinct()
 ```
+
+
+## 202602: Mock community (PacBio)
+```{r}
+
+file_info <- Sys.glob("import/staging/202602_mock_community_pacbio/*.fq.gz") %>% 
+  data.frame(path = .) %>% 
+  unglue::unglue_unnest(path, "import/staging/202602_mock_community_pacbio/{prefix}_sample_{sample_num}.fq.gz",remove = FALSE) %>% 
+  type_convert() %>% 
+  mutate(SampleName = str_glue("sample_{sample_num}"),
+         filename = basename(path),
+         sample_type = "metagenome",
+         direction = "fwd",
+         StudyID = "set_90",
+         file_size = fs::file_size(path)) %>% 
+  arrange(sample_num) %>% 
+  bind_cols(data.frame(GLAMR_sampleID = paste0("samp_", seq(from = 11257, to = 11271, by = 1)))) %>% 
+  write_tsv("import/staging/202602_mock_community_pacbio/glamr_import_table.tsv")
+
+unique_samples <- file_info %>% 
+  select(SampleName) %>% 
+  distinct()
+
+reads <- file_info %>% 
+  mutate(import_file_path = str_glue("import/{sample_type}s/{GLAMR_sampleID}_{direction}_pacbioHifi.fastq.gz"),
+         link_path = str_glue("../../{path}"),
+         F_reads = str_glue("{GLAMR_sampleID}_fwd_pacbioHifi.fastq.gz"),
+         R_reads = ""
+         )
+
+fs::link_create(reads$link_path, reads$import_file_path)
+
+files_to_import <- reads %>% 
+  dplyr::select(SampleID = "GLAMR_sampleID",
+         sample_type, 
+         F_reads, 
+         R_reads,
+         ) %>% 
+  mutate(ProjectID = "set_90",
+         Accession_Number= NA,
+           StudyID = "set_90") %>% 
+  distinct()
+```
+
 
 
 # Generic project dir linking
