@@ -179,13 +179,9 @@ def update_omics_checkout(
 
     Returns dict of statistics.
     """
-    # For historical reasons the checkout file lists files relative to
-    # data/omics (the base), but we'll have to allow files under at least
-    # data/projects as well, those paths will start with ../projects instead.
     # Below, we resolve() to prevent path traversal escape from data root with
     # Snakemake output files.
     data_root = Path(data_root).resolve(strict=True)
-    base = data_root / 'omics'
 
     old_data = {}
     if checkout_file:
@@ -216,16 +212,30 @@ def update_omics_checkout(
 
     missing = no_change = ignored = errors = 0
     new_data = []
-    for rule, file00 in output_files1:
-        file0 = Path(file00)
-        if file0.is_absolute() or file0.parts[0] != 'data':
+    for rule, path00 in output_files1:
+        # The paths here should start with data/ or are otherwise relative to
+        # the data root
+        path0 = Path(path00)
+        if path0.is_absolute():
+            try:
+                # make it a relative path (to data_root's parent so we keep
+                # 'data' as first part
+                path0 = path0.relative_to(data_root.parent)
+            except ValueError:
+                # it's not a subpath
+                # TODO: some files get saved outside of data_root, unsure how
+                # to handle these
+                ignored += 1
+                continue
+
+        if path0.parts[0] != 'data':
             # TODO: some files get saved outside of data_root, unsure how to
             # handle these
             ignored += 1
             continue
 
         try:
-            file = (data_root.parent / file0).resolve(strict=True)
+            path = (data_root.parent / path0).resolve(strict=True)
         except (FileNotFoundError, NotADirectoryError):
             # e.g. output file marked temp()
             # or replay of old log file, data deleted long time ago
@@ -236,17 +246,19 @@ def update_omics_checkout(
             errors += 1
             continue
 
-        if not file.is_relative_to(data_root):
+        try:
+            relpath = path.relative_to(data_root)
+        except ValueError:
+            # path resolved to outside of data root
             # TODO: some files get saved outside of data_root, unsure how to
             # handle these
             ignored += 1
             continue
 
-        mtime = file.stat().st_mtime
+        mtime = path.stat().st_mtime
         mtime = datetime.fromtimestamp(mtime).astimezone()
-        relpath = Path(file).relative_to(base, walk_up=True)
 
-        if old_mtime := old_data.get(relpath):
+        if old_mtime := old_data.get(path):
             if mtime == old_mtime:
                 # no change, nothing to do
                 no_change += 1
@@ -266,7 +278,7 @@ def update_omics_checkout(
                     version_str_cache[commit] = PipelineVersion.from_commit(commit)  # noqa:E501
                 except Exception:
                     print(f'[DEBUG] getting pipeline version for {commit} for '
-                          f'{mtime=} {rule=} {file00=}')
+                          f'{mtime=} {rule=} {path00=}')
                     raise
             version = version_str_cache[commit]
 
@@ -279,8 +291,8 @@ def update_omics_checkout(
             ofile = estack.enter_context(open(checkout_file, 'a'))
             print(f'Writing {checkout_file} ...', end='', flush=True)
 
-        for mtime, version, rule, relpath in new_data:
-            ofile.write(f'{mtime}\t{version or ""}\t{rule or ""}\t{relpath}\n')
+        for mtime, version, rule, path in new_data:
+            ofile.write(f'{mtime}\t{version or ""}\t{rule or ""}\t{path}\n')
 
     if checkout_file and not dry_run:
         print('[OK] ', end=' ')  # expect stats printed after this
