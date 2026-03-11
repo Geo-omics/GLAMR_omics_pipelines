@@ -3933,6 +3933,7 @@ rule amplicon_dada2_target:
         outdir = subpath(output.abund, parent=True),
         quality_threshold=25,
     log: "logs/dada2/{dataset}_{target_spec}.log"
+    benchmark: "benchmarks/amplicon_dada2_target/{dataset}_{target_spec}.txt"
     container: "docker://eandersk/r_microbiome"
     resources: cpus=16
     shell:
