@@ -13,8 +13,15 @@ import argparse
 import math
 from pathlib import Path
 
-from matplotlib.backends.backend_pdf import PdfPages
+import matplotlib
+from matplotlib.backends.backend_pgf import PdfPages
 import pandas
+
+
+matplotlib.rcParams.update({
+    "pgf.texsystem": "pdflatex",
+    "pgf.preamble": r"\usepackage[author={me}]{pdfcomment}"
+})
 
 
 def cli():
@@ -98,6 +105,12 @@ def plot_rule(df, rule_name):
         # needed to enable legend stuff below
         label='jobsize' if do_size_legend else None
     )
+
+    if 'wildcards' in df:
+        for secs, mem, wc in zip(df['s'], df['max_rss'], df['wildcards']):
+            txt = f'\\pdftooltip{{:-)}}{{{wc}}}'
+            ax.text(secs, mem, txt, ha='center', va='center')
+
     ax.set_title(rule_name)
 
     if do_size_legend:
@@ -129,7 +142,6 @@ def plot_all_table(inpath, outpath):
             ax = plot_rule(df, rule)
             pp.savefig(ax.figure)
             ax.cla()
-        breakpoint()
     print(f'Saved as {outpath}')
 
 
