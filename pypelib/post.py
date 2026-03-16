@@ -884,7 +884,7 @@ def test_conda_envs(path):
                 print(f'{name}: {vers}')
 
 
-if __name__ == '__main__':
+def cli():
     """ command-line interface for replay function and dev/testing """
     argp = argparse.ArgumentParser(
         description='Run the post-production replay function'
@@ -964,7 +964,6 @@ if __name__ == '__main__':
             log = Path(args.log)
             if not log.is_file():
                 argp.error(f'no such file: {log}')
-            config = {}
             post_production(
                 log,
                 workflow=None,
@@ -979,3 +978,7 @@ if __name__ == '__main__':
             test_conda_envs(snakefile)
         case _:
             argp.error('invalid subcommand')
+
+
+if __name__ == '__main__':
+    cli()

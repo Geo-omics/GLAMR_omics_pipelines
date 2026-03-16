@@ -1,0 +1,31 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools ~= 78.0", "setuptools-scm~=8.0"]
+
+[project]
+name = "GLAMR_omics_pipelines"
+requires-python = "~=3.13.0"
+dynamic = ["version"]
+dependencies = [
+"biopython ~= 1.85.0",
+"defusedxml~=0.7.0",
+"matplotlib ~= 3.10.0",
+"snakemake~=9.14.0",
+"snakemake-executor-plugin-cluster-generic~=1.0.0",
+]
+
+[project.scripts]
+hmm-check-asvs = "pypelib.amplicon.hmm_check_asvs:cli"
+hmm-summary = "pypelib.amplicon.hmm_summarize:cli"
+post-script = "pypelib.post:cli"
+plot-benchmarks = "pypelib.benchmark:cli"
+setup-test-env = "pypelib.setup_test_env:cli"
+
+[tool.setuptools.packages.find]
+where = ["./"]
+include = ["pypelib"]
+namespaces= true
+
+[tool.setuptools_scm]
+write_to = "pypelib/_version.py"
+git_describe_command = "git describe --dirty --long --match 'v[0-9]*'"
