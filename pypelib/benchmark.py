@@ -14,14 +14,9 @@ import math
 from pathlib import Path
 
 import matplotlib
-from matplotlib.backends.backend_pgf import PdfPages
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.backends.backend_pgf import PdfPages as LatexPdfPages
 import pandas
-
-
-matplotlib.rcParams.update({
-    "pgf.texsystem": "pdflatex",
-    "pgf.preamble": r"\usepackage[author={me}]{pdfcomment}"
-})
 
 
 def cli():
@@ -34,6 +29,14 @@ def cli():
         '-o', '--output',
         help='Name of output PDF file.',
     )
+    argp.add_argument(
+        '-w', '--indicate-wildcards',
+        action='store_true',
+        default=False,
+        help='Add hover/mouse-over tool-tips indicating the wildcards (if that'
+             'data is available.)  This option requires pdflatex and the '
+             'pdfcomment latex package.'
+    )
     args = argp.parse_args()
     if args.output:
         output = args.output
@@ -43,7 +46,7 @@ def cli():
     inpath = Path(args.benchmarks)
     if inpath.is_file():
         # post-production-collected benchmark table
-        plot_all_table(inpath, output)
+        plot_all_table(inpath, output, with_wildcards=args.indicate_wildcards)
     elif inpath.is_dir():
         # assume this is the benchmark directory
         plot_all_plain(inpath, output)
@@ -92,7 +95,7 @@ def load_extended_table(path):
     return df
 
 
-def plot_rule(df, rule_name):
+def plot_rule(df, rule_name, with_wildcards):
     if 'rule' in df:
         df = df.loc[df['rule'] == rule_name]
 
@@ -106,7 +109,7 @@ def plot_rule(df, rule_name):
         label='jobsize' if do_size_legend else None
     )
 
-    if 'wildcards' in df:
+    if with_wildcards and 'wildcards' in df:
         for secs, mem, wc in zip(df['s'], df['max_rss'], df['wildcards']):
             txt = f'\\pdftooltip{{:-)}}{{{wc}}}'
             ax.text(secs, mem, txt, ha='center', va='center')
@@ -131,15 +134,24 @@ def plot_rule(df, rule_name):
     return ax
 
 
-def plot_all_table(inpath, outpath):
+def plot_all_table(inpath, outpath, with_wildcards):
     """ plot data from post-production benchmark table """
     df = load_extended_table(inpath)
     df['jobsize_log'] = df['jobsize'].apply(math.log2) * 10
 
-    with PdfPages(outpath) as pp:
+    if with_wildcards:
+        PP = LatexPdfPages
+        matplotlib.rcParams.update({
+            "pgf.texsystem": "pdflatex",
+            "pgf.preamble": r"\usepackage{pdfcomment}"
+        })
+    else:
+        PP = PdfPages
+
+    with PP(outpath) as pp:
         for rule in df.rule.cat.categories:
             print(f'Plotting for rule {rule} ...')
-            ax = plot_rule(df, rule)
+            ax = plot_rule(df, rule, with_wildcards)
             pp.savefig(ax.figure)
             ax.cla()
     print(f'Saved as {outpath}')
