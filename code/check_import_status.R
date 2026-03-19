@@ -14,7 +14,11 @@ message(str_glue("Started at {now()}"))
 setwd("/geomicro/data2/kiledal/GLAMR")
 
 # Read in sample and study table downloaded from Google Drive
-samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples",guess_max = 3000)
+biosamples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "samples",guess_max = 3000) %>% 
+  rename(BioSampleID = "SampleID")
+samples <- readxl::read_excel("import/Great_Lakes_Omics_Datasets.xlsx",sheet = "sequencing",guess_max = 3000) %>% 
+  rename(SampleID = "SeqSampleID", StudyID = "DatasetID") %>% 
+  left_join(biosamples)
 
 message("Sample info loaded succesfully")
 
@@ -97,4 +101,3 @@ if (any(log_changed != TRUE)) {
     message(str_glue("No new changes detected since {max(prev_logs$date)}, no new log written."))
                   
 }
-
