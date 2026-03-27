@@ -7,6 +7,7 @@ from contextlib import ExitStack
 from datetime import datetime, UTC
 from io import BytesIO, StringIO
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -393,6 +394,18 @@ def get_container_info(container_img):
     return data['data']['attributes']['labels']
 
 
+def get_slurm_job_info(jobids):
+    """
+    Get sacct info of slurm jobs
+
+    Returns a dict with keys meta, errors, and jobs.  The value of jobs is a
+    list of dicts, on per job, with info for each job.
+    """
+    cmd = ['sacct', '--jobs', ','.join(str(i) for i in jobids), '--json']
+    p = run(cmd, check=True, stdout=PIPE)
+    return json.loads(p.stdout)
+
+
 class EnvPackageInfo:
     """
     Information on a runtime environment
@@ -679,6 +692,10 @@ def collect_benchmarks(workflow, dry_run=False):
     Collect benchmarks from jobs into single table with added job data
 
     This does nothing unless 'collect_benchmark' set in the config.
+
+    Additionally collects a few other bits of information.  For remotely
+    executed jobs, "time_min" and "mem_mb" should be declared in resources in
+    config/profile files and/or the rules.
     """
     if outpath := workflow.config.get('collect_benchmarks'):
         outpath = Path(outpath)
@@ -688,39 +705,116 @@ def collect_benchmarks(workflow, dry_run=False):
         return
 
     # columns we're adding
-    base_cols = ['rule', 'wildcards', 'timestamp', 'threads', 'jobsize']
+    base_cols = ['rule', 'wildcards', 'timestamp', 'node', 'slurm_job', 'time_req',
+                 'mem_req', 'threads', 'jobsize']
     # columns from benchmarks
     bm_cols = ['s', 'h:m:s', 'max_rss', 'max_vms', 'max_uss', 'max_pss',
                'io_in', 'io_out', 'mean_load', 'cpu_time']
+
+    local_host = os.uname().nodename
+
     rows = []
     for j in filter(lambda x: bool(x.benchmark), workflow.dag.finished_jobs):
         bm_file = Path(j.benchmark)
-        jobsize = sum(
-            Path(i).stat().st_size
-            for i in j.input
-        )
-        jobstats = load_benchmark(bm_file)
         bm_mtime = datetime.fromtimestamp(bm_file.stat().st_mtime)
-        rows.append([
-            j.name,
-            ','.join(j.wildcards),
-            bm_mtime.isoformat(),
-            str(j.threads),
-            str(jobsize),
-            *(jobstats[col] for col in bm_cols)
-        ])
+
+        # bits default to empty for local jobs or in case of errors
+        slurm_jobid = ''
+        time_requested = ''
+        mem_requested = ''
+
+        exctr = workflow.scheduler.get_executor(j)
+        if hasattr(exctr, 'external_jobid'):
+            # assuming external was executor used
+            # The executor instance is likely the same for all jobs.  Its
+            # external_jobid attribute is a dict that seemingly maps all the
+            # output files of all the jobs to slurm job IDs.
+            for output in j.output:
+                try:
+                    slurm_jobid = exctr.external_jobid[output]
+                except KeyError:
+                    print(f'[ERROR] {output} not listed in external_jobid map')
+                else:
+                    try:
+                        # these come in as str for some reason
+                        slurm_jobid = int(slurm_jobid)
+                    except (TypeError, ValueError):
+                        print('[ERROR] expected integer for slurm jobid')
+                    break  # just need this from the first output (or any)
+            else:
+                print(f'[ERROR] failed getting slurm jobid for job {j}')
+                # TODO can this happen?  needs testing
+                slurm_jobid = ''
+
+        try:
+            time_requested = j.resources.time_min
+        except AttributeError:
+            pass
+
+        try:
+            mem_requested = j.resources.mem_mb
+        except AttributeError:
+            pass
+
+        rows.append({
+            'rule': j.name,
+            'wildcards': ','.join(j.wildcards),
+            'timestamp': bm_mtime.isoformat(),
+            'node': local_host,  # may be overwritten below
+            'slurm_job': slurm_jobid,
+            'time_req': time_requested,  # in minutes
+            'mem_req': mem_requested,  # in megabyte
+            'threads': j.threads,
+            'jobsize': round(j.input.size_mb),  # also megabyte
+            **load_benchmark(bm_file),
+        })
+
+    if slurm_jobids := list(filter(None, (row['slurm_job'] for row in rows))):
+        slurm_data = {}
+        try:
+            all_slurm_info = get_slurm_job_info(slurm_jobids)
+        except Exception as e:
+            print(f'[ERROR] Failed getting info on slurm jobs" '
+                  f'{e.__class__.__name__}: {e}')
+        else:
+            for job_info in all_slurm_info['jobs']:
+                slurm_job = job_info['job_id']
+                job_data = {
+                    'node': job_info['nodes'],
+                }
+                """
+                # remove if no other data is needed
+                for item in job_info['tres']['allocated']:
+                    match item['type']:
+                        case 'cpu': job_data['cpu_alloc'] = item['count']
+                        case 'mem': job_data['mem_alloc'] = item['count']  # in megabyte
+                        case 'node':
+                            # we're assuming jobs run on a single node, if that
+                            # ever changes, then we'll have to make changes to
+                            # account for that
+                            if item['count'] > 1:
+                                print(f'[WARNING] slurm job {slurm_job} got more than '
+                                      f'one node allocated')
+                """
+                slurm_data[slurm_job] = job_data
+
+        for row in rows:
+            row.update(slurm_data[row['slurm_job']])
 
     with ExitStack() as estack:
         if dry_run:
             ofile = None
         else:
+            # New benchmark results are appended to existing file!
             ofile = estack.enter_context(outpath.open('a'))
 
+        columns = base_cols + bm_cols
         if dry_run or ofile.tell() == 0:
             # write header if it's a new file
-            print(*base_cols, *bm_cols, sep='\t', file=ofile)
+            print(*columns, sep='\t', file=ofile)
 
         for row in rows:
+            row = [str(row[k]) for k in columns]
             print(*row, sep='\t', file=ofile)
 
     if not dry_run:
