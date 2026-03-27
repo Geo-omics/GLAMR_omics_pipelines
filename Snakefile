@@ -81,7 +81,7 @@ rule get_sra_metadata:
     params:
         accn = parse_input(input.accession, parse_accession),
     log: "logs/get_sra_metadata/{sample_type}.{sample}.err"
-    resources: time_min = 5, heavy_network = 1, cpus = 1
+    resources: time_min = 5, heavy_network = 1
     run:
         with save_error_file(log[0]):
             pypelib.sra.set_api_key(config.get('ncbi_api_key'))
@@ -99,7 +99,7 @@ rule get_reads_prep:
     params:
     conda: "config/conda_yaml/kingfisher.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-prep.log"
-    resources: time_min = 5, heavy_network = 1, cpus = 1
+    resources: time_min = 5, heavy_network = 1
     run:
         with logme(log):
             if input.sra_metadata:
@@ -266,7 +266,8 @@ rule get_reads:
         srr_accn = parse_input(input.runinfo, parse_runinfo, key='run'),
     conda: "config/conda_yaml/kingfisher.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-download.log"
-    resources: time_min = 5000, heavy_network = 1, cpus = 8
+    threads: 4
+    resources: time_min = 5000, heavy_network = 1
     run:
         ncbi_api_key = config.get('ncbi_api_key', '')
         kingfisher_slowdown = 'yes' if config.get('kingfisher_slowdown') else ''
@@ -290,8 +291,8 @@ rule get_reads:
 
             echo "Using accession {params.srr_accn:q}"
             kingfisher get \
-                --download-threads {resources.cpus} \
-                --extraction-threads {resources.cpus} \
+                --download-threads {threads} \
+                --extraction-threads {threads} \
                 --hide-download-progress \
                 -r {params.srr_accn:q} \
                 -m ${{meths[@]}}  \
@@ -303,7 +304,7 @@ rule get_reads:
 checkpoint get_runinfo:
     input: rules.get_reads_prep.output.runinfo
     output: "data/omics/{sample_type}/{sample}/reads/runinfo1.tsv"
-    resources: time_min = 1, cpus = 1
+    resources: time_min = 1
     shell: "ln -- {input} {output}"
 
 def get_raw_reads_files(wc, format=False):
@@ -336,7 +337,7 @@ rule raw_reads_stats:
     output:
         stats = update("data/omics/{sample_type}/{sample}/reads/stats.tsv")
     conda: "config/conda_yaml/seqkit.yaml"
-    resources: time_min = 1, cpus = 1
+    resources: time_min = 1
     run: pypelib.raw_reads.make_stats(input, output.stats, keep_existing=True)
 
 def get_download_dir(wc):
@@ -383,7 +384,7 @@ rule get_reads_paired:
         stats_file = rules.raw_reads_stats.output.stats,
     conda: "config/conda_yaml/seqkit.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-paired.log"
-    resources: time_min = 5, heavy_network = 0, cpus = 1
+    resources: time_min = 5
     run: pypelib.raw_reads.post_download_paired(input, output, params, log=log)
 
 
@@ -400,7 +401,7 @@ rule get_reads_single:
         stats_file = rules.raw_reads_stats.output.stats,
     conda: "config/conda_yaml/seqkit.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-single.log"
-    resources: time_min = 5, heavy_network = 0, cpus = 1
+    resources: time_min = 5
     run: pypelib.raw_reads.post_download_single(input, output, params, log=log)
 
 
@@ -3742,7 +3743,8 @@ rule amplicon_hmm:
     params:
         amplicon_hmm_db ="data/reference/hmm_amplicons/combined.hmm",
         outdir = subpath(input[0], parent=True),
-    resources: cpus=4, mem_mb=20000, time_min=500
+    threads: 4
+    resources: mem_mb=20000, time_min=500
     benchmark: "benchmarks/amplicon_hmm/{sample}_{direc}.txt"
     log: "logs/amplicon_hmm/{sample}_{direc}.log"
     conda: "config/conda_yaml/hmmer.yaml"
@@ -3753,7 +3755,7 @@ rule amplicon_hmm:
 
         seqkit head -n 1000 {input} |
             seqkit fq2fa |
-            nhmmscan --cpu {resources.cpus} --tblout {output.hmm_tbl} {params.amplicon_hmm_db} - > {output.full_out}
+            nhmmscan --cpu {threads} --tblout {output.hmm_tbl} {params.amplicon_hmm_db} - > {output.full_out}
         """
 
 rule amplicon_hmm_summarize_r:
@@ -3765,7 +3767,7 @@ rule amplicon_hmm_summarize_r:
     """
     input: rules.amplicon_hmm.output.hmm_tbl
     output: "data/omics/amplicons/{sample}/detect_region/{direc}_summary.tsv"
-    resources: cpus=1, mem_mb=10000, time_min=500
+    resources: mem_mb=10000, time_min=500
     benchmark: "benchmarks/amplicon_hmm_summarize_a/{sample}_{direc}.txt"
     log: "logs/amplicon_hmm_summarize_a/{sample}_{direc}.log"
     container: "docker://eandersk/r_microbiome"
@@ -3774,7 +3776,7 @@ rule amplicon_hmm_summarize_r:
 rule amplicon_hmm_summarize:
     input: rules.amplicon_hmm.output.hmm_tbl
     output: "data/omics/amplicons/{sample}/detect_region/{direc}_summary.json"
-    resources: cpus=1, mem_mb=100, time_min=1
+    resources: mem_mb=100, time_min=1
     benchmark: "benchmarks/amplicon_hmm_summarize/{sample}_{direc}.txt"
     log: "logs/amplicon_hmm_summarize/{sample}_{direc}.log"
     run: pypelib.amplicon.hmm_summarize.main(input[0], output[0], log=log)
@@ -3805,7 +3807,7 @@ rule amplicon_guess_target:
         stats = rules.raw_reads_stats.output.stats
     output:
         target_info = "data/omics/{sample_type}/{sample}/detect_region/target_info.json"
-    resources: cpus=1, mem_mb=100, time_min=1
+    resources: mem_mb=100, time_min=1
     log: "logs/amplicon_guess_target/{sample_type}_{sample}.log"
     run: pypelib.amplicon.guess_target.main(input.summaries, input.stats, output.target_info, log=log)
 
@@ -3935,7 +3937,8 @@ rule amplicon_dada2_target:
     log: "logs/dada2/{dataset}_{target_spec}.log"
     benchmark: "benchmarks/amplicon_dada2_target/{dataset}_{target_spec}.txt"
     container: "docker://eandersk/r_microbiome"
-    resources: cpus=16
+    threads: 16
+    resources:
     shell:
         """
         . code/shell_prelude {log}
@@ -3945,7 +3948,7 @@ rule amplicon_dada2_target:
             --assignments {input.assignments} \
             --samples {input.samples} \
             --targets {input.target_tab} \
-            --cpus {resources.cpus} \
+            --cpus {threads} \
             {wildcards.target_spec}
         status=$?
         if [[ $status -ne 0 ]]; then
@@ -3958,6 +3961,7 @@ rule amplicon_asv_test:
     input: rules.amplicon_dada2_target.output.seqs
     output: "data/projects/{dataset}/dada2.{target_spec}/rep_seqs_hmm.txt"
     params: hmm_db = "data/reference/hmm_amplicons/combined.hmm"
+    benchmark: "benchmarks/amplicon_asv_test/{dataset}_{target_spec}.txt"
     run:
         pypelib.amplicon.hmm_check_asvs.main(
             params.hmm_db,
