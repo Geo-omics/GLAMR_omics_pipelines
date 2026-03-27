@@ -713,23 +713,21 @@ def collect_benchmarks(workflow, dry_run=False):
 
     local_host = os.uname().nodename
 
-    rows = []
-    for j in filter(lambda x: bool(x.benchmark), workflow.dag.finished_jobs):
-        bm_file = Path(j.benchmark)
-        bm_mtime = datetime.fromtimestamp(bm_file.stat().st_mtime)
+    rows = {}
+    for j in workflow.dag.finished_jobs:
+        print(f'BORK {j=}')
 
-        # bits default to empty for local jobs or in case of errors
+        # default to empty islurm job id for local jobs or in case of errors
         slurm_jobid = ''
-        time_requested = ''
-        mem_requested = ''
 
         exctr = workflow.scheduler.get_executor(j)
         if hasattr(exctr, 'external_jobid'):
-            # assuming external was executor used
+            # assuming a SLURM job
             # The executor instance is likely the same for all jobs.  Its
             # external_jobid attribute is a dict that seemingly maps all the
             # output files of all the jobs to slurm job IDs.
             for output in j.output:
+                print(f'BORK {output=}')
                 try:
                     slurm_jobid = exctr.external_jobid[output]
                 except KeyError:
@@ -740,39 +738,80 @@ def collect_benchmarks(workflow, dry_run=False):
                         slurm_jobid = int(slurm_jobid)
                     except (TypeError, ValueError):
                         print('[ERROR] expected integer for slurm jobid')
+                    print(f'BORK {output=} FIN')
                     break  # just need this from the first output (or any)
+
+                print(f'BORK {output=} ERR')
             else:
                 print(f'[ERROR] failed getting slurm jobid for job {j}')
                 # TODO can this happen?  needs testing
                 slurm_jobid = ''
 
+        if j.benchmark is None:
+            print(f'BORK {j=} WWW')
+            if slurm_jobid:
+                # get blank benchmark data, to be back-filled later
+                bm_mtime = ''
+                bm_data = {k: '' for k in bm_cols}
+            else:
+                # benchmarking is not for this job
+                continue
+        else:
+            print(f'BORK {j=} QQQ')
+            bm_file = Path(j.benchmark)
+            bm_mtime = datetime.fromtimestamp(bm_file.stat().st_mtime).astimezone()
+            # rm microsecs since the fake/benchmark-less below won't have them
+            bm_mtime = bm_mtime.replace(microsecond=0).isoformat()
+            bm_data = load_benchmark(bm_file)
+
         try:
             time_requested = j.resources.time_min
         except AttributeError:
-            pass
+            time_requested = ''
 
         try:
             mem_requested = j.resources.mem_mb
         except AttributeError:
-            pass
+            mem_requested = ''
 
-        rows.append({
+        try:
+            jobsize = j.input.size_mb  # in megabyte
+        except OSError as e:
+            print(f'[OS EE] {e=} {j=} {j.input=}')
+            jobsize = ''
+        except Exception as e:
+            print(f'[?? EE] {e=} {j=} {j.input=}')
+            breakpoint()
+            jobsize = ''
+
+        print(f'BORK {j=} XXX')
+        rows[j] = {
             'rule': j.name,
             'wildcards': ','.join(j.wildcards),
-            'timestamp': bm_mtime.isoformat(),
+            'timestamp': bm_mtime,
             'node': local_host,  # may be overwritten below
             'slurm_job': slurm_jobid,
             'time_req': time_requested,  # in minutes
             'mem_req': mem_requested,  # in megabyte
             'threads': j.threads,
-            'jobsize': round(j.input.size_mb),  # also megabyte
-            **load_benchmark(bm_file),
-        })
+            'jobsize': round(jobsize) if jobsize else '',
+            **bm_data,
+        }
 
-    if slurm_jobids := list(filter(None, (row['slurm_job'] for row in rows))):
-        slurm_data = {}
+    print('BORK EE')
+    # map of job instances to slurm job IDs
+    slurm_jobs = {
+        row['slurm_job']: job
+        for job, row in rows.items()
+        if row['slurm_job']
+    }
+
+    print('BORK EE')
+    if slurm_jobs:
+        # Collect slurm data.  There's some overhead querying slurm via sacct,
+        # so there'll be a single query for all slurm jobs.
         try:
-            all_slurm_info = get_slurm_job_info(slurm_jobids)
+            all_slurm_info = get_slurm_job_info(slurm_jobs.keys())
         except Exception as e:
             print(f'[ERROR] Failed getting info on slurm jobs" '
                   f'{e.__class__.__name__}: {e}')
@@ -782,25 +821,36 @@ def collect_benchmarks(workflow, dry_run=False):
                 job_data = {
                     'node': job_info['nodes'],
                 }
-                """
-                # remove if no other data is needed
-                for item in job_info['tres']['allocated']:
-                    match item['type']:
-                        case 'cpu': job_data['cpu_alloc'] = item['count']
-                        case 'mem': job_data['mem_alloc'] = item['count']  # in megabyte
-                        case 'node':
-                            # we're assuming jobs run on a single node, if that
-                            # ever changes, then we'll have to make changes to
-                            # account for that
-                            if item['count'] > 1:
-                                print(f'[WARNING] slurm job {slurm_job} got more than '
-                                      f'one node allocated')
-                """
-                slurm_data[slurm_job] = job_data
+                if slurm_jobs[slurm_job].benchmark is None:
+                    # Getting available missing bits: total time, cpu time, max_rss
+                    # These will include snakemake runtime and what not, expect
+                    # numbers to differ a bit from snakemake benchmarks.
+                    if len(job_info['steps']) != 1:
+                        # cross bridge when we get there
+                        print('[ERROR] expecting single step')
+                    step_info = job_info['steps'][0]
+                    elapsed = step_info['time']['elapsed']  # get whole seconds
+                    end = step_info['time']['end']  # unix timestamp
+                    job_data['timestamp'] = \
+                        datetime.fromtimestamp(end).astimezone().isoformat()
+                    job_data['s'] = f'{elapsed:.2f}'  # 1/100s precision like benchmarks
+                    # total cpu time comes as a tuple of whole ints (secs and microsecs)
+                    tcpu = step_info['time']['total']['seconds']
+                    tcpu += step_info['time']['total']['microseconds'] * 0.000001
+                    job_data['cpu_time'] = f'{tcpu:.2f}'  # 1/100s precision again
+                    for item in job_info['steps'][0]['tres']['requested']['total']:
+                        match item['type']:
+                            case 'mem':
+                                max_rss = item['count']  # these are bytes
+                                # convert to megabyte, rounded to 1/100 as in benchmarks
+                                job_data['max_rss'] = f'{max_rss / 1024 / 1024:.2f}'
+                            case 'vmem':
+                                max_vms = item['count']  # these are bytes
+                                # convert to megabyte, rounded to 1/100 as in benchmarks
+                                job_data['max_vms'] = f'{max_vms / 1024 / 1024:.2f}'
+                rows[slurm_jobs[slurm_job]].update(job_data)
 
-        for row in rows:
-            row.update(slurm_data[row['slurm_job']])
-
+    print('BORK EEE')
     with ExitStack() as estack:
         if dry_run:
             ofile = None
@@ -813,7 +863,7 @@ def collect_benchmarks(workflow, dry_run=False):
             # write header if it's a new file
             print(*columns, sep='\t', file=ofile)
 
-        for row in rows:
+        for row in rows.values():
             row = [str(row[k]) for k in columns]
             print(*row, sep='\t', file=ofile)
 

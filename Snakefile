@@ -3836,7 +3836,6 @@ def get_target_info_files(wc):
         if i in skips:
             continue
         ret.append(target_info.format(sample_type='amplicons', sample=i.name))
-    print(f'BORK amplicon_collect_target_guesses # of inputs: {len(ret)}')
     return ret
 
 checkpoint amplicon_collect_target_guesses:
@@ -3847,7 +3846,9 @@ checkpoint amplicon_collect_target_guesses:
     params:
         project_dir = subpath(output.target_tab, parent=True)
     log: "logs/amplicon_collect_target_guesses/{dataset}.log"
-    run: pypelib.amplicon.tabulate_targets.main(input, output=output.target_tab, log=log, **params, **wildcards)
+    run:
+        subprocess.run('ps axfu > q', shell=True)
+        pypelib.amplicon.tabulate_targets.main(input, output=output.target_tab, log=log, **params, **wildcards)
 
 rule remove_primers_pe:
     input:
@@ -3923,6 +3924,32 @@ rule hmm_summary_plots:
         project_dir = subpath(output.pdf, parent=True)
     run: pypelib.amplicon.hmm_summarize.multiplot(input[0], output=output.pdf)
 
+
+rule testX:
+    # wc xxx must by a number, e.g. 1, 2, 3
+    input:
+        a = "test_infile1",
+        b = "test_infile2"
+    output:
+        out1 = "testX{xxx}.out",
+        out2 = "testY{xxx}.out"
+    params: bedtime = lambda wc: int(wc.xxx) * 5
+    benchmark: "testX{xxx}.benchmark.txt"
+    threads: lambda wc: 2 * int(wc.xxx) + 1
+    # threads: 99
+    resources: xxxcpus=lambda wc: int(wc.xxx)*5, mem_mb=lambda wc: int(wc.xxx)*1000, time_min=lambda wc: int(wc.xxx)
+    shell:
+        """
+        hostname > {output.out1}
+        echo "WC: {wildcards.xxx}" >> {output.out1}
+        date > {output.out2}
+        sleep {params.bedtime}
+        date >> {output.out1}
+        env >> {output.out2}
+        echo "THREADS: {threads}" | tee -a {output.out1}
+        echo "The RESOURCES A: {{resources.cpus}} {resources.mem_mb} {resources.time_min}" | tee -a {output.out1}
+        echo "The RESOURCES B: {resources}" | tee -a {output.out1}
+        """
 
 rule amplicon_dada2_target:
     input:
@@ -4011,7 +4038,6 @@ def get_dada2_output(wc):
             files.append(j.format(dataset=wc.dataset, target_spec=i))
         for j in rules.amplicon_asv_test.output:
             files.append(j.format(dataset=wc.dataset, target_spec=i))
-    print(f'BORK {len(files)=} {files=}')
     return files
 
 rule amplicon_pipeline_dataset:
