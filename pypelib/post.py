@@ -718,6 +718,11 @@ def collect_benchmarks(workflow, dry_run=False):
         bm_file = Path(j.benchmark)
         bm_mtime = datetime.fromtimestamp(bm_file.stat().st_mtime)
 
+        # bits default to empty for local jobs or in case of errors
+        slurm_jobid = ''
+        time_requested = ''
+        mem_requested = ''
+
         exctr = workflow.scheduler.get_executor(j)
         if hasattr(exctr, 'external_jobid'):
             # assuming external was executor used
@@ -730,25 +735,26 @@ def collect_benchmarks(workflow, dry_run=False):
                 except KeyError:
                     print(f'[ERROR] {output} not listed in external_jobid map')
                 else:
-                    # these come in as str for some reason
-                    slurm_jobid = int(slurm_jobid)
-                    break
+                    try:
+                        # these come in as str for some reason
+                        slurm_jobid = int(slurm_jobid)
+                    except (TypeError, ValueError):
+                        print('[ERROR] expected integer for slurm jobid')
+                    break  # just need this from the first output (or any)
             else:
                 print(f'[ERROR] failed getting slurm jobid for job {j}')
                 # TODO can this happen?  needs testing
-                slurm_jobid = '???'  # causes sacct to fail FIXME
+                slurm_jobid = ''
 
-            try:
-                time_requested = j.resources.time_min
-            except AttributeError:
-                time_requested = '???'
-            try:
-                mem_requested = j.resources.mem_mb
-            except AttributeError:
-                mem_requested = '???'
-        else:
-            # OK, is local job or so
-            slurm_jobid = time_requested = mem_requested = ''
+        try:
+            time_requested = j.resources.time_min
+        except AttributeError:
+            pass
+
+        try:
+            mem_requested = j.resources.mem_mb
+        except AttributeError:
+            pass
 
         rows.append({
             'rule': j.name,
