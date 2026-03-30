@@ -10,12 +10,12 @@ This can do
      There will be one plot per subdirectory.
 """
 import argparse
-import math
 from pathlib import Path
 
 import matplotlib
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.backends.backend_pgf import PdfPages as LatexPdfPages
+import numpy
 import pandas
 
 
@@ -137,7 +137,7 @@ def plot_rule(df, rule_name, with_wildcards):
 def plot_all_table(inpath, outpath, with_wildcards):
     """ plot data from post-production benchmark table """
     df = load_extended_table(inpath)
-    df['jobsize_log'] = df['jobsize'].apply(math.log2) * 10
+    df['jobsize_log'] = df['jobsize'].apply(numpy.log1p) * 10 + 10
 
     if with_wildcards:
         PP = LatexPdfPages
