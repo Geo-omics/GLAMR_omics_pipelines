@@ -81,7 +81,7 @@ rule get_sra_metadata:
     params:
         accn = parse_input(input.accession, parse_accession),
     log: "logs/get_sra_metadata/{sample_type}.{sample}.err"
-    resources: time_min = 5, heavy_network = 1
+    resources: mem_mb=100, time_min=5, heavy_network=1
     run:
         with save_error_file(log[0]):
             pypelib.sra.set_api_key(config.get('ncbi_api_key'))
@@ -99,7 +99,7 @@ rule get_reads_prep:
     params:
     conda: "config/conda_yaml/kingfisher.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-prep.log"
-    resources: time_min = 5, heavy_network = 1
+    resources: mem_mb=2000, time_min=5, heavy_network=1
     run:
         with logme(log):
             if input.sra_metadata:
@@ -266,8 +266,8 @@ rule get_reads:
         srr_accn = parse_input(input.runinfo, parse_runinfo, key='run'),
     conda: "config/conda_yaml/kingfisher.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-download.log"
-    threads: 4
-    resources: time_min = 5000, heavy_network = 1
+    threads: 2
+    resources: mem_mb=2000, time_min=300, heavy_network=1
     run:
         ncbi_api_key = config.get('ncbi_api_key', '')
         kingfisher_slowdown = 'yes' if config.get('kingfisher_slowdown') else ''
@@ -304,7 +304,7 @@ rule get_reads:
 checkpoint get_runinfo:
     input: rules.get_reads_prep.output.runinfo
     output: "data/omics/{sample_type}/{sample}/reads/runinfo1.tsv"
-    resources: time_min = 1
+    resources: mem_mb=100, time_min=1
     shell: "ln -- {input} {output}"
 
 def get_raw_reads_files(wc, format=False):
@@ -337,7 +337,7 @@ rule raw_reads_stats:
     output:
         stats = update("data/omics/{sample_type}/{sample}/reads/stats.tsv")
     conda: "config/conda_yaml/seqkit.yaml"
-    resources: time_min = 1
+    resources: mem_mb=100, time_min=1
     run: pypelib.raw_reads.make_stats(input, output.stats, keep_existing=True)
 
 def get_download_dir(wc):
@@ -384,7 +384,7 @@ rule get_reads_paired:
         stats_file = rules.raw_reads_stats.output.stats,
     conda: "config/conda_yaml/seqkit.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-paired.log"
-    resources: time_min = 5
+    resources: mem_mb=1000, time_min=5
     run: pypelib.raw_reads.post_download_paired(input, output, params, log=log)
 
 
@@ -401,7 +401,7 @@ rule get_reads_single:
         stats_file = rules.raw_reads_stats.output.stats,
     conda: "config/conda_yaml/seqkit.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-single.log"
-    resources: time_min = 5
+    resources: mem_mb=1000, time_min=5
     run: pypelib.raw_reads.post_download_single(input, output, params, log=log)
 
 
@@ -3744,7 +3744,7 @@ rule amplicon_hmm:
         amplicon_hmm_db ="data/reference/hmm_amplicons/combined.hmm",
         outdir = subpath(input[0], parent=True),
     threads: 4
-    resources: mem_mb=20000, time_min=500
+    resources: mem_mb=1000, time_min=60
     benchmark: "benchmarks/amplicon_hmm/{sample}_{direc}.txt"
     log: "logs/amplicon_hmm/{sample}_{direc}.log"
     conda: "config/conda_yaml/hmmer.yaml"
@@ -3845,6 +3845,7 @@ checkpoint amplicon_collect_target_guesses:
         target_tab="data/projects/{dataset}/target_info.tsv"
     params:
         project_dir = subpath(output.target_tab, parent=True)
+    resources: mem_mb=100, time_min=5
     log: "logs/amplicon_collect_target_guesses/{dataset}.log"
     run: pypelib.amplicon.tabulate_targets.main(input, output=output.target_tab, log=log, **params, **wildcards)
 
@@ -3858,6 +3859,7 @@ rule remove_primers_pe:
         rev="data/omics/{sample_type}/{sample}/reads/clean.rev_reads.fastq.gz",
     params:
         reads_dir = subpath(output.fwd, parent=True)
+    resources: mem_mb=6000, time_min=20
     conda: "config/conda_yaml/cutadapt.yaml"
     benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
     log: "logs/remove_primers/{sample_type}-{sample}.log"
@@ -3880,6 +3882,7 @@ rule remove_primers_se:
         single="data/omics/{sample_type}/{sample}/reads/clean.single_reads.fastq.gz"
     params:
         reads_dir = subpath(output.single, parent=True)
+    resources: mem_mb=6000, time_min=20
     conda: "config/conda_yaml/cutadapt.yaml"
     benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
     log: "logs/remove_primers/{sample_type}-{sample}.log"
@@ -3905,6 +3908,7 @@ checkpoint amplicon_dispatch:
         samples="data/projects/{dataset}/amplicon_sample_info.tsv",
     params:
         project_dir = subpath(output.assignments, parent=True)
+    resources: mem_mb=100, time_min=2
     run:
         pypelib.amplicon.dispatch.make(
             input.fastqs,
@@ -3938,7 +3942,7 @@ rule amplicon_dada2_target:
     benchmark: "benchmarks/amplicon_dada2_target/{dataset}_{target_spec}.txt"
     container: "docker://eandersk/r_microbiome"
     threads: 16
-    resources:
+    resources: mem_mb=50000, time_min=240
     shell:
         """
         . code/shell_prelude {log}
@@ -3961,6 +3965,7 @@ rule amplicon_asv_test:
     input: rules.amplicon_dada2_target.output.seqs
     output: "data/projects/{dataset}/dada2.{target_spec}/rep_seqs_hmm.txt"
     params: hmm_db = "data/reference/hmm_amplicons/combined.hmm"
+    resources: mem_mb=4000, time_min=30
     benchmark: "benchmarks/amplicon_asv_test/{dataset}_{target_spec}.txt"
     run:
         pypelib.amplicon.hmm_check_asvs.main(
@@ -4016,6 +4021,7 @@ rule amplicon_pipeline_dataset:
     """ The top rule for the amplicon pipeline """
     input: get_dada2_output
     output: "data/projects/{dataset}/amplicon_pipeline_done"
+    resources: mem_mb=100, time_min=2
     shell:
         """
         for i in {input:q}; do echo "$i" >> {output}; done
