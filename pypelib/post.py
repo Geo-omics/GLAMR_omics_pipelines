@@ -912,6 +912,7 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
                 (outfile, job.name)
                 for job in workflow.dag.finished_jobs
                 for outfile in job.output
+                if not outfile.is_temp  # snakemake deletes those
             ]
             pl_version = PipelineVersion.current()
         else:
