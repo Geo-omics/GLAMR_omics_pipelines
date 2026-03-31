@@ -47,7 +47,8 @@ def get_info_from_log(log):
     """
     Collect certain information from a snakemake run's log file
 
-    Returns a dict mapping rule names to list of output files.
+    Returns a tuple of (1) a list (of pairs of) output files and corresponding
+    rule name and (2) the log's pipeline version.
     """
     rule_keywords = ['checkpoint', 'rule', 'localrule', 'localcheckpoint']
     rule_pat = re.compile(
@@ -126,7 +127,7 @@ def get_info_from_log(log):
         job['lines'] = (linenum(m.start()), linenum(m.end()))  # for debugging
         jobs[jobid] = job
 
-    data = {}
+    data = []
     for m in finished_pat.finditer(log_txt):
         jobid = int(m['jobid'])
         if jobid in no_output_jobs:
@@ -137,10 +138,9 @@ def get_info_from_log(log):
             print(f'for log file {log}')
             print(f'unknown jobid {jobid} near line {linenum(m)}')
             raise
-        rulename = jobs[jobid]['name']
-        if rulename not in data:
-            data[rulename] = []
-        data[rulename] += jobs[jobid]['output']
+
+        for i in jobs[jobid]['output']:
+            data.append((i, jobs[jobid]['name']))
 
     return data, pl_version
 
@@ -172,7 +172,7 @@ def update_omics_checkout(
     Update checkout file by appending one line for each new or newer file.
 
     output_files:
-        Dict mapping rule name to list of files.
+        List of tuples (output file, rule name)
 
     checkout_file:
         Path to new or existing checkout file.  If this is None, then the
@@ -189,10 +189,6 @@ def update_omics_checkout(
         checkout_file = Path(checkout_file)
         if checkout_file.is_file():
             old_data = read_omics_checkout(checkout_file)
-
-    output_files1 = []
-    for rule, files in output_files.items():
-        output_files1 += [(rule, i) for i in sorted(files)]
 
     if version_before_mtime:
         # Get list of pairs (commit time, commit hash)
@@ -213,7 +209,7 @@ def update_omics_checkout(
 
     missing = no_change = ignored = errors = 0
     new_data = []
-    for rule, path00 in output_files1:
+    for path00, rule in output_files:
         # The paths here should start with data/ or are otherwise relative to
         # the data root
         path0 = Path(path00)
@@ -912,7 +908,11 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
             raise FileNotFoundError(f'no such directory: {data_root}')
 
         if workflow:
-            outputs = {j.name: j.output for j in workflow.dag.finished_jobs}
+            outputs = [
+                (outfile, job.name)
+                for job in workflow.dag.finished_jobs
+                for outfile in job.output
+            ]
             pl_version = PipelineVersion.current()
         else:
             # replay from log file
