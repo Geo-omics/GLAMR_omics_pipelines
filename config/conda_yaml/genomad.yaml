@@ -3,4 +3,4 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - genomad=1.11.0
+  - genomad=1.11.2
