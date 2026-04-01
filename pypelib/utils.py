@@ -5,7 +5,7 @@ import gzip
 from inspect import signature
 import json
 from itertools import batched
-from os import PathLike
+from os import lockf, F_TLOCK, PathLike
 from pathlib import Path
 import random
 import re
@@ -14,6 +14,7 @@ from subprocess import PIPE, run
 import sys
 import tarfile
 from tempfile import TemporaryDirectory
+from time import monotonic, sleep
 import traceback
 
 
@@ -129,6 +130,65 @@ def conda_run(prefix, cmd, *args, **kwargs):
 
 class UsageError(Exception):
     pass
+
+
+@contextmanager
+def exclusive(lock_path, timeout=None, soft_fail=False):
+    """
+    Context manager for a block that can only be entered one at a time, across
+    different processes using shared storage.
+
+    timeout:
+        Raise an error after waiting this many seconds for the lock to be
+        released.
+
+    soft_fail [bool]:
+        If True and the lock could not be obtained after timeout, then allow
+        entering the block with the as-clause-target bound to False indicating
+        that the lock is not held.
+
+    Usage:
+
+    with exclusive('some/path/lock', timeout=300, soft_fail=True) as have_lock:
+        if have_lock:
+            ...
+        else:
+            # use alternative resources
+            ...
+    """
+    deadline = None
+
+    with open(lock_path, 'w') as lfile:
+        while deadline is None or monotonic() <= deadline:
+            try:
+                lockf(lfile.fileno(), F_TLOCK, 0)
+            except OSError:
+                # lock contention, try again later
+                if deadline is None and timeout is not None:
+                    # timeout starts after first fail
+                    deadline = monotonic() + timeout
+                sleep(1)
+                continue
+            else:
+                yield True
+                try:
+                    # keep lock file during exclusive block
+                    lock_path.unlink()
+                except Exception:
+                    pass
+                return
+
+    # failed getting the lock
+    try:
+        # unlink lockfile as soon as possible
+        lock_path.unlink()
+    except Exception:
+        pass
+
+    if soft_fail:
+        yield False
+    else:
+        raise RuntimeError(f'could not obtain lock {lock_path}')
 
 
 class logme:
