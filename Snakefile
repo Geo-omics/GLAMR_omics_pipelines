@@ -31,6 +31,10 @@ report: "code/report/workflow.rst"
 
 shell.prefix('printf "Job executed on: ${{HOSTNAME}}\n" && printf "SLURM job id: ${{SLURM_JOB_ID}}\n\n"; ')
 
+# Substitute bash $USER environment variable with actual user id, otherwise some steps fail
+param_work_dir = config["work_dir"] #get working directory from config file
+userid = env_var = os.environ['USER'] #get bash $USER variable
+work_dir = param_work_dir.replace("$USER", userid) #sub $USER for actual username
 current_dir = os.getcwd()
 #humann_ref_dir = "/home/kiledal/scratch_gdick1/GVHD/data/reference/humann" # for running on Great Lakes
 humann_ref_dir = "/geomicro/data2/kiledal/projects/GVHD/data/reference/humann"
@@ -422,6 +426,8 @@ rule clumpify:
     #resources: partition = "largemem", cpus=16, time_min=2880, mem_mb = 500000 # coassembly or large samples
     shell:
         """
+        set -o pipefail # should be set by snakemake already
+
         #BBtools use more memory than given, reduce amount given by 20% to stay within job specs.
         bbmap_mem=$(echo "scale=-1; ({resources.mem_mb}*0.8)/1" | bc)
 
@@ -431,13 +437,13 @@ rule clumpify:
             in2={input.rev_reads} \
             out1={params.clumped_fwd_reads} \
             out2={params.clumped_rev_reads} \
-            groups=24 \
+            groups=auto \
             zl=9 pigz \
             t={resources.cpus} \
-            2>&1 | tee {log} &&
+            2>&1 | tee {log}
 
-        rm {input.fwd_reads} {input.rev_reads} &&
-        mv {params.clumped_fwd_reads} {input.fwd_reads} &&
+        rm {input.fwd_reads} {input.rev_reads}
+        mv {params.clumped_fwd_reads} {input.fwd_reads}
         mv {params.clumped_rev_reads} {input.rev_reads}
         """
 
@@ -609,7 +615,7 @@ rule fastqc_fastp:
         touch("data/omics/{sample_type}/{sample}/reads/fastqc_fastp/.done")
     conda:
           "config/conda_yaml/fastqc.yaml"
-    resources: time_min = 7200, cpus = 24, mem_mb = 60000
+    resources: time_min = 7200, cpus = 1, mem_mb = 60000
     shell:
         """
         mkdir -p data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_fastp
@@ -628,7 +634,7 @@ rule fastqc_raw:
         touch("data/omics/{sample_type}/{sample}/reads/fastqc_raw/.done")
     conda:
           "config/conda_yaml/fastqc.yaml"
-    resources: time_min = 7200, cpus = 24, mem_mb = 60000
+    resources: time_min = 7200, cpus = 1, mem_mb = 60000
     shell:
         """
         mkdir -p data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_raw
@@ -895,17 +901,21 @@ rule ribodetector:
     log: "logs/ribodetector/{sample_type}-{sample}.log"
     benchmark:
         "benchmarks/ribodetector/{sample_type}-{sample}.txt"
-    resources: cpus = 24, mem_mb = 120000, time_min = 2880, gpu_mem_gb = 12, partition = "gpu", gpu = 1
+    resources: cpus = 24, mem_mb = 120000, time_min = 2880, gpu_mem_gb = 22, partition = "gpu", gpu = 1
+    priority: 2
     shell:
         """
         ribodetector \
-            -t {resouces.cpus} \
+            -t {resources.cpus} \
             -i {input.decon_fwd} {input.decon_rev} \
             -m {resources.gpu_mem_gb} \
+            -l 150 \
             -e rrna \
             --chunk_size 256 \
             -r {output.ribo_fwd} {output.ribo_rev} \
-            -o {ouptput.ribo_removed_fwd} {ouptput.ribo_removed_rev} 2>&1 | tee -a {log}
+            -o {output.ribo_removed_fwd} {output.ribo_removed_rev} 2>&1 | tee -a {log}
+
+            # --chunk_size 256 \
         """
 
 rule make_read_blastdb:
@@ -958,7 +968,7 @@ rule fastqc_decontam:
         touch("data/omics/{sample_type}/{sample}/reads/fastqc_decontam/.done")
     conda:
           "config/conda_yaml/fastqc.yaml"
-    resources: cpus = 4, mem_mb = 16000, time_min = 2880
+    resources: cpus = 1, mem_mb = 16000, time_min = 2880
     shell:
         """
         mkdir -p data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_decontam
@@ -1880,12 +1890,11 @@ rule kraken2_gtdb_w_uniq_fastp:
         r_seq = "data/omics/{sample_type}/{sample}/reads/decon_rev_reads_fastp.fastq.gz",
         # f_seq = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
         # r_seq = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz",
-        db = rules.kraken2_load_gtdb_DB.output.db,
+        db = ancient(rules.kraken2_load_gtdb_DB.output.db),
         #db_loaded = rules.kraken2_load_gtdb_DB.output.loaded,
         kreport2mpa = "code/kreport2mpa.py"
     output:
         report = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_report.txt",
-        out = temp("data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_out.txt"),
         bracken = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_bracken.txt",
         bracken_report = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_brackenReport.txt",
         bracken_mpa = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_brackenMpa.txt",
@@ -1894,7 +1903,8 @@ rule kraken2_gtdb_w_uniq_fastp:
         bracken_input = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_for_bracken.txt"
     params:
         uniq_minimizer_threshold = 150,
-        unclass_out = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_unclassified#.fasta"
+        unclass_out = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_unclassified#.fasta",
+        out = temp("data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_out.txt"),
     conda: "config/conda_yaml/kraken.yaml"
     benchmark: "benchmarks/kraken2_gtdb_w_uniq_fastp/{sample_type}-{sample}.txt"
     resources: cpus=16, mem_mb=25000, time_min=1440, mem_gb = 250, partition = "largemem"
@@ -1905,7 +1915,7 @@ rule kraken2_gtdb_w_uniq_fastp:
             --memory-mapping \
             --report-minimizer-data \
             --report {output.report} \
-            --output {output.out} \
+            --output {params.out} \
             --db {input.db} \
             --minimum-hit-groups 3 \
             --unclassified-out {params.unclass_out} \
@@ -1945,7 +1955,7 @@ rule kraken2_refseq_w_uniq_fastp: ##Run kraken2
     input:
         f_seq = rules.kraken2_gtdb_w_uniq_fastp.output.unclass_f,
         r_seq = rules.kraken2_gtdb_w_uniq_fastp.output.unclass_r,
-        db = rules.kraken2_load_refseq_DB.output.db,
+        db = ancient(rules.kraken2_load_refseq_DB.output.db),
         #db_loaded = rules.kraken2_load_refseq_DB.output.loaded,
         kreport2mpa = "code/kreport2mpa.py"
     output:
@@ -1960,6 +1970,7 @@ rule kraken2_refseq_w_uniq_fastp: ##Run kraken2
     benchmark: "benchmarks/kraken2_refseq_w_uniq_fastp/{sample_type}-{sample}.txt"
     conda: "config/conda_yaml/kraken.yaml"
     resources: cpus=16, mem_mb=25000, time_min=1440, mem_gb = 250, partition = "largemem"
+    priority: 2
     shell:
         """
         kraken2 \
@@ -2041,13 +2052,14 @@ rule reads_unirefLCA_mmseqs:
     resources:
         #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
         #mem_mb = 160000, cpus=48, time_min=20000
-        cpus=32, mem_mb=170000, time_min=19440
+        cpus=32, mem_mb=170000, time_min=19440 # standard for great lakes
+        #cpus=32, mem_mb=700000, time_min=19440 #geomicro
     shell:
         """
         export TMPDIR={params.tmp_dir}
         
         # Different tmp dir if running on lab servers
-        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/mmseqs/{wildcards.sample}/tmp
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" || "${{HOSTNAME}}" == "alpena" ]] && export TMPDIR=/scratch/$USER/mmseqs/{wildcards.sample}/tmp
 
         mkdir -p $TMPDIR
 
@@ -2149,6 +2161,70 @@ rule contig_unirefLCA_mmseqs:
         
         # Different tmp dir if running on lab servers
         [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/mmseqs2/{wildcards.sample}_contigs
+        [[ "${{HOSTNAME}}" == "alpena" ]] && export TMPDIR=/old-geomicro/kiledal-extra/mmseqs_contig/$USER/mmseqs2/{wildcards.sample}_contigs
+        
+        mkdir -p $TMPDIR
+
+        # Log how much temp space is available, can cause job to fail
+        printf "\nTemp directory storage available:\n" 2>&1 | tee {log}
+        df -h $TMPDIR 2>&1 | tee -a {log}
+        printf "\n\n" 2>&1 | tee -a {log}
+
+        #mmseqs touchdb {params.unirefDB} # loads the database into memory, only use in large memory systems / nodes
+
+        mmseqs \
+            easy-taxonomy \
+            {input.contigs} \
+            {params.unirefDB} \
+            ./{params.out_prefix} \
+            $TMPDIR \
+            --lca-mode 3 \
+            --orf-filter 1 \
+            --orf-filter-s 3.5 \
+            -s 4 \
+            --tax-lineage 1 \
+            --threads {resources.cpus} \
+            --split-memory-limit $(echo "scale=0;({resources.mem_mb}*0.8)/1024" | bc)G \
+            --db-load-mode 1 \
+            2>&1 | tee -a {log}
+
+            # --db-load-mode 2 # this loads the database into memory, was an attempt to speed up on Great Lakes but limited memory & scratch space were limiting factors
+
+        # Prior to clearing temp files, log temp space to see if potential reason for fail
+        printf "\nTemp directory storage available:\n" 2>&1 | tee -a {log}
+        df -h $TMPDIR 2>&1 | tee -a {log}
+        printf "\n\n" 2>&1 | tee -a {log}
+
+        #rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} $TMPDIR 2>&1 | tee -a {log}
+        rm -r $TMPDIR 2>&1 | tee -a {log}
+        printf "Done, and deleted temp dir" 2>&1 | tee -a {log}
+        """
+
+rule contig_gtdbLCA_mmseqs:
+    input:
+        contigs = "data/omics/{sample_type}/{sample}/assembly/{assembly}/final.contigs.renamed.fa"
+    output:
+        report = "data/omics/{sample_type}/{sample}/assembly/{assembly}_annotations/GTDB226_contigLCA/{sample}_contig_report",
+        lca = "data/omics/{sample_type}/{sample}/assembly/{assembly}_annotations/GTDB226_contigLCA/{sample}_contig_lca.tsv"
+    conda:  "config/conda_yaml/mmseqs.yaml"
+    params:
+        unirefDB = "data/reference/mmseqs2_GTDB226/gtdb",
+        out_prefix = "data/omics/{sample_type}/{sample}/assembly/{assembly}_annotations/GTDB226_contigLCA/{sample}_contig",
+        tmp_dir = "/home/kiledal/scratch_gdick1/mmseqs/{sample}/tmp",
+        tmp_fwd_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__fwd.fastq.gz",
+        tmp_rev_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__rev.fastq.gz"
+    benchmark: "benchmarks/contig_gtdbLCA_mmseqs/{sample_type}-{sample}-{assembly}.txt"
+    log: "logs/contig_gtdbLCA_mmseqs/{sample_type}-{sample}-{assembly}.log"
+    resources:
+        #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
+        mem_mb = 160000, cpus=32, time_min=7200
+        #mem_mb = 160000, cpus=32, time_min=500
+    shell:
+        """
+        export TMPDIR={params.tmp_dir}
+        
+        # Different tmp dir if running on lab servers
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" || "${{HOSTNAME}}" == "l-2026010501" ]] && export TMPDIR=/scratch/$USER/mmseqs2/{wildcards.sample}_contigs
         [[ "${{HOSTNAME}}" == "alpena" ]] && export TMPDIR=/old-geomicro/kiledal-extra/mmseqs_contig/$USER/mmseqs2/{wildcards.sample}_contigs
         
         mkdir -p $TMPDIR
@@ -2506,7 +2582,7 @@ rule map_to_contigs:
         mapper = "minimap2-sr",
         #mapper = "strobealign"
     conda: "config/conda_yaml/coverm.yaml"
-    # benchmark: "benchmarks/map_to_contigs/{sample_type}-{project}__{sample}.txt"
+    benchmark: "benchmarks/map_to_contigs/{sample_type}-{project}__{sample}.txt"
     resources: cpus=32, mem_mb=150000, time_min=7200, disk_mb=500000, scratch_disk_mb = 1000000
     shell:
         """
@@ -2545,7 +2621,7 @@ rule contig_coverage:
         tmpdir = "tmp/coverm_contig_coverage/{sample}"
     benchmark: "benchmarks/contig_coverage/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/coverm.yaml"
-    resources: cpus=24, mem_mb=120000, time_min=10000 # standard assemblies
+    resources: cpus=24, mem_mb=150000, time_min=10000 # standard assemblies
     #resources: cpus=24, mem_mb=1000000, time_min=14400, partition = "largemem" # coassembly
     #resources: cpus=24, mem_mb=1500000, time_min=14400, partition = "largemem" # XL coassembly
     priority: 2
@@ -2603,6 +2679,7 @@ rule concoct:
     output:
         cut_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/cut_contigs_10K.fa",
         cut_contigs_bed = "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/contigs_10K.bed",
+        merged_clustering = "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/output/clustering_merged.csv",
         cut_coverage = "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/cut_coverage_table.tsv"
     params:
         outdir = "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/output",
@@ -2625,7 +2702,7 @@ rule concoct:
 
         concoct --threads {resources.cpus} --composition_file {output.cut_contigs} --coverage_file {output.cut_coverage} -b {params.outdir}/
         
-        merge_cutup_clustering.py {params.outdir}/clustering_gt1000.csv > {params.outdir}/clustering_merged.csv
+        merge_cutup_clustering.py {params.outdir}/clustering_gt1000.csv > {output.merged_clustering}
 
         mkdir -p {params.outdir}/fasta_bins
         extract_fasta_bins.py {input.contigs} {params.outdir}/clustering_merged.csv --output_path {params.outdir}/fasta_bins
@@ -2683,7 +2760,8 @@ rule maxbin2:
         contigs = rules.rename_contigs.output.contigs,
         depth = rules.maxbin2_coverage.output.depths_file
     output:
-        done = touch("data/projects/{project}/{sample_type}/{sample}/bins/maxbin/.done")
+        done = touch("data/projects/{project}/{sample_type}/{sample}/bins/maxbin/.done"),
+        summary = "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/maxbin.summary"
     params:
         bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/maxbin"
     benchmark: "benchmarks/maxbin/{sample_type}-{project}__{sample}.txt"
@@ -2771,7 +2849,7 @@ rule semibin2:
     #resources: cpus=32, mem_mb=700000, time_min=2880, partition = "largemem" # coassembly on our servers
     priority: 3
     shell:
-        r"""
+        """
         WORK_DIR=$PWD
 
         SemiBin2 single_easy_bin \
@@ -2862,7 +2940,7 @@ rule metadecoder:
 
 rule standardize_bins:
     input:
-        "data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/cut_contigs_10K.fa",
+        #"data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/cut_contigs_10K.fa",
         #"data/projects/{project}/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa",
         "data/projects/{project}/{sample_type}/{sample}/bins/semibin",
         "data/projects/{project}/{sample_type}/{sample}/bins/METABAT2/.done/",
@@ -2926,6 +3004,7 @@ rule checkm2:
         checkm2 predict \
             --threads {resources.cpus} \
             --input {params.in_dir} \
+            --extension fa \
             --database_path {params.database} \
             --output-directory {output.results}
         """
@@ -3685,7 +3764,7 @@ rule map_reads_to_microcystis_markers:
     conda: "config/conda_yaml/bwa.yaml"
     benchmark: "benchmarks/map_reads_to_microcystis_markers/{sample_type}_{sample}--{marker}.txt"
     log: "logs/map_reads_to_microcystis_markers/{sample_type}_{sample}--{marker}.log"
-    resources: cpus=16
+    resources: cpus=4, mem_mb=16000
     shell:
         """
         mkdir -p $(dirname {output.bam})
@@ -4401,24 +4480,26 @@ rule virsorter2:
     input:
         contigs = rules.rename_contigs.output.contigs
     output:
-        virsorter_dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/virsorter2"),
+        #virsorter_dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/virsorter2"),
         virsorter_done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.virsorter2_done")
     params:
-        out_prefix = "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/bins/{sample}"
-    conda: "config/conda_yaml/virsorter.yaml"
+        virsorter_dir = "data/projects/{project}/{sample_type}/{sample}/bins/virsorter2"
+    #conda: "config/conda_yaml/virsorter.yaml"
+    container: "docker://jiarong/virsorter:latest"
     benchmark: "benchmarks/virsorter2/{sample_type}-{project}__{sample}.txt"
     log: "logs/virsorter2/{sample_type}-{project}__{sample}.log"
     resources: cpus=32, mem_mb=150000, time_min=10080 # standard samples
     priority: 3
     shell:
         """
+        pwd && cd {current_dir} && pwd
+
         virsorter run \
-            -w {output.virsorter_dir} \
+            -w {params.virsorter_dir} \
             -i {input.contigs} \
-            --db-dir data/reference/virsorter2 \
-            --include-groups all \
+            --include-groups "dsDNAphage,ssDNA" \
             -j {resources.cpus} \
-            all | tee {log}
+            all > {log} 2>&1
         """
 
 rule genomad:
@@ -4441,9 +4522,10 @@ rule genomad:
         genomad end-to-end \
             --cleanup \
             --splits {params.splits} \
+            --threads {resources.cpus} \
             {input.contigs} \
             {output.genomad_dir} \
-            {params.db_path} | tee {log}
+            {params.db_path} > {log} 2>&1
         """
 
 rule gutsmash:
@@ -4469,6 +4551,4 @@ rule gutsmash:
             --output-dir {output.dir} \
             {params.genome} | tee {log}
         """
-
-
-
+        

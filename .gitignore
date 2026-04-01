@@ -37,3 +37,5 @@ ToMOVE_culture_collection_figures/**
 *.log
 pypelib/__pycache__
 pypelib/amplicon/__pycache__
+*/__pycache__/*
+*.pyc
