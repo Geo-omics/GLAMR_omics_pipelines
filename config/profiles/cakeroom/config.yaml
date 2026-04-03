@@ -1,0 +1,9 @@
+jobs: 50
+use-conda: true
+conda-frontend: mamba
+use-singularity: true
+default-resources: [cpus=1, mem_mb=16000, time_min=120, heavy_network=0]
+resources: [cpus=12, mem_mb=24000, heavy_network=1]
+latency-wait: 60
+singularity-args: "--home $HOME:$HOME --bind /geomicro:/geomicro --bind /nfs:/nfs"
+rerun-triggers: mtime

@@ -1,0 +1,20 @@
+jobs: 2000
+local-cores: 1
+executor: cluster-generic
+cluster-generic-submit-cmd: "sbatch --parsable --account={resources.account} --partition={resources.partition} --time={resources.time_min} --mem={resources.mem_mb} -c {resources.cpus} --gres=gpu:{resources.gpu} -o logs/slurm/{rule}_{wildcards} -e logs/slurm/{rule}_{wildcards}"
+cluster-generic-cancel-cmd: "scancel"
+software-deployment-method: conda
+conda-frontend: mamba
+use-conda: True
+software-deployment-method: apptainer
+use-apptainer: True
+default-resources: [cpus=1, mem_mb=8000, time_min=120, account=gdick1, partition=standard, heavy_network=0, gpu=0, disk_mb=100]
+#resources: [scratch_disk_mb=60000000]
+resources: [scratch_disk_mb=40000000]
+#resources: [disk_mb=2000000]
+#resources: [cpus=20000, mem_mb=100000000, heavy_network=1, disk_mb=2000000]
+latency-wait: 30
+cluster-generic-status-cmd: "slurm-status.py"
+max-status-checks-per-second: 1
+singularity-args: "--home /home/$USER:/home/$USER --bind /scratch/gdick_root/ --bind /nfs/turbo/lsa-gdick2/geomicro/data2/kiledal/ --bind /gpfs/accounts/gdick_root/ --bind /nfs:/nfs"
+rerun-triggers: mtime

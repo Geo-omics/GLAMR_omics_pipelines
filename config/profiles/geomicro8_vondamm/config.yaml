@@ -1,0 +1,19 @@
+jobs: 1000
+local-cores: 1
+executor: cluster-generic
+cluster-generic-submit-cmd: "mkdir -p logs/slurm && sbatch --parsable --time={resources.time_min} --mem={resources.mem_mb} -c {resources.cpus} -o logs/slurm/{rule}_{wildcards} -e logs/slurm/{rule}_{wildcards} --nodelist=vondamm" #--exclude=alpena
+cluster-generic-cancel-cmd: "scancel"
+software-deployment-method: conda
+use-conda: True
+conda-frontend: mamba
+software-deployment-method: apptainer
+use-apptainer: True
+default-resources: [cpus=1, mem_mb=8000, time_min=120, heavy_network=0, gpu=0, disk_mb=100]
+#resources: [disk_mb=2000000]
+resources: [cpus=1000, mem_mb=1000000000, heavy_network=1, disk_mb=2000000]
+latency-wait: 10
+cluster-generic-status-cmd: "slurm-status.py"
+max-status-checks-per-second: 10
+singularity-args: "--home $HOME:/home/$USER --bind /nfs/turbo/lsa-gdick2/geomicro --bind /nfs:/nfs"
+precommand: "mkdir -p logs/slurm/ logs/ benchmarks/"
+rerun-triggers: mtime

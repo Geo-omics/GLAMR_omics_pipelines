@@ -1,0 +1,11 @@
+jobs: 100
+software-deployment-method: conda
+use-conda: True
+conda-frontend: mamba
+software-deployment-method: apptainer
+use-apptainer: True
+default-resources: [cpus=1, mem_mb=16000, time_min=120, heavy_network=0]
+resources: [cpus=92, mem_mb=160000, heavy_network=1]
+latency-wait: 60
+singularity-args: "--home $HOME:$HOME --bind /geomicro:/geomicro --bind /nfs:/nfs"
+rerun-triggers: mtime
