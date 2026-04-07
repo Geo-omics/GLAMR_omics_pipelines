@@ -5,7 +5,9 @@ import argparse
 import bisect
 from contextlib import ExitStack
 from datetime import datetime, UTC
+from hashlib import file_digest
 from io import BytesIO, StringIO
+from itertools import groupby
 import json
 import os
 from pathlib import Path
@@ -887,11 +889,23 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
         This will print output to stdout.
     """
     if workflow:
-        if not any((
-            workflow.config.get('checkout_file'),
-            workflow.config.get('versions_file'),
-            workflow.config.get('collect_benchmarks'),
-        )):
+        post_prod_files = list(filter(None, [
+            workflow.config.get(i)
+            for i in (
+                'checkout_file',
+                'versions_file',
+                'collect_benchmarks',
+            )
+        ]))
+        if post_prod_files:
+            try:
+                make_backup(post_prod_files)
+            except OSError as e:
+                print(
+                    f'[ERROR] failed making backups for post-production files: '
+                    f'{e.__class__.__name__}: {e}'
+                )
+        else:
             # nothing to do
             return
 
@@ -983,6 +997,66 @@ def replay(log_dir, data_root=None, checkout_file=None, dry_run=False,
                 print(f'{e.__class__.__name__}: {e} [SKIP]')
             else:
                 raise
+
+
+def make_backup(files):
+    """
+    Make a backup of the post-production output files
+
+    Numbered backups will be kept in a dedicated directory next to the original
+    files.  This raises OSError of some sort if file access fails.
+    """
+    BACKUP_DIR_NAME = 'post-prod-backups'
+    backup_pat = re.compile(r'^(?P<stem>.+)[.](?P<num>[0-9]+)(?P<suffix>.*)$')
+    file_data = {}
+
+    # Search for existing numbered backups.  Sort/group to allow the original
+    # files to be in different directories, just to cover all bases,
+    files0 = [Path(i) for i in files if i]
+    files1 = groupby(sorted(files0, key=lambda x: x.parent), lambda x: x.parent)
+    for srcdir, grp in files1:
+        # only do a backup if the original file exist
+        if files := [i for i in grp if i.is_file()]:
+            for i in files:
+                # backups start with 0, so here -1 indicates no backup yet but
+                # can be used to compare with < below and incrementing gives 0
+                # for the first backup.
+                file_data[(srcdir, i.stem, i.suffix)] = -1
+        else:
+            # no original file exists yet
+            continue
+
+        # create backup directory if needed
+        dstdir = srcdir / BACKUP_DIR_NAME
+        if not dstdir.is_dir():
+            dstdir.mkdir()
+
+        for i in dstdir.iterdir():
+            if m := backup_pat.match(i.name):
+                stem, num, suffix = m.groups()
+                if (srcdir, stem, suffix) not in file_data:
+                    # some unknown file
+                    continue
+                if (num := int(num)) > file_data[(srcdir, stem, suffix)]:
+                    file_data[(srcdir, stem, suffix)] = num
+
+    for (srcdir, stem, suffix), num in file_data.items():
+        dstdir = srcdir / BACKUP_DIR_NAME
+        orig = srcdir / f'{stem}{suffix}'
+        if 0 <= num:
+            # previous backup exists
+            last = dstdir / f'{stem}.{num}{suffix}'
+            with orig.open('rb') as ifile:
+                orig_hash = file_digest(ifile, 'sha256').digest()
+            with last.open('rb') as ifile:
+                last_hash = file_digest(ifile, 'sha256').digest()
+            if orig_hash == last_hash:
+                # already got a good backup, update mtime
+                last.touch()
+                continue
+
+        backup = dstdir / f'{stem}.{num + 1}{suffix}'
+        shutil.copy2(orig, backup)
 
 
 def test_conda_envs(path):
