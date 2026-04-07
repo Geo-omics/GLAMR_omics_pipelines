@@ -2860,7 +2860,7 @@ rule semibin2:
             -o {output.out_dir} | tee {log}
 
         # Fix permissions on outputs (by default only readable by owner)
-        find {output.out_dir} -type f -exec chmod g+r,o+r {{}} \; -o -type d -exec chmod g+rx,o+rx {{}} \;
+        find {output.out_dir} -type f -exec chmod g+r,o+r {{}} \\; -o -type d -exec chmod g+rx,o+rx {{}} \\;
         """
 
 rule VAMB:
