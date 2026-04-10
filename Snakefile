@@ -4552,3 +4552,17 @@ rule gutsmash:
             {params.genome} | tee {log}
         """
         
+rule seqkit_stats:
+    input:
+        fastq = "data/omics/{sample_type}/{sample}/reads/{reads}.fastq.gz"
+    output:
+        stats = "data/omics/{sample_type}/{sample}/reads/read_stats/{reads}.txt"
+    conda: "config/conda_yaml/seqkit.yaml"
+    benchmark: "benchmarks/seqkit_stats/{sample_type}-{sample}__{reads}.txt"
+    log: "logs/seqkit_stats/{sample_type}_{sample}__{reads}.log"
+    resources: cpus=4, mem_mb=16000, time_min=1000 # standard samples
+    priority: 3
+    shell:
+        """
+        seqkit stats --all --tabular --threads {resources.cpus} {input.fastq} > {output.stats}
+        """
