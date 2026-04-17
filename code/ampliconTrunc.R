@@ -42,7 +42,7 @@ cpus = as.integer(args$cpus)
 
 
 valid_targets = system2(
-    'python3',
+    'python3.13',
     args=shQuote(c('-m', 'pypelib.amplicon.dispatch', 'spec2targets', args$target_spec)),
     stdout=TRUE,
 )
