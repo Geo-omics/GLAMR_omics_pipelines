@@ -4566,3 +4566,20 @@ rule seqkit_stats:
         """
         seqkit stats --all --tabular --threads {resources.cpus} {input.fastq} > {output.stats}
         """
+
+rule convert_to_mzml:
+    """ Metabolomics pipeline -- step 1 """
+    input: "data/omics/{sample_type}/{sample}/spectra/raw_spectra.raw"
+    # msconvert picks the .mzML suffix capitalization
+    output: "data/omics/{sample_type}/{sample}/spectra/raw_spectra.mzML"
+    params:
+        outdir = subpath(output[0], parent=True)
+    container: "docker://proteowizard/pwiz-skyline-i-agree-to-the-vendor-licenses"
+    benchmark: "benchmarks/convert_to_mzml/{sample_type}-{sample}.txt"
+    log: "logs/convert_to_mzml/{sample_type}_{sample}.log"
+    resources: cpus=1, mem_mb=1000, time_min=1000
+    shell:
+        """
+        source code/shell_prelude {log:q}
+        wine msconvert --outdir {params.outdir:q} --outfile {output:q} {input:q}
+        """
