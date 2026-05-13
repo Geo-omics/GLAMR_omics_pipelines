@@ -4609,3 +4609,28 @@ rule convert_to_mzml:
         source code/shell_prelude {log:q}
         wine msconvert --outdir {params.outdir:q} --outfile {output:q} {input:q}
         """
+
+rule mzmine_presets:
+    """ Metabolomics pipeline -- step 2 """
+    input:
+        data = rules.convert_to_mzml.output
+    output:
+        presets = "data/omics/{sample_type}/{sample}/mzmine.presets.xml"
+    params:
+        template = "mzmine.presets.xml.template"
+    resources: cpus=1, mem_mb=1000, time_min=10
+    run: pypelib.mzmine.make_presets(params.template, input.data, output=output.presets)
+    
+rule mzmine:
+    """ Metabolomics pipeline -- step 3 """
+    input:
+        data = rules.convert_to_mzml.output
+        presets = rules.mzmine_presets
+    output: directory("data/omics/{sample_type}/{sample}/spectra/mzmine.out")
+    benchmark: "benchmarks/mzmine/{sample_type}-{sample}.txt"
+    log: "logs/mzmine/{sample_type}_{sample}.log"
+    resources: cpus=1, mem_mb=10000, time_min=1000
+    shell:
+        """
+        mzmine
+        """
