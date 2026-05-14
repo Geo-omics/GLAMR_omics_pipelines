@@ -17,6 +17,7 @@ import pypelib.amplicon.hmm_summarize
 import pypelib.amplicon.remove_primers
 import pypelib.amplicon.tabulate_targets
 from pypelib.config import finish_config_setup
+import pypelib.mzmine
 from pypelib.post import post_production
 import pypelib.raw_reads
 from pypelib.raw_reads import parse_runinfo
@@ -4593,11 +4594,11 @@ rule seqkit_stats:
         seqkit stats --all --tabular --threads {resources.cpus} {input.fastq} > {output.stats}
         """
 
-rule convert_to_mzml:
+checkpoint convert_to_mzml:
     """ Metabolomics pipeline -- step 1 """
     input: "data/omics/{sample_type}/{sample}/spectra/raw_spectra.raw"
     # msconvert picks the .mzML suffix capitalization
-    output: "data/omics/{sample_type}/{sample}/spectra/raw_spectra.mzML"
+    output: "data/omics/{sample_type}/{sample}/spectra/{sample}.mzML"
     params:
         outdir = subpath(output[0], parent=True)
     container: "docker://proteowizard/pwiz-skyline-i-agree-to-the-vendor-licenses"
@@ -4610,27 +4611,43 @@ rule convert_to_mzml:
         wine msconvert --outdir {params.outdir:q} --outfile {output:q} {input:q}
         """
 
+def get_mzml_files(wc):
+    """ input function for mzmine_presets """
+    base = Path('data/projects') / wc.dataset / 'metabolomes'
+    infiles = [
+        checkpoints.convert_to_mzml.get(sample_type='metabolomes', sample=i.name).output[0]
+        for i in base.glob('samp_*')
+    ]
+    print(f'BORK {infiles=}')
+    return infiles
+    
+
 rule mzmine_presets:
     """ Metabolomics pipeline -- step 2 """
     input:
-        data = rules.convert_to_mzml.output
+        mzml_files = get_mzml_files
     output:
-        presets = "data/omics/{sample_type}/{sample}/mzmine.presets.xml"
+        presets = "data/projects/{dataset}/mzmine.presets.xml"
     params:
-        template = "mzmine.presets.xml.template"
+        # template = "mzmine.presets.xml.template"
+        template = "/home/heinro/.mzmine/wizard/presetsB.mzmwizard"
     resources: cpus=1, mem_mb=1000, time_min=10
-    run: pypelib.mzmine.make_presets(params.template, input.data, output=output.presets)
+    run: pypelib.mzmine.make_presets(params.template, input.mzml_files, output=output.presets)
     
+
 rule mzmine:
     """ Metabolomics pipeline -- step 3 """
     input:
-        data = rules.convert_to_mzml.output
-        presets = rules.mzmine_presets
-    output: directory("data/omics/{sample_type}/{sample}/spectra/mzmine.out")
-    benchmark: "benchmarks/mzmine/{sample_type}-{sample}.txt"
-    log: "logs/mzmine/{sample_type}_{sample}.log"
+        mzml_files = get_mzml_files,
+        presets = rules.mzmine_presets.output.presets
+    output: directory("data/projects/{dataset}/mzmine.out/")
+    params:
+        mzuser = '~/.mzmine/users/...'
+    benchmark: "benchmarks/mzmine/{dataset}.txt"
+    log: "logs/mzmine/{dataset}.log"
     resources: cpus=1, mem_mb=10000, time_min=1000
+    container: '/tmp/mzmine.sif'
     shell:
         """
-        mzmine
+        mzmine --threads {resources.cpus} --user {params.mzuser} --batch {input.presets}
         """
