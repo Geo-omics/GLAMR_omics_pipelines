@@ -608,7 +608,7 @@ class VersionInfoFile:
             data = self.data[pipeline_version]
             if env_pkg_info.name in data:
                 # keeping those rules even if packages/versions change
-                env_pkg_info.add_rules(*data[env_pkg_info.name].rules)
+                env_pkg_info.add_rules(data[env_pkg_info.name].rules)
         else:
             # data for new pipline version to be added
             data = {}
