@@ -979,6 +979,8 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
         if data_root is None:
             # assuming normal OMICS pipeline conventions
             data_root = log.parent.parent.parent / 'data'
+        else:
+            data_root = Path(data_root)
 
         if not data_root.is_dir():
             raise FileNotFoundError(f'no such directory: {data_root}')
@@ -1051,6 +1053,7 @@ def replay(log_dir, data_root=None, checkout_file=None, dry_run=False,
             post_production(
                 i,
                 workflow=None,
+                data_root=data_root,
                 checkout_file=checkout_file,
                 dry_run=dry_run,
             )
