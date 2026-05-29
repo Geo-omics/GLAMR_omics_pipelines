@@ -45,6 +45,68 @@ class JobIdReused(Exception):
     pass
 
 
+def check_log_dir(logdir, glob=None, output=None):
+    """
+    Survey all the snakemake log files for certain pathologies.
+    """
+    if output is None:
+        outfile = sys.stdout
+    else:
+        outfile = open(output, 'w')
+
+    logdir = Path(logdir)
+    if glob is None:
+        it = logdir.iterdir()
+    else:
+        it = logdir.glob(glob)
+
+    for i in it:
+        status = ''
+        complete = None
+        wflowerr = None
+        lastline = None
+        okpostpr = None
+        jobcount = 0
+        with i.open() as ifile:
+            for lnum, line in enumerate(ifile, start=1):
+                if line.startswith('Complete log(s): '):
+                    complete = lnum
+                elif line.startswith('WorkflowError:'):
+                    wflowerr = lnum
+                elif line.startswith('[OK] post-production done'):
+                    okpostpr = lnum
+                elif line.startswith('Finished jobid: '):
+                    jobcount += 1
+            lastline = lnum
+
+        if wflowerr:
+            if complete and wflowerr == complete + 1:
+                # regular workflow error
+                status = 'WorkflowError'
+            elif complete:
+                # complete not immediately before WorkflowError
+                status = f'WorkflowError at {wflowerr} but {complete=}'
+            else:
+                status = 'WorkflowError (no complete)'
+        elif okpostpr:
+            # all good, new way
+            status = 'OK'
+        elif complete:
+            if complete == lastline:
+                # all good, the old way
+                status = 'OK'
+            else:
+                # post-production errors?
+                status = 'complete not last'
+        else:
+            status = 'not complete'
+
+        print(i.name, jobcount, status, sep='\t', file=outfile)
+
+    if output is not None:
+        outfile.close()
+
+
 def get_info_from_log(log):
     """
     Collect certain information from a snakemake run's log file
