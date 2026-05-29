@@ -319,7 +319,7 @@ def update_omics_checkout(
         mtime = path.stat().st_mtime
         mtime = datetime.fromtimestamp(mtime).astimezone()
 
-        if old_mtime := old_data.get(path):
+        if old_mtime := old_data.get(str(relpath)):
             if mtime == old_mtime:
                 # no change, nothing to do
                 no_change += 1
@@ -352,8 +352,8 @@ def update_omics_checkout(
             ofile = estack.enter_context(open(checkout_file, 'a'))
             print(f'Writing {checkout_file} ...', end='', flush=True)
 
-        for mtime, version, rule, path in new_data:
-            ofile.write(f'{mtime}\t{version or ""}\t{rule or ""}\t{path}\n')
+        for mtime, version, rule, relpath in new_data:
+            ofile.write(f'{mtime}\t{version or ""}\t{rule or ""}\t{relpath}\n')
 
     if checkout_file and not dry_run:
         print('[OK] ', end=' ')  # expect stats printed after this
