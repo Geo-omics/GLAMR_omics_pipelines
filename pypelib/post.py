@@ -1023,6 +1023,8 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
 
     if workflow:
         collect_benchmarks(workflow, dry_run=dry_run)
+        with open(log, 'a') as logfile:
+            print('[OK] post-production done', file=logfile)
 
 
 def replay(log_dir, data_root=None, checkout_file=None, dry_run=False,
