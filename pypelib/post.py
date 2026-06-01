@@ -7,7 +7,7 @@ from contextlib import ExitStack
 from datetime import datetime, UTC
 from hashlib import file_digest
 from io import BytesIO, StringIO
-from itertools import groupby
+from itertools import chain, groupby
 import json
 import os
 from pathlib import Path
@@ -120,6 +120,11 @@ def get_info_from_log(log):
         r'(?P<keyvals>(\s+\w+: .*\n)+)',
         re.MULTILINE
     )
+    # old finished pattern for most logs before April 2025 or so
+    finished_pat_old = re.compile(
+        r'^Finished job (?P<jobid>[0-9]+)',
+        re.MULTILINE,
+    )
     finished_pat = re.compile(
         r'^Finished jobid: (?P<jobid>[0-9]+)',
         re.MULTILINE,
@@ -192,7 +197,9 @@ def get_info_from_log(log):
         jobs[jobid] = job
 
     data = []
-    for m in finished_pat.finditer(log_txt):
+    it0 = finished_pat_old.finditer(log_txt)
+    it1 = finished_pat.finditer(log_txt)
+    for m in chain(it0, it1):
         jobid = int(m['jobid'])
         if jobid in no_output_jobs:
             continue
