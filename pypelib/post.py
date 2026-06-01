@@ -1175,7 +1175,7 @@ def cli():
     subp1.add_argument(
         'log_directory',
         nargs='?',
-        default='./.snamemake/log',
+        default='./.snakemake/log',
         help='Snakemake log directory, defaults to "./snakemake/log"',
     )
     subp1.add_argument(
