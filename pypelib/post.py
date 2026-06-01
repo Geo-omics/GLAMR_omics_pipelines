@@ -748,10 +748,16 @@ def update_versions_file(workflow, dry_run=False):
 
 
 def load_benchmark(path):
-    with open(path) as ifile:
-        head = ifile.readline().split()
-        row = ifile.readline().split()
-        return dict(zip(head, row, strict=True))
+    try:
+        with open(path) as ifile:
+            head = ifile.readline().split()
+            row = ifile.readline().split()
+            return dict(zip(head, row, strict=True))
+    except Exception as e:
+        raise RuntimeError(
+            f'Failed reading/parsing benchmark file: {path} from '
+            f'{e.__class__.__name__}: {e}'
+        ) from e
 
 
 def collect_benchmarks(workflow, dry_run=False):
