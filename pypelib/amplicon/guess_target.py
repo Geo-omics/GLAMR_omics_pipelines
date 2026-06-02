@@ -114,11 +114,20 @@ def main(summaries, stats_file, outfile=None):
     else:
         raise RuntimeError('bug')
 
-    out_data['errors'] = out_data.get('errors', []) + [
-        f'E{err}: {msg}'
-        for msg, err in errors
-    ]
-    if not out_data['errors']:
+    errors += out_data.get('errors', [])
+    if errors:
+        formatted_errs = []
+        for item in errors:
+            try:
+                msg, err = item
+            except (TypeError, ValueError):
+                # preserve some flexibility here
+                formatted_errs.append(str(item))
+            else:
+                formatted_errs.append(f'E{err}: {msg}')
+        out_data['errors'] = formatted_errs
+    elif 'errors' in out_data:
+        # don't write out an empty list
         del out_data['errors']
 
     out_txt = json.dumps(out_data, indent=4)
