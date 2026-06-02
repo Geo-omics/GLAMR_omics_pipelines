@@ -6,7 +6,7 @@ from .hmm_model_data import HMM_MODEL_DATA
 from .primers import Primer
 
 
-Err = IntEnum('Err', ' '.join((f'E{i}' for i in range(20))))
+Err = IntEnum('Err', ' '.join((f'E{i}' for i in range(1, 21))))
 """ common error codes """
 
 

@@ -91,21 +91,30 @@ def main(summaries, stats_file, outfile=None):
         try:
             errors = basic_checks(*data, 'single')
         except (BadData, InsufficientData) as e:
-            errors.append(e.arg)
+            errors.append(e.args)
         else:
             out_data.update(check_single(*data))
     elif len(data) == 2:
+        check_as_pair = True
         try:
             errors = basic_checks(data[0], 'fwd')
+        except (BadData, InsufficientData) as e:
+            errors.append(e.args)
+            check_as_pair = False
+        try:
             errors += basic_checks(data[1], 'rev')
         except (BadData, InsufficientData) as e:
-            errors.append(e.arg)
-        else:
-            out_data.update(check_paired(*data))
+            errors.append(e.args)
+            check_as_pair = False
+        if check_as_pair:
+            try:
+                out_data.update(check_paired(*data))
+            except BadData as e:
+                errors.append(e.args)
     else:
         raise RuntimeError('bug')
 
-    out_data['errors'] += [
+    out_data['errors'] = out_data.get('errors', []) + [
         f'E{err}: {msg}'
         for msg, err in errors
     ]
@@ -142,18 +151,19 @@ def read_summary(file):
     if model_name := data.get('model'):
         model = all_models[model_name]
         data['model'] = model
-    for direc, primers in [('fwd', model.fwd_primers), ('rev', model.rev_primers)]:  # noqa: E501
-        key = f'{direc}_primer'
-        if primer_name := data.get(key):
-            for i in primers:
-                if i.name == primer_name:
-                    data[key] = i
-                    break
-            else:
-                raise ValueError(
-                    f'no {direc} primer with name {primer_name} in model '
-                    f'{model_name}'
-                )
+
+        for direc, primers in [('fwd', model.fwd_primers), ('rev', model.rev_primers)]:
+            key = f'{direc}_primer'
+            if primer_name := data.get(key):
+                for i in primers:
+                    if i.name == primer_name:
+                        data[key] = i
+                        break
+                else:
+                    raise ValueError(
+                        f'no {direc} primer with name {primer_name} in model '
+                        f'{model_name}'
+                    )
     return data
 
 
@@ -201,16 +211,23 @@ def basic_checks(data, file_dir):
     """ Checks that apply to any individual summary """
     GOOD = 0.5  # fraction of good alignment
 
+    if 'good_alignments_count' not in data:
+        # early return in hmm_summarize.main
+        raise InsufficientData(
+            f'{file_dir}: Insufficient summary information: there were no '
+            f'alignments at all',
+            Err.E9
+        )
+
+    if 'model' not in data:
+        raise InsufficientData(
+            f'{file_dir}: Insufficient summary information: no model',
+            Err.E2
+        )
+
     errors = []
     if data['good_alignments_count'] / data['alignment_winners_count'] < GOOD:
         errors.append((f'{file_dir}: too few good alignments', Err.E1))
-
-    if 'model' not in data:
-        errors.append((
-            f'{file_dir}: Insufficient summary information: no model',
-            Err.E2
-        ))
-        raise InsufficientData(errors)
 
     return errors
 
