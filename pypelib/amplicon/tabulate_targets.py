@@ -111,6 +111,29 @@ def collect_target_data(infiles):
     for i in infiles:
         with open(i) as ifile:
             data.append(flatten(json.load(ifile)))
+
+        # compile into abbreviated and sorted, non-redundant error listing
+        # (expecting errors from guess_target script)
+        errpat = re.compile(r'^E(?P<errnum>[0-9]+)')
+        if errors := data[-1].get('errors'):
+            errs = set()
+            if isinstance(errors, list):
+                try:
+                    for err in errors:
+                        if m := errpat.match(err):
+                            errs.add(int(m['errnum']))
+                        else:
+                            errs.add(None)  # indicate other/unknown error
+                except Exception:
+                    print(f'BORK (EE) {type(errors)=} {errors=} {i=}')
+                    raise
+            else:
+                errs.add(None)
+            inorder = sorted(i for i in errs if i)
+            if None in errs:
+                inorder.append('??')
+            data[-1]['errors'] = ','.join(f'E{i}' for i in inorder)
+
     return data
 
 
