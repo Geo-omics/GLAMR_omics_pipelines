@@ -161,7 +161,7 @@ def write_assignments(data, output_file):
     output_file = Path(output_file)
     stats = Counter()
     for row in data:
-        if 'errors' in row:
+        if row.get('errors'):
             row['target'] = UNKNOWN
         else:
             row['target'] = '.'.join([
