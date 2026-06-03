@@ -84,17 +84,26 @@ def main(summaries, stats_file, outfile=None):
         dat['length'] = length
     del lengths
 
-    out_data = {}
     errors = []
 
     if len(data) == 1:
+        out_data = {
+            'layout': 'single',
+            'model_name': data[0]['model'].name
+        }
         try:
             errors = basic_checks(*data, 'single')
         except (BadData, InsufficientData) as e:
             errors.append(e.args)
         else:
-            out_data.update(check_single(*data))
+            try:
+                out_data.update(check_single(*data))
+            except BadData as e:
+                errors.append(e.args)
     elif len(data) == 2:
+        out_data = {
+            'layout': 'paired',
+        }
         check_as_pair = True
         try:
             errors = basic_checks(data[0], 'fwd')
@@ -251,10 +260,8 @@ def check_single(single):
     MIN_COUNT = 100
     MAX_DISTANCE = 30
 
-    info = {'layout': 'single'}
+    info = {}
     errors = []
-
-    info['model_name'] = single['model'].name
 
     if 'direction' in single:
         # 1. Which way was the gene sequenced?
@@ -265,7 +272,7 @@ def check_single(single):
             # Reads are RC w.r.t. HMM model
             info['model_rc'] = True
         else:
-            raise ValueError('Inconsistent directionality!', Err.E3)
+            raise BadData('Inconsistent directionality!', Err.E3)
 
     # 2. basic checks
     if 'fwd_primer' in single:
@@ -310,7 +317,7 @@ def check_paired(fwd, rev):
     MIN_COUNT = 100
     MAX_DISTANCE = 30
 
-    info = {'layout': 'paired'}
+    info = {}
     errors = []
 
     # 0. Check if there is agreement on the model
