@@ -134,7 +134,7 @@ def load_target_table(input_file):
     all_data = []
     with open(input_file) as ifile:
         header = None
-        for line in ifile:
+        for lnum, line in enumerate(ifile, start=1):
             line = line.rstrip('\n')
             if not line.strip() or line.startswith('#'):
                 continue
@@ -145,12 +145,12 @@ def load_target_table(input_file):
 
             data = dict(zip(header, line.split('\t')))
 
+            # Convert data in certain boolean columns
             for i in ['swapped', 'fwd_clean', 'rev_clean']:
-                if i in data:
-                    match data[i]:
-                        case 'True': data[i] = True
-                        case 'False': data[i] = False
-                        case _: raise ValueError('invalid value')
+                match data[i]:
+                    case 'True': data[i] = True
+                    case 'False': data[i] = False
+                    case _: data[i] = None
 
             all_data.append(data)
     return all_data
@@ -244,35 +244,42 @@ def get_sample_info(data, project_dir):
         }
 
         if row['layout'] == 'paired':
-            if row['swapped']:
-                # "Fix" the swap
-                fwd_infix = 'rev'
-                rev_infix = 'fwd'
+            if None in (row['swapped'], row['fwd_clean'], row['rev_clean']):
+                info['fwd_fastq'] = None
+                info['rev_fastq'] = None
             else:
-                # keep as-is
-                fwd_infix = 'fwd'
-                rev_infix = 'rev'
+                if row['swapped']:
+                    # "Fix" the swap
+                    fwd_infix = 'rev'
+                    rev_infix = 'fwd'
+                else:
+                    # keep as-is
+                    fwd_infix = 'fwd'
+                    rev_infix = 'rev'
 
-            if USE_CLEAN and (row.get('fwd_clean') is False or row.get('fwd_rev_clean') is False):  # noqa:E501
-                fwd_fq = f'clean.{fwd_infix}_reads.fastq.gz'
-            else:
-                fwd_fq = f'raw_{fwd_infix}_reads.fastq.gz'
+                if USE_CLEAN and (row.get('fwd_clean') is False or row.get('fwd_rev_clean') is False):  # noqa:E501
+                    fwd_fq = f'clean.{fwd_infix}_reads.fastq.gz'
+                else:
+                    fwd_fq = f'raw_{fwd_infix}_reads.fastq.gz'
 
-            if USE_CLEAN and (row.get('rev_clean') is False or row.get('rev_fwd_clean') is False):  # noqa:E501
-                rev_fq = f'clean.{rev_infix}_reads.fastq.gz'
-            else:
-                rev_fq = f'raw_{rev_infix}_reads.fastq.gz'
+                if USE_CLEAN and (row.get('rev_clean') is False or row.get('rev_fwd_clean') is False):  # noqa:E501
+                    rev_fq = f'clean.{rev_infix}_reads.fastq.gz'
+                else:
+                    rev_fq = f'raw_{rev_infix}_reads.fastq.gz'
 
-            info['fwd_fastq'] = samp_dir / 'reads' / fwd_fq
-            info['rev_fastq'] = samp_dir / 'reads' / rev_fq
+                info['fwd_fastq'] = samp_dir / 'reads' / fwd_fq
+                info['rev_fastq'] = samp_dir / 'reads' / rev_fq
 
         elif row['layout'] == 'single':
-            if USE_CLEAN and (row.get('fwd_clean') is False or row.get('rev_clean') is False):  # noqa:E501
-                single_fq = 'clean.single_reads.fastq.gz'
+            if None in (row['fwd_clean'], row['rev_clean']):
+                info['single_fastq'] = None
             else:
-                single_fq = 'raw_single_reads.fastq.gz'
+                if USE_CLEAN and (row.get('fwd_clean') is False or row.get('rev_clean') is False):  # noqa:E501
+                    single_fq = 'clean.single_reads.fastq.gz'
+                else:
+                    single_fq = 'raw_single_reads.fastq.gz'
 
-            info['single_fastq'] = samp_dir / 'reads' / single_fq
+                info['single_fastq'] = samp_dir / 'reads' / single_fq
         else:
             raise ValueError('invalid layout')
 
@@ -293,7 +300,7 @@ def write_sample_info(rows, output_file):
         header = '\t'.join(cols) + '\n'
         ofile.write(header)
         for row in rows:
-            ofile.write('\t'.join(str(row[i]) for i in cols))
+            ofile.write('\t'.join(str(row[i] or '') for i in cols))
             ofile.write('\n')
     print('[Done]')
 
@@ -310,8 +317,8 @@ def get_fastq_files(path_template, dataset=None):
     files = []
     for row in get_sample_info(data, project_dir):
         for key in ['fwd_fastq', 'rev_fastq', 'single_fastq']:
-            if key in row:
-                files.append(row[key])
+            if file := row.get(key):
+                files.append(file)
     return files
 
 
