@@ -220,11 +220,12 @@ def get_mode(alignments):
             else:
                 dirty_rev_scores.append(i.rev_match.score)
 
-    if len(models := set(i.model for i in items['top_alignments'])) == 1:
-        items['model'] = models.pop().name
-    else:
-        # the pairing logic above should preclude this possibility
-        raise RuntimeError('multiple models among top alignments')
+    # The pairing logic above will preclude there being multiple models here
+    # unless the top_pair has None for both primers.  Let's ensure that there
+    # is only one model, ties get broken by Counter.most_common()
+    model = Counter(i.model for i in items['top_alignments']).most_common()[0][0]
+    items['top_alignments'] = [i for i in items['top_alignments'] if i.model == model]
+    items['model'] = model.name
 
     if len(dirs := set(i.direction for i in items['top_alignments'])) == 1:
         items['direction'] = dirs.pop()
