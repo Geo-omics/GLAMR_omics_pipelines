@@ -4098,9 +4098,10 @@ def get_dada2_output(wc):
     wc_str = ' '.join(f'{k}={v}' for k, v in wc.items())
     targets = Counter(assignments.values())
     if bad_count := targets.pop(pypelib.amplicon.dispatch.UNKNOWN, 0):
-        raise RuntimeError(
-            f'[{wc_str}] There are {bad_count} samples that do not have an amplicon '
-            f'target assigned.  Manual curation required for {assignment_file}'
+        print(
+            f'[WARNING] ({wc_str}) There are {bad_count} samples that do not '
+            f'have an amplicon target assigned.  Manual curation required for '
+            f'{assignment_file}'
         )
     if skip_count := targets.pop(pypelib.amplicon.dispatch.SKIP, 0):
         print(f'[INFO]: [{wc_str}] {skip_count} samples got excluded from analysis')
