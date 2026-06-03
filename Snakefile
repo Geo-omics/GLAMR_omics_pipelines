@@ -2052,8 +2052,8 @@ rule reads_unirefLCA_mmseqs:
     resources:
         #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
         #mem_mb = 160000, cpus=48, time_min=20000
-        cpus=32, mem_mb=170000, time_min=19440 # standard for great lakes
-        #cpus=32, mem_mb=700000, time_min=19440 #geomicro
+        #cpus=32, mem_mb=170000, time_min=19440 # standard for great lakes
+        cpus=52, mem_mb=700000, time_min=19440 #geomicro
     shell:
         """
         export TMPDIR={params.tmp_dir}
@@ -2074,7 +2074,7 @@ rule reads_unirefLCA_mmseqs:
 
         #mmseqs touchdb {params.unirefDB} # loads  the database into memory, only use in large memory systems / nodes
         
-        mmseqs \
+        nice -n 15 ionice -c 3 mmseqs \
             easy-taxonomy \
             {input.fwd_reads} {input.rev_reads} \
             {params.unirefDB} \
@@ -3205,6 +3205,33 @@ rule GTDB_versioned:
             --pplacer_cpus {params.pplacer_cpus} \
             --mash_db $GTDBTK_DATA_PATH/mash_db
         """
+
+# rule GTDB_r232:
+#     input:
+#         "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/.bins_linked",
+#         refs = "data/reference/GTDBtk/{database_version}"
+#     params:
+#         input_bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep",
+#         out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/GTDB_{database_version}",
+#         pplacer_cpus = 1
+#     output:
+#         done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.done_GTDB_{database_version}")
+#     conda: "config/conda_yaml/gtdbtk_2.4.0.yaml"
+#     benchmark: "benchmarks/GTDB/{sample_type}-{project}__{sample}_database-{database_version}.txt"
+#     log: "logs/GTDB/{sample_type}-{project}__{sample}_database-{database_version}.log"
+#     resources: cpus=16, mem_mb=100000, time_min=2880
+#     shell:
+#         """
+#         export GTDBTK_DATA_PATH={input.refs}
+
+#         gtdbtk classify_wf \
+#             --extension fa \
+#             --genome_dir {params.input_bin_dir} \
+#             --out_dir {params.out_dir} \
+#             --cpus {resources.cpus} \
+#             --pplacer_cpus {params.pplacer_cpus} \
+#             --mash_db $GTDBTK_DATA_PATH/mash_db
+#         """
 
 
 rule gunc_GTDB_db_download:
@@ -4488,7 +4515,7 @@ rule virsorter2:
     container: "docker://jiarong/virsorter:latest"
     benchmark: "benchmarks/virsorter2/{sample_type}-{project}__{sample}.txt"
     log: "logs/virsorter2/{sample_type}-{project}__{sample}.log"
-    resources: cpus=32, mem_mb=150000, time_min=10080 # standard samples
+    resources: cpus=32, mem_mb=150000, time_min=4320 # standard samples
     priority: 3
     shell:
         """
@@ -4515,7 +4542,7 @@ rule genomad:
     conda: "config/conda_yaml/genomad.yaml"
     benchmark: "benchmarks/genomad/{sample_type}-{project}__{sample}.txt"
     log: "logs/genomad/{sample_type}-{project}__{sample}.log"
-    resources: cpus=32, mem_mb=150000, time_min=10080 # standard samples
+    resources: cpus=32, mem_mb=150000, time_min=4320 # standard samples
     priority: 3
     shell:
         """
@@ -4565,4 +4592,74 @@ rule seqkit_stats:
     shell:
         """
         seqkit stats --all --tabular --threads {resources.cpus} {input.fastq} > {output.stats}
+        """
+
+
+
+rule sylph:
+    input:
+        f_seq = "data/omics/{sample_type}/{sample}/reads/decon_fwd_reads_fastp.fastq.gz",
+        r_seq = "data/omics/{sample_type}/{sample}/reads/decon_rev_reads_fastp.fastq.gz",
+        db = "data/reference/sylph/{database}.syldb"
+    output:
+        profile = "data/omics/{sample_type}/{sample}/sylph/profile-{database}.tsv"
+    params:
+        mpa_prefix = "data/omics/{sample_type}/{sample}/sylph/"
+    conda: "config/conda_yaml/sylph.yaml"
+    benchmark: "benchmarks/sylph/{sample_type}-{sample}__{database}.txt"
+    log: "logs/sylph/{sample_type}_{sample}__{database}.log"
+    resources: cpus=30, mem_mb=50000, time_min=1440, mem_gb = 40
+    shell:
+        """
+        # Record metadata to the log file
+        exec 2> {log}               # Redirect all stderr for this block to the log
+        echo "Starting sylph for {wildcards.sample} using {wildcards.database}" >&2
+        echo "Input reads: {input.f_seq}, {input.r_seq}" >&2
+        
+        # Run sylph profile
+        sylph profile \
+            {input.db} \
+            -1 {input.f_seq} \
+            -2 {input.r_seq} \
+            -t {resources.cpus} \
+            --estimate-unknown \
+            --read-seq-id 99.5 \
+            > {output.profile} 2>> {log}
+
+        # Run sylph-tax
+        sylph-tax taxprof \
+            {output.profile} \
+            -t GTDB_r232 \
+            -o {params.mpa_prefix}  2>> {log}
+            
+        echo "Finished sylph for {wildcards.sample}" >&2
+        """
+
+rule eukcc:
+    input:
+        bins_linked = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/.bins_linked",
+        ref_db = "data/reference/eukccdb/eukcc2_db_ver_1.2"
+    output:
+        out_dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/eukcc"),
+        done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.done_eukcc")
+    params:
+        bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins"
+    conda: "config/conda_yaml/eukcc.yaml" # Or your dedicated eukaryotic bin assessment environment
+    benchmark: "benchmarks/eukcc/{sample_type}-{project}__{sample}.txt"
+    log: "logs/eukcc/{sample_type}-{project}__{sample}.log"
+    resources: 
+        cpus = 16, 
+        mem_mb = 80000, 
+        time_min = 1440
+    priority: 4
+    shell:
+        """
+        rm -rf {output.out_dir}
+        
+        eukcc folder \
+            --threads {resources.cpus} \
+            --db {input.ref_db} \
+            --out {output.out_dir} \
+            --suffix .fa \
+            {params.bin_dir} > {log} 2>&1
         """
