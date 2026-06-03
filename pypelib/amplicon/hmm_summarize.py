@@ -6,7 +6,7 @@ from collections import Counter
 from itertools import groupby
 import json
 from pathlib import Path
-from statistics import median, quantiles
+from statistics import median, quantiles, StatisticsError
 
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Patch
@@ -239,7 +239,16 @@ def get_mode(alignments):
         else:
             fwd_scores = dirty_fwd_scores
 
-        quarts = quantiles(fwd_scores, n=4)
+        try:
+            quarts = quantiles(fwd_scores, n=4)
+        except StatisticsError:
+            if len(fwd_scores) == 1:
+                # python version <= 3.12 requires two elements, newer pythons
+                # return the one element as all the cut points
+                quarts = [fwd_scores[0]] * 3
+            else:
+                raise
+
         items['fwd_avg_score'] = {
             'avg': quarts[1],  # median
             'plus': quarts[2] - quarts[1],
@@ -250,14 +259,23 @@ def get_mode(alignments):
         }
 
     if clean_rev_scores or dirty_rev_scores:
-        # TODO: review threasholt, when things turn dirty
+        # TODO: review thresholt, when things turn dirty
         items['rev_clean'] = (len(clean_rev_scores) > len(dirty_rev_scores))
         if items['rev_clean']:
             rev_scores = clean_rev_scores
         else:
             rev_scores = dirty_rev_scores
 
-        quarts = quantiles(rev_scores, n=4)
+        try:
+            quarts = quantiles(rev_scores, n=4)
+        except StatisticsError:
+            if len(rev_scores) == 1:
+                # python version <= 3.12 requires two elements, newer pythons
+                # return the one element as all the cut points
+                quarts = [rev_scores[0]] * 3
+            else:
+                raise
+
         items['rev_avg_score'] = {
             'avg': quarts[1],  # median
             'plus': quarts[2] - quarts[1],
