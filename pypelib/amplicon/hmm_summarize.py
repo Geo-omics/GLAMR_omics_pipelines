@@ -170,15 +170,13 @@ def get_mode(alignments):
 
     top_fwd_primer, fwd_count = fwd_data.most_common()[0]
     top_rev_primer, rev_count = rev_data.most_common()[0]
-    top_pair, _ = pair_data.most_common()[0]
-
-    # Check if there is agreement
-    if (top_fwd_primer, top_rev_primer) != top_pair[:2]:
-        # TODO: what to do?
-        print(top_fwd_primer)
-        print(top_rev_primer)
-        print(top_pair)
-        raise NotImplementedError()
+    top_pair_count = pair_data.most_common()[0][1]
+    top_pairs = [pair for pair, count in pair_data.items() if count == top_pair_count]
+    # break possible ties using the separate counts
+    top_pairs = sorted(top_pairs, key=lambda a_b: (-fwd_data[a_b[0]], -rev_data[a_b[1]]))  # noqa:E501
+    top_pair = top_pairs[0]
+    # re-assign top primers from winning pair
+    top_fwd_primer, top_rev_primer, _ = top_pair
 
     # return data
     items = dict(
