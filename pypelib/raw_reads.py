@@ -73,18 +73,27 @@ def make_stats(input, output, keep_existing=False):
     cmd = ['seqkit', 'stats', '--quiet', '--basename', '-a', '-T', *infiles]
 
     with open(output, 'w+b') as ofile:
-        subprocess.run(cmd, stdout=ofile, check=True)
-
+        p = subprocess.run(cmd, stdout=ofile, stderr=subprocess.PIPE)
         ofile.seek(0)
-
         for lnum, _ in enumerate(ofile, start=1):
             pass
-        expect = len(infiles) + 1
-        if lnum != expect:
-            raise RuntimeError(
-                f'[ERROR] seqkit stats wrote {lnum} lines but {expect} are '
-                f'expected'
-            )
+
+    # seqkit stats will exit with status 0 in some error cases, e.g. bad gz
+    # compression, possibly also bad fastq format.  So this catches regular
+    # bugs but also stuff we can't do much about.
+    errs = []
+    if p.returncode:
+        errs.append(f'failed with exit code {p.returncode}')
+    if p.stderr:
+        errs.append(f'stderr: {p.stderr.decode(errors="replace")}')
+    expect = len(infiles) + 1
+    if lnum != expect:
+        errs.append(
+            f'seqkit stats wrote {lnum} lines but {expect} are '
+            f'expected'
+        )
+    if errs:
+        raise RuntimeError(f'[ERROR] calling command {cmd}: {errs}')
 
     print(f'[OK] stats written to {output}')
 

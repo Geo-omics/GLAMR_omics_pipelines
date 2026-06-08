@@ -91,7 +91,7 @@ def load_stats(file_or_path):
                 else:
                     row[col] = value
     if not rows:
-        raise RuntimeError('no data in file')
+        raise RuntimeError(f'No data in stats file: {file_or_path}')
     return rows
 
 
