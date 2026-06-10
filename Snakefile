@@ -1482,6 +1482,25 @@ rule prodigal_metaT:
             -d {output.genes} 2>&1 | tee {log}
         """
 
+rule bakta_proteins:
+    input:
+        proteins = "data/omics/{sample_type}/{sample}/proteins/{sample}_PROTEINS.faa"
+    output:
+        dir = directory("data/omics/{sample_type}/{sample}/proteins/bakta")
+    params:
+        db = "data/reference/bakta/db6"
+    conda: "config/conda_yaml/bakta.yaml"
+    log: "logs/bakta_proteins/{sample_type}-{sample}.txt"
+    benchmark: "benchmarks/bakta_proteins/{sample_type}-{sample}.tsv"
+    resources: cpus=8, mem_mb=32000, time_min=5000, 
+    shell:
+        """
+        bakta_proteins --db {params.db} \
+            --output {output.dir} \
+            --threads {resources.cpus} \
+            {input.proteins} > {log} 2>&1
+        """
+
 ruleorder: prodigal_metaT > prodigal
 
 rule calc_gene_abundance:
