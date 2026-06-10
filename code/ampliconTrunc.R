@@ -33,6 +33,7 @@ library(readr)
 library(tidyr)
 library(stringr)
 library(tibble)
+message(str_glue("DADA2 version: {packageVersion('dada2')}"))
 
 MIN_OVERLAP = 20
 
@@ -259,6 +260,7 @@ filterstats <- filterAndTrim(
      maxN=0, truncQ=2, rm.phix=TRUE,
      compress=TRUE,
      multithread=cpus,
+     rm.lowcomplex=10
 )
 
 # saving the filter and trim to .tsv file
