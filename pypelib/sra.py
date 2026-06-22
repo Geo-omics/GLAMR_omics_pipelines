@@ -160,7 +160,7 @@ def get_entry(accession=None, file=None, multi=False, auto_parse=False,
     elif accession is not None and file is None:
         data = get_entry_raw(accession, multi=multi, slow=slow)
     else:
-        raise TypeError('either accession if file must be given, but not both')
+        raise TypeError('either accession or file must be given, but not both')
 
     with data as data:
         if not auto_parse:
