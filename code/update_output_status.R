@@ -11,7 +11,7 @@ library(googlesheets4)
 output_key <- googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/1rkLra_xXPHjYinXzY1UpC6Mg5nzybcvG3HcGQaW8Tvc/edit#gid=0",) %>% 
   separate_longer_delim(sample_types,delim = ",")
 
-pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "localhost", port = "5432", user = "glamr_admin", password = "glamr2023")
+pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "cayman.earth.lsa.umich.edu", port = "5432", user = "glamr_admin", password = "glamr2023")
 samples <- tbl(pg, "glamr_samples")
 
 samp_to_check <- samples %>% 
