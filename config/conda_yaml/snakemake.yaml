@@ -12,3 +12,4 @@ dependencies:
   - matplotlib=3.10.8
   - seqkit=2.12 # maybe we can shift the need for this dependency to a rule?
   - hmmer=3.4 # for amplicon_asv_test
+  - graphviz=14.1.2
