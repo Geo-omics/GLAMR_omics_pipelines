@@ -3229,32 +3229,32 @@ rule GTDB_versioned:
             --mash_db $GTDBTK_DATA_PATH/mash_db
         """
 
-# rule GTDB_r232:
-#     input:
-#         "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/.bins_linked",
-#         refs = "data/reference/GTDBtk/{database_version}"
-#     params:
-#         input_bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep",
-#         out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/GTDB_{database_version}",
-#         pplacer_cpus = 1
-#     output:
-#         done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.done_GTDB_{database_version}")
-#     conda: "config/conda_yaml/gtdbtk_2.4.0.yaml"
-#     benchmark: "benchmarks/GTDB/{sample_type}-{project}__{sample}_database-{database_version}.txt"
-#     log: "logs/GTDB/{sample_type}-{project}__{sample}_database-{database_version}.log"
-#     resources: cpus=16, mem_mb=100000, time_min=2880
-#     shell:
-#         """
-#         export GTDBTK_DATA_PATH={input.refs}
+rule GTDB_r232:
+    input:
+        linked = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/.bins_linked",
+        refs = "data/reference/GTDBtk/release232"
+    params:
+        input_bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep",
+        out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/GTDB_r232",
+        pplacer_cpus = 1
+    output:
+        done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.done_GTDB_r232")
+    conda: "config/conda_yaml/gtdbtk_2.7.2.yaml"
+    benchmark: "benchmarks/GTDB/{sample_type}-{project}__{sample}_database-r232.txt"
+    log: "logs/GTDB/{sample_type}-{project}__{sample}_database-r232.log"
+    resources: cpus=16, mem_mb=150000, time_min=2880
+    shell:
+        """
+        export GTDBTK_DATA_PATH={input.refs}
 
-#         gtdbtk classify_wf \
-#             --extension fa \
-#             --genome_dir {params.input_bin_dir} \
-#             --out_dir {params.out_dir} \
-#             --cpus {resources.cpus} \
-#             --pplacer_cpus {params.pplacer_cpus} \
-#             --mash_db $GTDBTK_DATA_PATH/mash_db
-#         """
+        # R232's reference package is the pre-sketched skani "split" package;
+        gtdbtk classify_wf \
+            --extension fa \
+            --genome_dir {params.input_bin_dir} \
+            --out_dir {params.out_dir} \
+            --cpus {resources.cpus} \
+            --pplacer_cpus {params.pplacer_cpus}
+        """
 
 
 rule gunc_GTDB_db_download:
