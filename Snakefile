@@ -4105,6 +4105,48 @@ rule amplicon_asv_test:
         )
 
 
+def get_taxonomy_db(target_spec):
+    """
+    Return the taxonomy reference DB path for a given target spec, or None.
+
+    Looks up the HMM model name prefix in config['amplicon_taxonomy_dbs'].
+    To add taxonomy for a new marker (18S, ITS, COI, etc.) add an entry to
+    config.yaml:
+
+        amplicon_taxonomy_dbs:
+          16S_rRNA_bac: data/reference/dada2/silva_nr99_v138.2_toSpecies_trainset.fa.gz
+          18S_rRNA_euk: data/reference/dada2/pr2_version_5_SSU_dada2.fasta.gz
+    """
+    dbs = config.get('amplicon_taxonomy_dbs', {})
+    for model_prefix, db_path in dbs.items():
+        if target_spec.startswith(model_prefix):
+            return db_path
+    return None
+
+
+rule amplicon_dada2_taxonomy:
+    """Assign taxonomy to DADA2 ASVs using a configured reference database."""
+    input:
+        seqs = rules.amplicon_dada2_target.output.seqs,
+    output:
+        taxonomy = "data/projects/{dataset}/dada2.{target_spec}/taxonomy.tsv",
+    params:
+        ref = lambda wc: get_taxonomy_db(wc.target_spec),
+    log: "logs/amplicon_dada2_taxonomy/{dataset}_{target_spec}.log"
+    benchmark: "benchmarks/amplicon_dada2_taxonomy/{dataset}_{target_spec}.txt"
+    container: "docker://eandersk/r_microbiome"
+    threads: 8
+    resources: mem_mb=16000, time_min=120
+    shell:
+        """
+        . code/shell_prelude {log}
+        ./code/dada2_assign_taxonomy.R \
+            --ref {params.ref} \
+            --seqs {input.seqs} \
+            --out {output.taxonomy} \
+            --cpus {threads}
+        """
+
 def get_dada2_output(wc):
     """
     input function: get dada2 output files for given dataset
