@@ -3153,7 +3153,7 @@ rule GTDB:
         #"/home/kiledal/geomicro_home/references/.done_gtdb_refs_downloaded"
     params:
         input_bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep",
-        refs = "/nfs/turbo/lsa-Erie/GVHD/data/reference/GTDBtk/release207_v2",
+        refs = "data/reference/GTDBtk/release207_v2",
         out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/GTDB",
         pplacer_cpus = 1
     output:
@@ -3180,12 +3180,12 @@ rule GTDB:
 
 rule GTDB_to_NCBI:
     input:
-        "data/projects/{project}/{sample_type}/{sample}/bins/.done_GTDB"
+        "data/projects/{project}/{sample_type}/{sample}/bins/.done_GTDB_r232"
         #"/home/kiledal/geomicro_home/references/.done_gtdb_refs_downloaded"
     params:
-        refs = "/nfs/turbo/lsa-Erie/GVHD/data/reference/GTDBtk/release207_v2",
-        out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/GTDB",
-    output: "data/projects/{project}/{sample_type}/{sample}/bins/GTDB/gtdb_to_ncbi_taxonmy.tsv"
+        refs = "data/reference/GTDBtk/release232",
+        out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/GTDB_r232",
+    output: "data/projects/{project}/{sample_type}/{sample}/bins/GTDB_r232/gtdb_to_ncbi_taxonmy.tsv"
     conda: "config/conda_yaml/gtdbtk.yaml"
     benchmark: "benchmarks/GTDB_to_NCBI/{sample_type}-{project}__{sample}.txt"
     log: "logs/GTDB_to_NCBI/{sample_type}-{project}__{sample}.log"
@@ -3198,8 +3198,8 @@ rule GTDB_to_NCBI:
         python code/GTDBtk_scripts/gtdb_to_ncbi_majority_vote.py \
             --gtdbtk_output_dir {params.out_dir} \
             --output_file {params.out_dir}/gtdb_to_ncbi_taxonmy.tsv \
-            --bac120_metadata_file {params.refs}/bac120_metadata_r207.tar.gz \
-            --ar53_metadata_file {params.refs}/ar53_metadata_r207.tar.gz
+            --bac120_metadata_file {params.refs}/bac120_metadata_r232.tsv.gz \
+            --ar53_metadata_file {params.refs}/ar53_metadata_r232.tsv.gz
         """
 
 rule GTDB_versioned:
@@ -3232,11 +3232,11 @@ rule GTDB_versioned:
 rule GTDB_r232:
     input:
         linked = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/.bins_linked",
-        refs = "data/reference/GTDBtk/release232"
     params:
         input_bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep",
         out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/GTDB_r232",
-        pplacer_cpus = 1
+        pplacer_cpus = 1,
+        refs = "data/reference/GTDBtk/release232"
     output:
         done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.done_GTDB_r232")
     conda: "config/conda_yaml/gtdbtk_2.7.2.yaml"
@@ -3245,7 +3245,7 @@ rule GTDB_r232:
     resources: cpus=16, mem_mb=150000, time_min=2880
     shell:
         """
-        export GTDBTK_DATA_PATH={input.refs}
+        export GTDBTK_DATA_PATH={params.refs}
 
         # R232's reference package is the pre-sketched skani "split" package;
         gtdbtk classify_wf \
@@ -4707,6 +4707,7 @@ rule eukcc:
         ref_db = "data/reference/eukccdb/eukcc2_db_ver_1.2"
     output:
         out_dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/eukcc"),
+        workdir = temp(directory("data/projects/{project}/{sample_type}/{sample}/bins/eukcc/refine_workdir")),
         done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.done_eukcc")
     params:
         bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins"
