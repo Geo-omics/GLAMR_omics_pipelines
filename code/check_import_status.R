@@ -5,7 +5,7 @@
 # from sample directories for samples which were imported without expected logging.
 # 
 # This script is run daily via CRON on Alpena; a new log should only be produced when changes are identified.
-# Crontab entry: 30 0 * * * /bin/bash -c "singularity run docker://eandersk/r_microbiome /geomicro/data2/kiledal/GLAMR/code/check_import_status.R >> /geomicro/data2/kiledal/GLAMR/logs/check_import_status/$(date +\%Y\%m\%d).log 2>&1"
+# Crontab entry: 30 0 * * * /bin/bash -c "/bin/bash /geomicro/data2/kiledal/GLAMR/code/check_import_status.sh >> ~/GLAMR/logs/check_import_status/$(date +\%Y\%m\%d).log 2>&1"
 
 # Requires tidyverse tools and unglue package. Typically run w/ Docker image with dependencies.
 suppressMessages(library(tidyverse))
