@@ -3,11 +3,9 @@ local-cores: 1
 executor: cluster-generic
 cluster-generic-submit-cmd: "sbatch --parsable --account={resources.account} --partition={resources.partition} --time={resources.time_min} --mem={resources.mem_mb} -c {resources.cpus} --gres=gpu:{resources.gpu} -o logs/slurm/{rule}_{wildcards} -e logs/slurm/{rule}_{wildcards}"
 cluster-generic-cancel-cmd: "scancel"
-software-deployment-method: conda
-conda-frontend: mamba
-use-conda: True
-software-deployment-method: apptainer
-use-apptainer: True
+software-deployment-method:
+  - conda
+  - apptainer
 default-resources: [cpus=1, mem_mb=8000, time_min=120, account=gdick0, partition=standard, heavy_network=0, gpu=0, disk_mb=100]
 #resources: [scratch_disk_mb=60000000]
 resources: [scratch_disk_mb=10000000]
