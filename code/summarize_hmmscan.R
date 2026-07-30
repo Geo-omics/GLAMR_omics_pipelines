@@ -14,6 +14,41 @@ Options:
 library(docopt)
 library(tidyverse)
 
+# Function for pasing hmmer output 
+
+parse_domtblout_tidy <- function(file_path) {
+  lines <- readLines(file_path)
+  data_lines <- lines[!grepl("^#", lines)]
+  
+  # Convert to tibble for easier manipulation
+  tibble(line = data_lines) %>%
+    mutate(
+      # Split each line into exactly 16 parts (15 fixed + description)
+      parts = str_split(str_trim(line), "\\s+", n = 16)
+    ) %>%
+    # Only keep rows that have at least 15 parts
+    filter(map_int(parts, length) >= 15) %>%
+    mutate(
+      target_name = map_chr(parts, ~.x[1]),
+      target_acc = map_chr(parts, ~.x[2]),
+      query_name = map_chr(parts, ~.x[3]),
+      acc = map_chr(parts, ~.x[4]),
+      hmm_from = map_dbl(parts, ~as.numeric(.x[5])),
+      hmm_to = map_dbl(parts, ~as.numeric(.x[6])),
+      align_from = map_dbl(parts, ~as.numeric(.x[7])),
+      align_to = map_dbl(parts, ~as.numeric(.x[8])),
+      env_from = map_dbl(parts, ~as.numeric(.x[9])),
+      env_to = map_dbl(parts, ~as.numeric(.x[10])),
+      modlen = map_dbl(parts, ~as.numeric(.x[11])),
+      strand = map_chr(parts, ~.x[12]),
+      evalue = map_dbl(parts, ~as.numeric(.x[13])),
+      score = map_dbl(parts, ~as.numeric(.x[14])),
+      bias = map_dbl(parts, ~as.numeric(.x[15])),
+      description = map_chr(parts, ~ifelse(length(.x) > 15 && .x[16] != "-", .x[16], NA_character_))
+    ) %>%
+    select(-line, -parts)
+}
+
 # the below arguments for processing from the command line
 arguments <- docopt(doc)
 
