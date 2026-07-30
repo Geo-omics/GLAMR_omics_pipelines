@@ -4707,7 +4707,6 @@ rule eukcc:
         ref_db = "data/reference/eukccdb/eukcc2_db_ver_1.2"
     output:
         out_dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/eukcc"),
-        workdir = temp(directory("data/projects/{project}/{sample_type}/{sample}/bins/eukcc/refine_workdir")),
         done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.done_eukcc")
     params:
         bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins"
@@ -4729,4 +4728,6 @@ rule eukcc:
             --out {output.out_dir} \
             --suffix .fa \
             {params.bin_dir} > {log} 2>&1
+
+        rm -rf {output.out_dir}/refine_workdir
         """
