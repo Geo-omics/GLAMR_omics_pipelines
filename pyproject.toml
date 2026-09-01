@@ -20,6 +20,10 @@ hmm-summary = "pypelib.amplicon.hmm_summarize:cli"
 post-script = "pypelib.post:cli"
 plot-benchmarks = "pypelib.benchmark:cli"
 setup-test-env = "pypelib.setup_test_env:cli"
+metab-detect-format = "pypelib.metabolomics.detect_format:cli"
+metab-harvest-metadata = "pypelib.metabolomics.harvest_metadata:cli"
+metab-run-manifest = "pypelib.metabolomics.run_manifest:cli"
+metab-assign-groups = "pypelib.metabolomics.groups:cli"
 
 [tool.setuptools.packages.find]
 where = ["./"]

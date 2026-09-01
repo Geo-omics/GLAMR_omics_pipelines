@@ -1,0 +1,12 @@
+# Offline MS2 analogue/exact-match search (Spec2Vec + MS2DeepScore ensemble).
+# No account required; models are downloaded once to data/reference/metabolomics/.
+name: ms2query
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - ms2query~=1.5.4

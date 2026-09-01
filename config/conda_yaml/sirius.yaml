@@ -1,0 +1,18 @@
+# SIRIUS 6 CLI (formula/ZODIAC/CSI:FingerID/CANOPUS). Opt-in only
+# (config['metabolomics']['run_sirius']) - needs a free academic account and
+# live internet from the compute node at runtime.
+#
+# NOTE: bioconda's "sirius-csifingerid" package tops out at SIRIUS 5, whose
+# CLI differs from SIRIUS 6 (which pipelines/metabolomics.smk targets:
+# `sirius ... formulas zodiac fingerprints classes structures write-summaries`).
+# SIRIUS 6 ships as a self-contained archive with its own bundled JRE, so no
+# conda env is required for the tool itself - only Java to be safe on
+# platforms where the bundled JRE has issues. Download the SIRIUS 6 release
+# from https://github.com/sirius-ms/sirius/releases and point
+# config['metabolomics']['sirius_bin'] at the extracted `bin/sirius`.
+name: sirius-java
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - openjdk=21

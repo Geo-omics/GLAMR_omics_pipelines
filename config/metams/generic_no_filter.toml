@@ -1,0 +1,6 @@
+# Non-Thermo scan translator: metaMS's scan_filter matches against Thermo's
+# proprietary scan_text field (e.g. "hcd"), which does not exist in mzML
+# converted from other vendors. Use no filter and rely on MS level alone.
+[ms2]
+scan_filter = ""
+resolution = "high"

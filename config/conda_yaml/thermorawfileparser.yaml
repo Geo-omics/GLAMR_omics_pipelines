@@ -1,0 +1,9 @@
+# Converts Thermo .raw files to mzML / harvests instrument metadata, without
+# Wine or a vendor-license container.
+name: thermorawfileparser
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - thermorawfileparser~=1.4.5

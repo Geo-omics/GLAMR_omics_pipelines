@@ -7,3 +7,31 @@ default-resources: [cpus=1, mem_mb=4000, time_min=120]
 resources: [cpus=64, mem_mb=100000]
 max-status-checks-per-second: 1
 work_dir: /tmp
+
+metabolomics:
+  mzuser: /home/kiledal/geomicro_home/.mzmine/users/akiledal.mzuser
+  method_profiles:
+    orbitrap_rp_pos:
+      mzbatch: config/mzmine/orbitrap_rp_pos.mzbatch
+      mzbatch_rtcorr: config/mzmine/orbitrap_rp_pos_rtcorr.mzbatch
+      corems_params: config/metams/orbitrap_rp_pos.toml
+      scan_translator: config/metams/thermo_hcd.toml
+  profile_assignment:
+    set_41: orbitrap_rp_pos
+    set_41_test2016: orbitrap_rp_pos  # dev-only scoped subset for pipeline testing
+    set_41_smoke6: orbitrap_rp_pos    # dev-only 6-sample smoke test
+  blank_fold_change: 5
+  qc_max_cv: 0.3
+  run_sirius: true
+  sirius_bin: /home/kiledal/tools/sirius/bin/sirius
+  rt_correction:
+    # Real measurement on set_41 (mzmine 4.10.6): 1-2 acquisition batches
+    # makes scan-based RT correction slightly worse (candidate drift-split
+    # rate +15%/+5%), 3 is roughly neutral (-4%), 4-5 is a real win
+    # (-26%/-39%) - see pypelib/metabolomics/rt_correction.py's docstring
+    # for the full numbers this is based on. min_batches=3 is the point it
+    # stops being harmful; batch_id itself is auto-detected from real gaps
+    # in acquisition_date (run_manifest.py), not from any project-specific
+    # folder/filename convention, so this generalizes to future projects.
+    min_batches: 3
+    min_qc_per_batch: 3

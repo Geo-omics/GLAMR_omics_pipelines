@@ -1,0 +1,157 @@
+---
+title: "Draft: import metabolomics QC/blank/standard files into GLAMR"
+---
+
+**This is a draft, not a live import chunk.** It is not run against the real
+GLAMR repository from this dev sandbox (per instruction, nothing in
+~/GLAMR/`/nfs/turbo/lsa-kiledal/GLAMR` was touched this session). Copy the
+chunk below into GLAMR's real `code/import.Rmd`, immediately after the
+existing "Metabolomics data for USGS / GLERL (set_41)" chunk
+(`code/import.Rmd:1671-1745` as of this writing), then run it there.
+
+## What this imports
+
+`import/staging/202407_metabolomics_from_usgs/newdata11212024/{2016..2020}/`
+holds 272 files that exist on disk but were never assigned sample IDs or
+imported: `blank1`-`blank28`, `QC_A_*` (pooled QC), `QC_SA_*` (spiked pool),
+and `LCTXM0_01`-`LCTXM5_0` (an 11-point microcystin calibration curve), per
+batch year. These are exactly the QC infrastructure the metabolomics
+pipeline's blank filtering, drift correction, and (phase 2) targeted
+quantification need - without them the pipeline can run but everything QC-
+related in `pipelines/metabolomics.smk`'s `metab_feature_qc` rule degrades to
+"skipped, no blanks/QC pools in manifest" (which it will already do
+gracefully if you don't import these, but you'd lose real functionality
+for no reason).
+
+## Generalized import convention
+
+The existing metabolomics import chunk symlinks a single fixed name,
+`data/omics/metabolomes/{SampleID}/spectra/raw_spectra.raw`. This assumes
+every file is Thermo `.raw`, which is true for set_41 but won't generalize
+to a future Agilent/Bruker/Sciex/Waters project (Waters `.raw` is even a
+*directory*, not a file, so a bare extension can't tell the vendor apart
+from Thermo's file-based `.raw`). The pipeline's Snakemake rules
+(`pipelines/metabolomics.smk`, rules `metab_convert_thermo` /
+`metab_convert_vendor` / `metab_mzml_passthrough`) route conversion by
+looking for `raw_spectra.{vendor}.{ext}`, where `{vendor}` comes from
+`pypelib.metabolomics.detect_format.detect()` - the same format-detection
+logic this dev sandbox validated against 9 real/synthetic vendor cases
+(Thermo, Bruker, Agilent, Waters, Sciex, Shimadzu, mzML, and two ambiguous/
+unsupported cases that correctly raise a clear error). **Any future import
+chunk, including this one, should call the same detector rather than
+re-deriving vendor tags by hand**, so format routing has one source of
+truth. This chunk shells out to the installed `metab-detect-format` CLI
+(`pyproject.toml`'s `[project.scripts]` entry, added alongside this
+pipeline) for that reason.
+
+```{r}
+library(unglue)
+
+# Newly-imported samples continue the real samp_ sequence. As of this
+# writing the highest assigned metabolome sample is samp_11655 (the 352
+# already-imported set_41 files, samp_11304-11655) - confirm before running:
+#   tail -n +2 import/staging/202407_metabolomics_from_usgs/glamr_import_table.tsv |
+#     cut -f8 | sed 's/samp_//' | sort -n | tail -1
+next_start_id <- 11656
+
+file_info <- Sys.glob("import/staging/202407_metabolomics_from_usgs/newdata11212024/*/*.raw") %>%
+  data.frame(path = .) %>%
+  unglue_unnest(
+    path,
+    "import/staging/202407_metabolomics_from_usgs/newdata11212024/{year}/{SampleName}.raw",
+    remove = FALSE
+  ) %>%
+  type_convert() %>%
+  mutate(filename = basename(path),
+         sample_type = "metabolome",
+         StudyID = "set_41",
+         file_size = fs::file_size(path)) %>%
+  arrange(year, SampleName) %>%
+  mutate(SampleID = paste0("samp_", next_start_id + row_number() - 1)) %>%
+  write_tsv("import/staging/202407_metabolomics_from_usgs/glamr_import_table_qc.tsv")
+
+# Detect vendor format per file (all Thermo .raw for this batch, but this
+# generalizes automatically - see note above)
+file_info <- file_info %>%
+  rowwise() %>%
+  mutate(vendor = system2("metab-detect-format", shQuote(path), stdout = TRUE) %>%
+           str_extract("(?<=vendor: ).*")) %>%
+  ungroup()
+
+import_files <- file_info %>%
+  mutate(import_file_path = str_glue("import/{sample_type}s/{SampleID}.raw"),
+         link_path = str_glue("../../{path}"),
+         raw_files = str_glue("{SampleID}.raw"))
+
+fs::link_create(import_files$link_path, import_files$import_file_path)
+
+## Actually import data
+
+import_table <- import_files %>%
+  rowwise() %>%
+  mutate(staged_read_fp = glue("import/{sample_type}s/{raw_files}"),
+         staged_reads_present = fs::file_exists(staged_read_fp),
+         sample_dir = glue("data/omics/{sample_type}s/{SampleID}"),
+         raw_reads_dir = glue("{sample_dir}/spectra"),
+         # vendor-tagged filename, not the fixed "raw_spectra.raw" the
+         # existing set_41 chunk uses - see note above
+         imported_read_fp = str_glue("{sample_dir}/spectra/raw_spectra.{vendor}.raw"),
+         previously_imported = file.exists(imported_read_fp))
+
+new_imports <- import_table %>%
+  filter(previously_imported == FALSE,
+         staged_reads_present == TRUE)
+
+mapply(dir.create, base::unique(new_imports$raw_reads_dir),
+       MoreArgs = list(recursive = TRUE, showWarnings = FALSE))
+
+fs::link_create(paste0("../../../../../", new_imports$staged_read_fp),
+                 new_imports$imported_read_fp)
+
+## Link into project folders (already exists: data/projects/set_41/metabolomes/)
+
+project_dirs <- new_imports %>%
+  mutate(proj_and_type_dir = glue("data/projects/{StudyID}/{sample_type}s/"),
+         project_sample_data_dir = glue("data/projects/{StudyID}/{sample_type}s/{SampleID}"),
+         link_path = glue("../../../../{sample_dir}"))
+
+simple_dirs <- project_dirs %>%
+  select(sample_dir, proj_and_type_dir, project_sample_data_dir, link_path) %>%
+  distinct()
+
+file.symlink(simple_dirs$link_path, simple_dirs$project_sample_data_dir)
+
+## Write to import log
+
+old_imports <- read_tsv("data/import_log.tsv") %>%
+  mutate(F_primer = as.character(F_primer))
+
+import_check <- new_imports %>%
+  mutate(import_sucess = file.exists(imported_read_fp),
+         import_time = date())
+
+all_imports <- bind_rows(old_imports, import_check)
+write_tsv(all_imports, "data/import_log.tsv", col_names = TRUE)
+```
+
+## After running: populate `ms_role` in the pipeline manifest
+
+The metabolomics pipeline's `checkpoint metab_run_manifest` auto-guesses
+`ms_role` from the filename (`blank*` -> blank, `QC_A_*` -> qc_pool,
+`QC_SA_*` -> qc_spike, `LCTXM*` -> cal_standard) and writes
+`data/projects/{dataset}/metabolomics/run_manifest.tsv`. Verified against
+real data in this dev sandbox: for the 2016 batch (54 samples + 40 QC
+files) the guesses came out exactly right (54 sample / 15 blank / 11
+cal_standard / 9 qc_pool / 5 qc_spike) with no manual correction needed.
+Spot-check `run_manifest.tsv` after the pipeline's first run per dataset
+regardless - a filename convention this clean is set_41-specific, not
+guaranteed for future projects.
+
+## Note: `GLR_ID-*` <-> `bios_*`/metagenome linking is still unsolved
+
+None of this addresses the fact that all 624 metabolome samples (352 + 272
+from this chunk) have `BioSampleID = NULL` and that `GLR_ID-*` USGS sample
+names appear nowhere in the `Great_Lakes_Omics_Datasets.xlsx` metadata
+workbook. That's a metadata problem (need a USGS/GLERL crosswalk), not a
+code problem, and is out of scope for both this import chunk and the
+pipeline itself - see the plan's "Cross-omics linking (deferred)" section.

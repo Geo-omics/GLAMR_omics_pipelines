@@ -39,3 +39,7 @@ pypelib/__pycache__
 pypelib/amplicon/__pycache__
 */__pycache__/*
 *.pyc
+# local runtime/tool caches (metabolomics dev)
+.cache/
+.openjfx/
+.snakemake_test_envs/

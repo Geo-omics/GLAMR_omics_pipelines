@@ -27,6 +27,8 @@ from pypelib.utils import load_stats, logme, PipelineVersion, save_error_file
 configfile: "config.yaml"
 finish_config_setup(config)
 
+include: "pipelines/metabolomics.smk"
+
 report: "code/report/workflow.rst"
 
 shell.prefix('printf "Job executed on: ${{HOSTNAME}}\n" && printf "SLURM job id: ${{SLURM_JOB_ID}}\n\n"; ')

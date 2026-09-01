@@ -1,0 +1,152 @@
+---
+title: "Draft: load metabolomics pipeline outputs into the GLAMR Postgres warehouse"
+---
+
+**This is a draft, not a live loader.** Not run against the real
+`glamr_data` database from this dev sandbox - copy into GLAMR's real
+`code/postgres.Rmd` and adapt. Follows the existing file's ETL idiom
+throughout: `get_pg_table_samples()` to find already-loaded samples,
+`Sys.glob()` + `unglue::unglue_unnest()` to parse sample IDs out of file
+paths, `dbWriteTable(append = TRUE)`, then manual `CREATE INDEX`.
+
+## Tables
+
+Three new tables, one per pipeline output type. Kept separate rather than
+one wide table because feature-level, abundance-level, and annotation-level
+data have different natural keys (`feature_id` alone; `feature_id` x
+`sample`; `feature_id` x `annotation_source`) and different growth rates.
+
+```{r}
+pg <- DBI::dbConnect(RPostgres::Postgres(), dbname = "glamr_data",
+                     host = "cayman.earth.lsa.umich.edu", port = "5432",
+                     user = "glamr_admin", password = "glamr2023")
+```
+
+### `metabolite_features` - one row per aligned feature per processing group
+
+From `data/projects/{dataset}/metabolomics/{group_id}/qc/feature_table_filtered.tsv`
+(post blank-filter/precision-filter, per `pipelines/metabolomics.smk` rule
+`metab_feature_qc`). MZmine's own columns (confirmed against a real feature
+table produced in this dev sandbox - 2073 features x 6 samples): `id`, `mz`,
+`rt`, plus per-sample `datafile:{sample}.mzML:area` /`:height`/`:rt`/`:mz`/
+etc. This loader keeps only the feature-level (non-per-sample) columns; the
+per-sample values go to `metabolite_feature_abund` instead, in long form,
+so it joins directly against the existing `gene_abundance` /
+`contig_abund` tables the way the plan's "cross-omics linking" section
+describes.
+
+```{r}
+feature_files <- Sys.glob(
+  "data/projects/*/metabolomics/*/qc/feature_table_filtered.tsv"
+) %>%
+  data.frame(path = .) %>%
+  unglue_unnest(
+    path,
+    "data/projects/{dataset}/metabolomics/{group_id}/qc/feature_table_filtered.tsv",
+    remove = FALSE
+  )
+
+already_loaded <- get_pg_table_samples(pg, "metabolite_features", key = "dataset_group")
+
+new_feature_files <- feature_files %>%
+  filter(!paste(dataset, group_id) %in% already_loaded)
+
+metabolite_features <- new_feature_files %>%
+  rowwise() %>%
+  mutate(data = list(read_tsv(path, show_col_types = FALSE))) %>%
+  ungroup() %>%
+  unnest(data) %>%
+  select(dataset, group_id, id, mz, rt) %>%
+  rename(feature_id = id)
+
+dbWriteTable(pg, "metabolite_features", metabolite_features, append = TRUE)
+dbExecute(pg, "CREATE INDEX IF NOT EXISTS idx_metabolite_features_id
+                ON metabolite_features (dataset, group_id, feature_id)")
+```
+
+### `metabolite_feature_abund` - long form, one row per feature per sample
+
+```{r}
+metabolite_feature_abund <- new_feature_files %>%
+  rowwise() %>%
+  mutate(data = list(read_tsv(path, show_col_types = FALSE))) %>%
+  ungroup() %>%
+  unnest(data) %>%
+  rename(feature_id = id) %>%
+  pivot_longer(
+    cols = matches("^datafile:.*\\.mzML:(area|height)$"),
+    names_to = c("sample", ".value"),
+    names_pattern = "^datafile:(.*)\\.mzML:(area|height)$"
+  ) %>%
+  select(dataset, group_id, feature_id, sample, area, height)
+
+dbWriteTable(pg, "metabolite_feature_abund", metabolite_feature_abund, append = TRUE)
+dbExecute(pg, "CREATE INDEX IF NOT EXISTS idx_metabolite_feature_abund_sample
+                ON metabolite_feature_abund (sample)")
+dbExecute(pg, "CREATE INDEX IF NOT EXISTS idx_metabolite_feature_abund_feature
+                ON metabolite_feature_abund (dataset, group_id, feature_id)")
+```
+
+### `metabolite_annotations` - one row per feature per annotation source
+
+Unions MS2Query (`.../ms2query/results.csv`, columns confirmed from
+upstream: `ms2query_model_prediction`, precursor m/z difference, library
+metadata) and, when `run_sirius` is enabled, SIRIUS's
+`structure_identifications.tsv`. Kept in one table with an
+`annotation_source` discriminator rather than two, since both ultimately
+answer the same question ("what compound might this feature be") and
+downstream queries usually want both regardless of which engine produced
+them.
+
+```{r}
+ms2query_files <- Sys.glob("data/projects/*/metabolomics/*/ms2query/results.csv") %>%
+  data.frame(path = .) %>%
+  unglue_unnest(
+    path,
+    "data/projects/{dataset}/metabolomics/{group_id}/ms2query/results.csv",
+    remove = FALSE
+  )
+
+ms2query_annotations <- ms2query_files %>%
+  rowwise() %>%
+  mutate(data = list(read_csv(path, show_col_types = FALSE))) %>%
+  ungroup() %>%
+  unnest(data) %>%
+  mutate(annotation_source = "ms2query") %>%
+  select(dataset, group_id, annotation_source, everything())
+
+sirius_files <- Sys.glob(
+  "data/projects/*/metabolomics/*/sirius/summaries/structure_identifications.tsv"
+)
+sirius_annotations <- if (length(sirius_files) > 0) {
+  data.frame(path = sirius_files) %>%
+    unglue_unnest(
+      path,
+      "data/projects/{dataset}/metabolomics/{group_id}/sirius/summaries/structure_identifications.tsv",
+      remove = FALSE
+    ) %>%
+    rowwise() %>%
+    mutate(data = list(read_tsv(path, show_col_types = FALSE))) %>%
+    ungroup() %>%
+    unnest(data) %>%
+    mutate(annotation_source = "sirius") %>%
+    select(dataset, group_id, annotation_source, everything())
+} else {
+  NULL
+}
+
+metabolite_annotations <- bind_rows(ms2query_annotations, sirius_annotations)
+
+dbWriteTable(pg, "metabolite_annotations", metabolite_annotations, append = TRUE)
+dbExecute(pg, "CREATE INDEX IF NOT EXISTS idx_metabolite_annotations_source
+                ON metabolite_annotations (annotation_source)")
+```
+
+## Note on cross-omics joins
+
+`metabolite_feature_abund.sample` is a `samp_*` metabolome ID, not a
+`bios_*` BioSample - joining to `gene_abundance`/`kofam_scan_signif_anvio`
+requires resolving `samp_*` (metabolome) -> `bios_*` -> `samp_*`
+(metagenome), which the plan's "Cross-omics linking (deferred)" section
+flags as blocked on a USGS/GLERL crosswalk (`GLR_ID-*` appears nowhere in
+`Great_Lakes_Omics_Datasets.xlsx`), not on anything in this loader.
