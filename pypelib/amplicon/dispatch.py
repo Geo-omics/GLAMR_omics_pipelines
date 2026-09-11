@@ -147,10 +147,11 @@ def load_target_table(input_file):
 
             # Convert data in certain boolean columns
             for i in ['swapped', 'fwd_clean', 'rev_clean']:
-                match data[i]:
-                    case 'True': data[i] = True
-                    case 'False': data[i] = False
-                    case _: data[i] = None
+                if i in data:
+                    match data[i]:
+                        case 'True': data[i] = True
+                        case 'False': data[i] = False
+                        case _: data[i] = None
 
             all_data.append(data)
     return all_data
