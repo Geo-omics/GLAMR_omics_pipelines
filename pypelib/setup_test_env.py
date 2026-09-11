@@ -87,7 +87,11 @@ def main(src, dst, exist_ok=False, raw_reads=False, sample_type=None):
         stype_dir = omics / stype
         (dst / stype_dir).mkdir(exist_ok=exist_ok)
         for i in (src / stype_dir).glob('samp_*'):
-            if not i.is_dir():
+            try:
+                if not i.is_dir():
+                    continue
+            except PermissionError:
+                # e.g. symlink to directory w/o permission along path
                 continue
             sample_dir = stype_dir / i.name
             (dst / sample_dir).mkdir(exist_ok=exist_ok)
