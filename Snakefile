@@ -25,7 +25,7 @@ from pypelib.utils import load_stats, logme, PipelineVersion, save_error_file
 
 
 configfile: "config.yaml"
-finish_config_setup(config)
+finish_config_setup(config, Path(workflow.snakefile))
 
 report: "code/report/workflow.rst"
 

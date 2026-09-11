@@ -6,7 +6,7 @@ from snakemake.common.configfile import load_configfile
 DEFAULTS_CONFIG_FILE = 'default.conf'
 
 
-def finish_config_setup(config):
+def finish_config_setup(config, snakefile):
     """
     Finish setting up the config
 
@@ -16,8 +16,14 @@ def finish_config_setup(config):
 
     config:
         The snakemake config instance, a dict.
+    snakefile:
+        pathlib.Path to the snakefile.  Needed to locate the defaults config
+        file.  Btw, this comes from workflow.snakefile which is a weird dynamic
+        property and must be passed on as something more concrete from the
+        Snakefile.
     """
-    for key, value in load_configfile(DEFAULTS_CONFIG_FILE).items():
+    defaults = snakefile.parent / DEFAULTS_CONFIG_FILE
+    for key, value in load_configfile(defaults).items():
         if value is None:
             # treat None as unset
             continue
@@ -42,4 +48,3 @@ def finish_config_setup(config):
                 config['ncbi_api_key'] = key_txt
                 # some tools/rules want this in the environment
                 environ.setdefault('NCBI_API_KEY', key_txt)
-
