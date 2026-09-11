@@ -10,7 +10,7 @@ from pathlib import Path
 import random
 import re
 import shutil
-from subprocess import PIPE, run
+from subprocess import CalledProcessError, PIPE, run
 import sys
 import tarfile
 from tempfile import TemporaryDirectory
@@ -290,12 +290,19 @@ class PipelineVersion:
         with open(path, 'a') as ofile:
             try:
                 pl_version = PipelineVersion.current()
+            except CalledProcessError as e:
+                ofile.write(
+                    f'[WARNING] failed getting omics pipeline version: '
+                    f'command {e.cmd} failed with exit code {e.returncode}: '
+                    f'{e.stderr.decode()}\n'
+                )
             except Exception as e:
                 ofile.write(
                     f'[WARNING] failed getting omics pipeline version: '
                     f'{e.__class__.__name__}: {e}\n'
                 )
-            ofile.write(f'{cls.LOG_MSG_PREFIX}{pl_version}\n')
+            else:
+                ofile.write(f'{cls.LOG_MSG_PREFIX}{pl_version}\n')
 
     @classmethod
     def current(cls):
