@@ -31,10 +31,6 @@ report: "code/report/workflow.rst"
 
 shell.prefix('printf "Job executed on: ${{HOSTNAME}}\n" && printf "SLURM job id: ${{SLURM_JOB_ID}}\n\n"; ')
 
-# Substitute bash $USER environment variable with actual user id, otherwise some steps fail
-param_work_dir = config["work_dir"] #get working directory from config file
-userid = env_var = os.environ.get('USER', 'nosuchuser')  # get bash $USER variable
-work_dir = param_work_dir.replace("$USER", userid) #sub $USER for actual username
 current_dir = os.getcwd()
 #humann_ref_dir = "/home/kiledal/scratch_gdick1/GVHD/data/reference/humann" # for running on Great Lakes
 humann_ref_dir = "/geomicro/data2/kiledal/projects/GVHD/data/reference/humann"
