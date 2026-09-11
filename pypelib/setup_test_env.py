@@ -100,7 +100,7 @@ def main(src, dst, exist_ok=False, raw_reads=False, sample_type=None):
             accn = src / reads / 'accession'
             if accn.is_file():
                 (dst / reads).mkdir(exist_ok=exist_ok)
-                shutil.copy(accn, dst / reads)
+                shutil.copy2(accn, dst / reads)
                 stats[(stype, 'accn')] += 1
             if raw_reads:
                 raws = [
@@ -110,7 +110,7 @@ def main(src, dst, exist_ok=False, raw_reads=False, sample_type=None):
                 ]
                 for fq in raws:
                     if fq.is_file():
-                        shutil.copy(fq, dst / reads)
+                        shutil.copy2(fq, dst / reads)
                         stats[(stype, 'raw_' + fq.name.split('_')[1])] += 1
 
     (dst / projects).mkdir(exist_ok=exist_ok)
