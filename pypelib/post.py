@@ -22,7 +22,7 @@ from .utils import PipelineVersion
 
 
 BASE_SNAKEMAKE_CONDA_ENV = 'config/conda_yaml/snakemake.yaml'
-""" conda env that snakemake runs under """
+""" conda env definition that snakemake runs under """
 
 
 _deps = {}
@@ -686,7 +686,8 @@ def update_versions_file(workflow, dry_run=False):
         # start from scratch
         vinfo = VersionInfoFile()
 
-    rtenvs = {('conda_env', Path(BASE_SNAKEMAKE_CONDA_ENV)): None}
+    smk_conda_env_def = Path(__file__).parent.parent / BASE_SNAKEMAKE_CONDA_ENV
+    rtenvs = {('conda_env', smk_conda_env_def): None}
     # get distinct container or conda-using rules used for finished jobs
     for j in workflow.dag.finished_jobs:
         if j.conda_env:

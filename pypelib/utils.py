@@ -315,7 +315,8 @@ class PipelineVersion:
         else:
             cmd.append(commit_hash)
 
-        p = run(cmd, check=True, stdout=PIPE)
+        base_dir = Path(__file__).parent.parent
+        p = run(cmd, check=True, stdout=PIPE, stderr=PIPE, cwd=base_dir)
         version_txt = p.stdout.decode().splitlines()
         if len(version_txt) == 1:
             return cls(version_txt[0].strip())
