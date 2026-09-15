@@ -354,24 +354,20 @@ def get_download_dir(wc):
     in a new download.
     """
     raw_reads = partial(get_raw_reads_files, format=True)(wc)
-    for i in raw_reads:
-        if not exists(i):
-            print(f'Raw reads file missing: {i}')
-            break
-    else:
+    if all(exists(i) for i in raw_reads):
         # all raw reads exist
         stats_file = rules.raw_reads_stats.output.stats.format(**wc)
         try:
             pypelib.raw_reads.make_stats(raw_reads, stats_file, keep_existing=True)
         except RuntimeError as e:
-            print(f'[ERROR] make_stats failed: {e}')
+            print(f'[WARNING] make_stats failed: {e}')
         else:
             runinfo = checkpoints.get_runinfo.get(**wc).output[0]
             num_spots = parse_runinfo(runinfo, key='spots')
             try:
                 pypelib.raw_reads.check(stats=stats_file, num_spots=num_spots)
             except Exception as e:
-                print(f'[ERROR] Raw reads check failed: {e.__class__.__name__}: {e}')
+                print(f'[WARNING] Raw reads check failed: {e.__class__.__name__}: {e}')
             else:
                 # do not download again
                 return []
