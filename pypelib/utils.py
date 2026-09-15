@@ -439,3 +439,18 @@ def make_test_dataset(
         # symlink, creating completely new "data" directory
         print('  $ cd', Path('data').resolve().parent)
     print('  $ tar -xf', tarpath)
+
+
+def shell_prep(path):
+    """
+    Return prepared shell code for inclusion into Snakefile
+
+    This will duplicate any { and } and set the BASE to the repository base directory.
+
+    Returns a str.
+    """
+    path = Path(path)
+    txt = path.read_text().replace('{', '{{').replace('}', '}}')
+    base = path.parent.parent
+    txt = re.sub(r'^( ?(export) ?BASE=).*$', rf'\1{base}', txt, flags=re.MULTILINE)
+    return txt

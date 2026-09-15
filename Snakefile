@@ -21,7 +21,9 @@ from pypelib.post import post_production
 import pypelib.raw_reads
 from pypelib.raw_reads import parse_runinfo
 import pypelib.sra
-from pypelib.utils import load_stats, logme, PipelineVersion, save_error_file
+from pypelib.utils import (load_stats, logme, PipelineVersion, save_error_file,
+    shell_prep,
+)
 
 
 base_dir = Path(workflow.snakefile).parent
@@ -33,7 +35,7 @@ finish_config_setup(config, base_dir)
 
 report: "code/report/workflow.rst"
 
-shell.prefix('printf "Job executed on: ${{HOSTNAME}}\n" && printf "SLURM job id: ${{SLURM_JOB_ID}}\n\n"; ')
+shell.prefix(shell_prep(base_dir / 'code' / 'prefix.bash'))
 
 current_dir = os.getcwd()
 #humann_ref_dir = "/home/kiledal/scratch_gdick1/GVHD/data/reference/humann" # for running on Great Lakes
@@ -100,7 +102,6 @@ rule get_reads_prep:
     output:
         runinfo0 = "data/omics/{sample_type}/{sample}/reads/runinfo0.json",
         runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.json"
-    params:
     conda: "config/conda_yaml/kingfisher.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-prep.log"
     resources: mem_mb=2000, time_min=5, heavy_network=1
@@ -126,8 +127,7 @@ rule get_reads_prep:
                 print(f'Accession for {wildcards.sample}: {accn_str}')
                 kingfisher_slowdown = 'yes' if config.get('kingfisher_slowdown') else ''
                 shell("""
-                    . code/shell_prelude {log}
-
+                    logto {log}
                     [[ -n "{ncbi_api_key:q}" ]] && export NCBI_API_KEY={ncbi_api_key:q}
                     [[ -n "{kingfisher_slowdown}" ]] && sleep $((RANDOM % 30))
                     kingfisher annotate -r {srr_accn:q} -a -f json -o {output.runinfo}
@@ -276,8 +276,7 @@ rule get_reads:
         ncbi_api_key = config.get('ncbi_api_key', '')
         kingfisher_slowdown = 'yes' if config.get('kingfisher_slowdown') else ''
         shell("""
-            . code/shell_prelude {log}
-
+            logto {log}
             # NOTE: :q avoids code injection but still need the "" to avoid
             # shell syntax error e.g. [[ -n  ]] if variable is empty str
             [[ -n "{ncbi_api_key:q}" ]] && export NCBI_API_KEY={ncbi_api_key:q}
@@ -343,6 +342,7 @@ rule raw_reads_stats:
     conda: "config/conda_yaml/seqkit.yaml"
     resources: mem_mb=100, time_min=1
     run: pypelib.raw_reads.make_stats(input, output.stats, keep_existing=True)
+
 
 def get_download_dir(wc):
     """
@@ -3875,7 +3875,7 @@ rule amplicon_hmm:
     conda: "config/conda_yaml/hmmer.yaml"
     shell:
         """
-        . code/shell_prelude {log}
+        logto {log}
         mkdir -p -- {params.outdir}
 
         seqkit head -n 1000 {input} |
@@ -4070,7 +4070,7 @@ rule amplicon_dada2_target:
     resources: mem_mb=50000, time_min=240
     shell:
         """
-        . code/shell_prelude {log}
+        logto {log}
         ./code/ampliconTrunc.R \
             --quality {params.quality_threshold} \
             --outdir {params.outdir} \
@@ -4135,7 +4135,7 @@ rule amplicon_dada2_taxonomy:
     resources: mem_mb=16000, time_min=120
     shell:
         """
-        . code/shell_prelude {log}
+        logto {log}
         ./code/dada2_assign_taxonomy.R \
             --ref {params.ref} \
             --seqs {input.seqs} \
