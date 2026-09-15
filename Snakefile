@@ -33,6 +33,12 @@ base_dir = Path(workflow.snakefile).parent
 configfile: "config.yaml"
 finish_config_setup(config, base_dir)
 
+
+pathvars:
+    # also available as workflow.pathvars.items['code']
+    code = str(base_dir / 'code')
+
+
 report: "code/report/workflow.rst"
 
 shell.prefix(shell_prep(base_dir / 'code' / 'prefix.bash'))
@@ -765,7 +771,7 @@ rule remove_contaminants:
             2>&1 | tee -a {log}
         
         echo "\n\n***Running RemovePolyPairs.pl***\n\n" | tee -a {log}
-        perl code/RemovePolyPairs.pl {output.decon_fwd} {output.decon_rev} 50 {output.cleaned_fwd} {output.cleaned_rev} 2>&1 | tee -a {log}
+        perl $BASE/code/RemovePolyPairs.pl {output.decon_fwd} {output.decon_rev} 50 {output.cleaned_fwd} {output.cleaned_rev} 2>&1 | tee -a {log}
         """
 
 rule count_reads:
@@ -1167,7 +1173,7 @@ rule assemble_biosyntheticSPAdes_100x:
 
 rule rename_metaspades_contigs:
     input: 
-        script = "code/rename_contigs.R",
+        script = "<code>/rename_contigs.R",
         contigs = "data/projects/{project}/{sample_type}/{sample}/assembly/metaspades_noNORM/contigs.fasta",
         #assembly_done = "data/omics/{sample_type}/{sample}/assembly/megahit/.done"
     output:
@@ -1180,7 +1186,7 @@ rule rename_metaspades_contigs:
         """
         pwd
         
-        ./{input.script} \
+        {input.script} \
             -i {input.contigs} \
             -o {output.contigs} \
             -s {output.contig_info} \
@@ -1189,7 +1195,7 @@ rule rename_metaspades_contigs:
 
 rule rename_RNAspades_contigs:
     input: 
-        script = "code/rename_contigs.R",
+        script = "<code>/rename_contigs.R",
         contigs = "data/omics/{sample_type}/{sample}/assembly/RNAspades/transcripts.fasta",
         #assembly_done = "data/omics/{sample_type}/{sample}/assembly/megahit/.done"
     output:
@@ -1202,7 +1208,7 @@ rule rename_RNAspades_contigs:
         """
         pwd
         
-        ./{input.script} \
+        {input.script} \
             -i {input.contigs} \
             -o {output.contigs} \
             -s {output.contig_info} \
@@ -1251,7 +1257,7 @@ rule assemble_megahit_noNORM:
 
 rule rename_contigs:
     input: 
-        script = ancient("code/rename_contigs.R"),
+        script = ancient("<code>/rename_contigs.R"),
         #assembly_dir = "data/omics/{sample_type}/{sample}/assembly/megahit",
         contigs = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.fa",
         #assembly_done = "data/omics/{sample_type}/{sample}/assembly/megahit/.done"
@@ -1265,7 +1271,7 @@ rule rename_contigs:
         """
         pwd
         
-        ./{input.script} \
+        {input.script} \
             -i {input.contigs} \
             -o {output.contigs} \
             -s {output.contig_info} \
@@ -1336,7 +1342,7 @@ rule merge_assemblies:
     input:
         metaspades_contigs = rules.assemble_metaspades.output.contigs,
         megahit_contigs = rules.rename_contigs.output.contigs,
-        merge_contigs_script = "code/Strain-Level_Metagenome_Analysis/Merge_Contigs.pl"
+        merge_contigs_script = "<code>/Strain-Level_Metagenome_Analysis/Merge_Contigs.pl"
     output:
         concat_contigs = "data/omics/metagenomes/{sample}/assembly/contigs_concat.fa",
         dedup1 = "data/omics/metagenomes/{sample}/assembly/{sample}_dedup1.fa",
@@ -1363,14 +1369,14 @@ rule merge_assemblies:
 
 rule get_MEC:
     output: 
-        mec_dir = directory("code/MEC"),
-        mec_script = "code/MEC/src/mec.py"
+        mec_dir = directory("<code>/MEC"),
+        mec_script = "<code>/MEC/src/mec.py"
     shell:
         """
         rm -rf {output.mec_dir}
-        cd code
+        cd "$BASE/code"
         git clone https://github.com/bioinfomaticsCSU/MEC.git
-        chmod +x ../{output.mec_script}
+        chmod +x {output.mec_script}"
         """
 
 rule correct_contigs:
@@ -1378,7 +1384,7 @@ rule correct_contigs:
         assembly = rules.merge_assemblies.output.dedup6,
         fwd_reads = rules.remove_contaminants.output.cleaned_fwd,
         rev_reads = rules.remove_contaminants.output.cleaned_rev,
-        mec_script = "code/MEC/src/mec.py"
+        mec_script = "<code>/MEC/src/mec.py"
     output:
         read_mapping = temp("data/omics/metagenomes/{sample}/assembly/{sample}_cleaned_reads_unsorted.sam"),
         read_mapping_sorted = temp("data/omics/metagenomes/{sample}/assembly/{sample}_cleaned_reads.bam")
@@ -1762,7 +1768,7 @@ rule add_lineage_to_inspect_refseq:
 
 rule kraken_database_tax_merge:
     input:
-        script = "code/merge_kraken_tax.R",
+        script = "<code>/merge_kraken_tax.R",
         gtdb_tax_info = rules.add_lineage_to_inspect_gtdb.output.inspect_w_lineage,
         refseq_tax_info = rules.add_lineage_to_inspect_refseq.output.inspect_w_lineage
     output:
@@ -1771,7 +1777,7 @@ rule kraken_database_tax_merge:
     container: "docker://eandersk/r_microbiome"
     shell:
         """
-        ./{input.script} -g {input.gtdb_tax_info} -r {input.refseq_tax_info} -o {output.combined_tax_info}
+        {input.script} -g {input.gtdb_tax_info} -r {input.refseq_tax_info} -o {output.combined_tax_info}
         """
 
 
@@ -1785,7 +1791,7 @@ rule kraken2_gtdb_w_uniq:
         # f_seq = "data/omics/{sample_type}/{sample}/reads/raw_fwd_reads.fastq.gz",
         # r_seq = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz",
         db = "data/reference/kraken_databases/gtdb_r202",
-        kreport2mpa = "code/kreport2mpa.py"
+        kreport2mpa = "<code>/kreport2mpa.py"
     output:
         report = "data/omics/{sample_type}/{sample}/kraken/gtdb_{sample}_report.txt",
         out = temp("data/omics/{sample_type}/{sample}/kraken/gtdb_{sample}_out.txt"),
@@ -1822,7 +1828,7 @@ rule kraken2_gtdb_w_uniq:
 
         bracken -d {input.db} -i {output.bracken_input} -o {output.bracken} -w {output.bracken_report} 2>&1 | tee -a {log}
 
-        ./{input.kreport2mpa} -r {output.bracken_report} -o {output.bracken_mpa} --percentages 2>&1 | tee -a {log}
+        {input.kreport2mpa} -r {output.bracken_report} -o {output.bracken_mpa} --percentages 2>&1 | tee -a {log}
 
         echo "Bracken complete. Quitting." | tee -a {log}
         """
@@ -1833,7 +1839,7 @@ rule kraken2_refseq_w_uniq: ##Run kraken2
         f_seq = rules.kraken2_gtdb_w_uniq.output.unclass_f,
         r_seq = rules.kraken2_gtdb_w_uniq.output.unclass_r,
         db = "data/reference/kraken_databases/refseq",
-        kreport2mpa = "code/kreport2mpa.py"
+        kreport2mpa = "<code>/kreport2mpa.py"
     output:
         report = "data/omics/{sample_type}/{sample}/kraken/refseq_{sample}_report.txt",
         out = "data/omics/{sample_type}/{sample}/kraken/refseq_{sample}_out.txt",
@@ -1862,14 +1868,14 @@ rule kraken2_refseq_w_uniq: ##Run kraken2
 
         bracken -d {input.db} -i {output.bracken_input} -o {output.bracken} -w {output.bracken_report}
 
-        ./{input.kreport2mpa} -r {output.bracken_report} -o {output.bracken_mpa} --percentages
+        {input.kreport2mpa} -r {output.bracken_report} -o {output.bracken_mpa} --percentages
         """
 
 
 # Combine the kraken annotations and produce count table
 # rule kraken_summarize:
 #     input:
-#         script = "code/merge_bracken.R",
+#         script = "<code>/merge_bracken.R",
 #         kraken_results = expand("data/omics/metagenomes/{sample}/kraken/{database}_{sample}_bracken.txt", database = ["refseq","gtdb"], sample = metaG_samples),
 #         combined_tax_info = rules.kraken_database_tax_merge.output.combined_tax_info
 #     output:
@@ -1879,7 +1885,7 @@ rule kraken2_refseq_w_uniq: ##Run kraken2
 #     container: "docker://eandersk/r_microbiome"
 #     shell:
 #         """
-#         ./{input.script} --taxonomy={input.combined_tax_info} --counts-out={output.counts} --rel-out={output.rel_abund}
+#         {input.script} --taxonomy={input.combined_tax_info} --counts-out={output.counts} --rel-out={output.rel_abund}
 #         """
 
 
@@ -1911,7 +1917,7 @@ rule kraken2_gtdb_w_uniq_fastp:
         # r_seq = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz",
         db = ancient(rules.kraken2_load_gtdb_DB.output.db),
         #db_loaded = rules.kraken2_load_gtdb_DB.output.loaded,
-        kreport2mpa = "code/kreport2mpa.py"
+        kreport2mpa = "<code>/kreport2mpa.py"
     output:
         report = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_report.txt",
         bracken = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_bracken.txt",
@@ -1948,7 +1954,7 @@ rule kraken2_gtdb_w_uniq_fastp:
 
         bracken -d {input.db} -i {output.bracken_input} -o {output.bracken} -w {output.bracken_report}
 
-        ./{input.kreport2mpa} -r {output.bracken_report} -o {output.bracken_mpa} --percentages
+        {input.kreport2mpa} -r {output.bracken_report} -o {output.bracken_mpa} --percentages
 
         echo "Bracken complete. Quitting."
         """
@@ -1976,7 +1982,7 @@ rule kraken2_refseq_w_uniq_fastp: ##Run kraken2
         r_seq = rules.kraken2_gtdb_w_uniq_fastp.output.unclass_r,
         db = ancient(rules.kraken2_load_refseq_DB.output.db),
         #db_loaded = rules.kraken2_load_refseq_DB.output.loaded,
-        kreport2mpa = "code/kreport2mpa.py"
+        kreport2mpa = "<code>/kreport2mpa.py"
     output:
         report = "data/omics/{sample_type}/{sample}/kraken_fastp/refseq_{sample}_report.txt",
         out = "data/omics/{sample_type}/{sample}/kraken_fastp/refseq_{sample}_out.txt",
@@ -2006,13 +2012,13 @@ rule kraken2_refseq_w_uniq_fastp: ##Run kraken2
 
         bracken -d {input.db} -i {output.bracken_input} -o {output.bracken} -w {output.bracken_report}
 
-        ./{input.kreport2mpa} -r {output.bracken_report} -o {output.bracken_mpa} --percentages
+        {input.kreport2mpa} -r {output.bracken_report} -o {output.bracken_mpa} --percentages
         """
 
 
 rule bracken_metacodeR:
         input:
-            script = "code/plot_metacoder_single_sample.R",
+            script = "<code>/plot_metacoder_single_sample.R",
             bracken_refseq = "data/omics/{sample_type}/{sample}/kraken_fastp/refseq_{sample}_bracken.txt",
             bracken_gtdb = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_bracken.txt",
             tax_ref = "data/reference/kraken_tax_info_merged.tsv"
@@ -2039,7 +2045,7 @@ rule contig_abund_metacodeR:
         priority: 3
         shell:
             """
-            code/plot_contig_abund_uniref_LCA_single_sample.R \
+            $BASE/code/plot_contig_abund_uniref_LCA_single_sample.R \
                 --abund={input.contig_abund} \
                 --sample={wildcards.sample} \
                 --output={output}
@@ -2286,14 +2292,14 @@ rule contig_gtdbLCA_mmseqs:
 rule tax_abund_summary_from_contigs:
     input: 
         mmseqs_report = "data/omics/{sample_type}/{sample}/{sample}_contig_report",
-        script = "code/tax_abund_from_contigs.R",
+        script = "<code>/tax_abund_from_contigs.R",
         contig_abund = "data/omics/{sample_type}/{sample}/{sample}_contig_abund.tsv",
         lca = "data/omics/{sample_type}/{sample}/{sample}_contig_lca.tsv"
         #assembly_done = "data/omics/{sample_type}/{sample}/assembly/megahit/.done"
     output:
         abund_summary = "data/omics/{sample_type}/{sample}/{sample}_lca_abund_summarized.tsv"
     params:
-        taxonkit_path = "code/dependencies/taxonkit",
+        taxonkit_path = "<code>/dependencies/taxonkit",
         taxdump = "data/reference/ncbi_tax"
     benchmark: "benchmarks/tax_abund_summary_from_contigs/{sample_type}-{sample}.txt"
     container: "docker://eandersk/r_microbiome"
@@ -2303,7 +2309,7 @@ rule tax_abund_summary_from_contigs:
         """
         pwd #check that the proper working directory is being used
         
-        ./{input.script} \
+        {input.script} \
             -l {input.lca} \
             -r {input.contig_abund} \
             -o {output.abund_summary} \
@@ -2353,7 +2359,7 @@ rule annotate_contigs:
         contig_rpkm = rules.calc_gene_abundance.output.reads_vs_contigs_rpkm,
         #contigs = rules.MEC.output.corrected_assembly,
         contigs = rules.rename_contigs.output.contigs,
-        script = "code/Strain-Level_Metagenome_Analysis/AnnotateContigs.pl",
+        script = "<code>/Strain-Level_Metagenome_Analysis/AnnotateContigs.pl",
         UMRAD = "data/reference/UMRAD"
     output:
         done = touch("data/omics/{sample_type}/{sample}/.annotation_done"),
@@ -2758,7 +2764,7 @@ rule metabat2:
 
 rule maxbin2_coverage:
     input:
-        script = "code/create_maxbin_coverage.R",
+        script = "<code>/create_maxbin_coverage.R",
         coverm_depth = "data/projects/{project}/{sample_type}/{sample}/bins/metabat_style_contig_coverage.tsv"
     output:
         depths_file = "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/depths.txt"
@@ -2771,7 +2777,7 @@ rule maxbin2_coverage:
         cd {current_dir}
         pwd
 
-        ./{input.script} {input.coverm_depth}
+        {input.script} {input.coverm_depth}
         """
 
 rule maxbin2:
@@ -2914,7 +2920,7 @@ rule VAMB:
 
 rule format_coverage_for_metadecoder:
     input:
-        script = "code/make_metadecoder_coverage.R",
+        script = "<code>/make_metadecoder_coverage.R",
         coverage = "data/projects/{project}/{sample_type}/{sample}/bins/contig_coverage.tsv",
         contigs = rules.rename_contigs.output.contigs
     output: "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/coverage.tsv"
@@ -2926,7 +2932,7 @@ rule format_coverage_for_metadecoder:
         """
         pwd && cd {current_dir} && pwd
 
-        ./{input.script} --coverage={input.coverage} --contigs={input.contigs} --out={output}
+        {input.script} --coverage={input.coverage} --contigs={input.contigs} --out={output}
         """
         
 rule metadecoder:
@@ -2966,7 +2972,7 @@ rule standardize_bins:
         "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/.done", 
         "data/projects/{project}/{sample_type}/{sample}/bins/VAMB",
         "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/.done",
-        script = ancient("code/standardize_bins.R"),
+        script = ancient("<code>/standardize_bins.R"),
         #contig_info = "data/projects/{project}/{sample_type}/{sample}/assembly/megahit_noNORM/contigs_info.tsv"
         assembly = rules.rename_contigs.output.contigs,
         contig_info = rules.rename_contigs.output.contig_info
@@ -2985,7 +2991,7 @@ rule standardize_bins:
         """
         pwd && cd {current_dir} && pwd
 
-        ./{input.script} --sample_dir={params.sample_dir} --contig_info={input.contig_info}
+        {input.script} --sample_dir={params.sample_dir} --contig_info={input.contig_info}
         """
 
 rule checkm_new_per_sample:
@@ -3034,7 +3040,7 @@ rule make_das_and_drep_inputs:
         "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/.bins_linked",
         "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/checkm.txt",
         contig_bin_mapping = "data/projects/{project}/{sample_type}/{sample}/bins/contig_bins.rds",
-        script = "code/make_das_and_drep_inputs.R"
+        script = "<code>/make_das_and_drep_inputs.R"
     output: 
         drep_bin_info = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/genome_info.csv",
         drep_bins_linked = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/.bins_linked"
@@ -3054,7 +3060,7 @@ rule make_das_and_drep_inputs:
         """
         pwd && cd {current_dir} && pwd
 
-        ./{input.script} --sample_dir={params.sample_dir}
+        {input.script} --sample_dir={params.sample_dir}
         """
 
 rule checkm_new:
@@ -3191,7 +3197,7 @@ rule GTDB_to_NCBI:
         """
         export GTDBTK_DATA_PATH={params.refs}
 
-        python code/GTDBtk_scripts/gtdb_to_ncbi_majority_vote.py \
+        python $BASE/code/GTDBtk_scripts/gtdb_to_ncbi_majority_vote.py \
             --gtdbtk_output_dir {params.out_dir} \
             --output_file {params.out_dir}/gtdb_to_ncbi_taxonmy.tsv \
             --bac120_metadata_file {params.refs}/bac120_metadata_r232.tsv.gz \
@@ -3553,8 +3559,8 @@ rule antismash_summary:
     resources: cpus=1, mem_mb=4000, time_min=120 
     shell:
         """
-        python3 {params.count_script} {input} {output.counts} | tee {log}
-        python3 {params.summarize_script} {input} {output.region_summary} | tee -a {log}
+        python3 $BASE/{params.count_script} {input} {output.counts} | tee {log}
+        python3 $BASE/{params.summarize_script} {input} {output.region_summary} | tee -a {log}
         """
 
 rule get_bigscape_db:
@@ -3718,8 +3724,8 @@ rule antismash_assembly_summary:
         """
         mkdir -p $(dirname {params.counts})
 
-        python3 {params.count_script} {input} {params.counts} | tee {log}
-        python3 {params.summarize_script} {input} {params.region_summary} | tee -a {log}
+        python3 $BASE/{params.count_script} {input} {params.counts} | tee {log}
+        python3 $BASE/{params.summarize_script} {input} {params.region_summary} | tee -a {log}
         """
 
 rule ref_read_mapping:
@@ -3850,7 +3856,7 @@ rule summarize_marker_mapping:
     container: "docker://eandersk/r_microbiome"
     shell:
         """
-        code/summarize_marker_gene_read_mapping.R \
+        $BASE/code/summarize_marker_gene_read_mapping.R \
             -i {input.bam} \
             --clade-summary {output.clade_summary} \
             --marker-summary {output.marker_summary} \
@@ -3896,7 +3902,7 @@ rule amplicon_hmm_summarize_r:
     benchmark: "benchmarks/amplicon_hmm_summarize_a/{sample}_{direc}.txt"
     log: "logs/amplicon_hmm_summarize_a/{sample}_{direc}.log"
     container: "docker://eandersk/r_microbiome"
-    shell: "./code/summarize_hmmscan.R --input {input} --output {output} |& tee {log}"
+    shell: "$BASE/code/summarize_hmmscan.R --input {input} --output {output} |& tee {log}"
 
 rule amplicon_hmm_summarize:
     input: rules.amplicon_hmm.output.hmm_tbl
@@ -4071,7 +4077,7 @@ rule amplicon_dada2_target:
     shell:
         """
         logto {log}
-        ./code/ampliconTrunc.R \
+        $BASE/code/ampliconTrunc.R \
             --quality {params.quality_threshold} \
             --outdir {params.outdir} \
             --assignments {input.assignments} \
@@ -4136,7 +4142,7 @@ rule amplicon_dada2_taxonomy:
     shell:
         """
         logto {log}
-        ./code/dada2_assign_taxonomy.R \
+        $BASE/code/dada2_assign_taxonomy.R \
             --ref {params.ref} \
             --seqs {input.seqs} \
             --out {output.taxonomy} \
