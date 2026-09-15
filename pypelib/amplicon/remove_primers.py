@@ -200,6 +200,7 @@ def main_single(
                 single_fastq,
                 Prof.CONSISTENT,
                 log,
+                conda_env,
             )
             print(f'discarding {len(discards)} reads', file=log)
 
