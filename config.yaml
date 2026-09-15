@@ -1,9 +1,0 @@
-jobs: 100
-local-cores: 1
-use-conda: true
-conda-frontend: mamba
-use-singularity: true
-default-resources: [cpus=1, mem_mb=4000, time_min=120]
-resources: [cpus=64, mem_mb=100000]
-max-status-checks-per-second: 1
-work_dir: /tmp
