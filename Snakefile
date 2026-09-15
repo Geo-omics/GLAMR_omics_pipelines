@@ -24,8 +24,12 @@ import pypelib.sra
 from pypelib.utils import load_stats, logme, PipelineVersion, save_error_file
 
 
+base_dir = Path(workflow.snakefile).parent
+""" The OMICS pipelines base directory """
+
+
 configfile: "config.yaml"
-finish_config_setup(config, Path(workflow.snakefile))
+finish_config_setup(config, base_dir)
 
 report: "code/report/workflow.rst"
 

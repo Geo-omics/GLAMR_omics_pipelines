@@ -6,7 +6,7 @@ from snakemake.common.configfile import load_configfile
 DEFAULTS_CONFIG_FILE = 'default.conf'
 
 
-def finish_config_setup(config, snakefile):
+def finish_config_setup(config, base_dir):
     """
     Finish setting up the config
 
@@ -16,14 +16,10 @@ def finish_config_setup(config, snakefile):
 
     config:
         The snakemake config instance, a dict.
-    snakefile:
-        pathlib.Path to the snakefile.  Needed to locate the defaults config
-        file.  Btw, this comes from workflow.snakefile which is a weird dynamic
-        property and must be passed on as something more concrete from the
-        Snakefile.
+    base_dir:
+        pathlib.Path to the directory containing the defaults config file.
     """
-    defaults = snakefile.parent / DEFAULTS_CONFIG_FILE
-    for key, value in load_configfile(defaults).items():
+    for key, value in load_configfile(base_dir / DEFAULTS_CONFIG_FILE).items():
         if value is None:
             # treat None as unset
             continue
