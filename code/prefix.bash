@@ -18,3 +18,4 @@ echo "Job executed on: ${HOSTNAME}"
 echo "SLURM job id: ${SLURM_JOB_ID:-local job}"
 
 export BASE=  # set by pypelib.shell_prep()
+export PYTHONPATH=$BASE
