@@ -26,7 +26,7 @@ from pypelib.utils import (load_stats, logme, PipelineVersion, save_error_file,
 )
 
 
-base_dir = Path(workflow.snakefile).parent
+base_dir = Path(workflow.basedir)
 """ The OMICS pipelines base directory """
 
 
