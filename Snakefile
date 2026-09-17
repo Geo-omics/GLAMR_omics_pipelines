@@ -43,7 +43,6 @@ report: "code/report/workflow.rst"
 
 shell.prefix(shell_prep(base_dir / 'code' / 'prefix.bash'))
 
-current_dir = os.getcwd()
 #humann_ref_dir = "/home/kiledal/scratch_gdick1/GVHD/data/reference/humann" # for running on Great Lakes
 humann_ref_dir = "/geomicro/data2/kiledal/projects/GVHD/data/reference/humann"
 
@@ -2753,10 +2752,7 @@ rule metabat2:
     priority: 3
     shell:
         """
-        pwd 
-        cd {current_dir}
         pwd
-
         metabat2 -i {input.contigs} -a {input.coverm_depth} -o {params.bin_name} -m 2000 -t {resources.cpus} --unbinned
         """
 
@@ -2774,9 +2770,7 @@ rule maxbin2_coverage:
     priority: 3
     shell:
         """
-        cd {current_dir}
         pwd
-
         {input.script} {input.coverm_depth}
         """
 
@@ -2797,9 +2791,6 @@ rule maxbin2:
     shell:
         """
         pwd 
-        cd {current_dir}
-        pwd
-        
         run_MaxBin.pl -contig {input.contigs} \
             -markerset 107 \
             -thread {resources.cpus} \
@@ -2930,8 +2921,7 @@ rule format_coverage_for_metadecoder:
     priority: 3
     shell:
         """
-        pwd && cd {current_dir} && pwd
-
+        pwd
         {input.script} --coverage={input.coverage} --contigs={input.contigs} --out={output}
         """
         
@@ -2989,8 +2979,7 @@ rule standardize_bins:
     priority: 4
     shell:
         """
-        pwd && cd {current_dir} && pwd
-
+        pwd
         {input.script} --sample_dir={params.sample_dir} --contig_info={input.contig_info}
         """
 
@@ -3058,8 +3047,7 @@ rule make_das_and_drep_inputs:
     priority: 4
     shell:
         """
-        pwd && cd {current_dir} && pwd
-
+        pwd
         {input.script} --sample_dir={params.sample_dir}
         """
 
@@ -3473,9 +3461,6 @@ rule antismash7:
     shell:
         """
         pwd 
-        cd {current_dir}
-        pwd
-
         antismash \
             --cb-general --cb-knownclusters --cb-subclusters --asf --pfam2go --smcog-trees --cc-mibig --tfbs \
             -t bacteria \
@@ -3496,9 +3481,6 @@ rule antismash8_db_download:
     shell:
         """
         pwd 
-        cd {current_dir}
-        pwd
-
         download-antismash-databases --database-dir {output.database_dir} | tee {log}
 
         #antismash --prepare-data --databases {output.database_dir}
@@ -3582,12 +3564,14 @@ rule setup_bigscape:
     log: "logs/setup_bigscape.txt"
     shell:
         """
+        logto {log}
         cd data/reference
-        git clone -b release_v1 https://github.com/medema-group/BiG-SCAPE.git | tee {current_dir}/{log}
+
+        git clone -b release_v1 https://github.com/medema-group/BiG-SCAPE.git
         
-        chmod +x BiG-SCAPE/*py | tee -a {current_dir}/{log}
-        chmod a+w BiG-SCAPE/domains_color_file.tsv | tee -a {current_dir}/{log}
-        chmod a+w BiG-SCAPE/Annotated_MIBiG_reference/ | tee -a {current_dir}/{log}
+        chmod +x BiG-SCAPE/*py
+        chmod a+w BiG-SCAPE/domains_color_file.tsv
+        chmod a+w BiG-SCAPE/Annotated_MIBiG_reference/
         """
 
 rule bigscape:
@@ -4587,8 +4571,7 @@ rule virsorter2:
     priority: 3
     shell:
         """
-        pwd && cd {current_dir} && pwd
-
+        pwd
         virsorter run \
             -w {params.virsorter_dir} \
             -i {input.contigs} \
