@@ -4076,18 +4076,21 @@ rule amplicon_dada2_target:
         fi
         """
 
-rule amplicon_asv_test:
-    input: rules.amplicon_dada2_target.output.seqs
-    output: "data/projects/{dataset}/dada2.{target_spec}/rep_seqs_hmm.txt"
+rule amplicon_asv_check:
+    input: asvs = rules.amplicon_dada2_target.output.seqs
+    output:
+        alignments = "data/projects/{dataset}/dada2.{target_spec}/rep_seqs_hmm.txt",
+        asvs = "data/projects/{dataset}/dada2.{target_spec}/asvs.fasta",
     params: hmm_db = "data/reference/hmm_amplicons/combined.hmm"
     resources: mem_mb=4000, time_min=30
     benchmark: "benchmarks/amplicon_asv_test/{dataset}_{target_spec}.txt"
     run:
         pypelib.amplicon.hmm_check_asvs.main(
             params.hmm_db,
-            input[0],
+            input.asvs,
             wildcards.target_spec,
-            output[0],
+            output.alignments,
+            output.asvs,
         )
 
 

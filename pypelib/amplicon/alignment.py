@@ -1,6 +1,8 @@
-from dataclasses import dataclass
+from contextlib import ExitStack
+from dataclasses import dataclass, fields, astuple
 from functools import cached_property
 from typing import ClassVar
+from sys import stdout
 
 from . import get_models
 from .hmm import HMM
@@ -117,6 +119,23 @@ class HMMRAlignment:
                     ) from e
                 rows.append(row)
         return rows
+
+    @classmethod
+    def to_csv(cls, rows, sep='\t', output=None):
+        with ExitStack() as estack:
+            if output:
+                ofile = estack.enter_context(open(output, 'w'))
+            else:
+                ofile = stdout
+
+            if any(not isinstance(i, cls) for i in rows):
+                raise TypeError(f'rows must only contain elements ot type {cls}')
+
+            ofile.write(sep.join(i.name for i in fields(cls)))
+            ofile.write('\n')
+            for obj in rows:
+                ofile.write(sep.join(str(i) for i in astuple(obj)))
+                ofile.write('\n')
 
 
 class PrimerMatch:
