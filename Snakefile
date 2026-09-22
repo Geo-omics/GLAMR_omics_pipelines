@@ -11,6 +11,7 @@ from tempfile import NamedTemporaryFile
 import time
 
 import pypelib.amplicon.dispatch
+import pypelib.amplicon.fix_taxonomy
 import pypelib.amplicon.guess_target
 import pypelib.amplicon.hmm_check_asvs
 import pypelib.amplicon.hmm_summarize
@@ -4116,9 +4117,9 @@ def get_taxonomy_db(target_spec):
 rule amplicon_dada2_taxonomy:
     """Assign taxonomy to DADA2 ASVs using a configured reference database."""
     input:
-        seqs = rules.amplicon_dada2_target.output.seqs,
+        seqs = rules.amplicon_asv_check.output.asvs,
     output:
-        taxonomy = "data/projects/{dataset}/dada2.{target_spec}/taxonomy.tsv",
+        taxonomy = "data/projects/{dataset}/dada2.{target_spec}/taxonomy.seqs.tsv",
     params:
         ref = lambda wc: get_taxonomy_db(wc.target_spec),
     log: "logs/amplicon_dada2_taxonomy/{dataset}_{target_spec}.log"
@@ -4135,6 +4136,20 @@ rule amplicon_dada2_taxonomy:
             --out {output.taxonomy} \
             --cpus {threads}
         """
+
+rule amplicon_dada2_taxonomy_polish:
+    """
+    Replace the sequences in the first column of the taxonomy assignment with ASV IDs
+    """
+    input:
+        seqs = rules.amplicon_asv_check.output.asvs,
+        taxonomy = rules.amplicon_dada2_taxonomy.output.taxonomy
+    output:
+        taxonomy = "data/projects/{dataset}/dada2.{target_spec}/taxonomy.tsv",
+    resources: mem_mb=1000, time_min=1
+    # conda: "config/conda_yaml/snakemake.yaml"
+    run: pypelib.amplicon.fix_taxonomy.main(input.seqs, input.taxonomy, output.taxonomy)
+
 
 def get_dada2_output(wc):
     """
@@ -4174,7 +4189,9 @@ def get_dada2_output(wc):
     for i in specs:
         for j in rules.amplicon_dada2_target.output:
             files.append(j.format(dataset=wc.dataset, target_spec=i))
-        for j in rules.amplicon_asv_test.output:
+        for j in rules.amplicon_asv_check.output:
+            files.append(j.format(dataset=wc.dataset, target_spec=i))
+        for j in rules.amplicon_dada2_taxonomy_polish.output:
             files.append(j.format(dataset=wc.dataset, target_spec=i))
     return files
 

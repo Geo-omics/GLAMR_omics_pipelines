@@ -41,4 +41,4 @@ taxa |>
     rownames_to_column("asv_id") |>
     write_tsv(args$out)
 
-cat("Taxonomy written to:", args$out, "\n")
+cat("\nTaxonomy written to:", args$out, "\n")
