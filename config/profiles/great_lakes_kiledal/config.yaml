@@ -9,7 +9,7 @@ default-resources: [cpus=1, mem_mb=8000, time_min=120, account=gdick0, partition
 #resources: [disk_mb=2000000]
 #resources: [cpus=20000, mem_mb=100000000, heavy_network=1, disk_mb=2000000]
 latency-wait: 60
-cluster-status: "slurm-status.py"
+cluster-status: "$SLURM_STATUS_CMD"
 max-status-checks-per-second: 1
 singularity-args: "--home /home/$USER:/home/$USER --bind /scratch/gdick_root/ --bind /nfs/turbo/lsa-gdick2/geomicro/data2/kiledal/ --bind /gpfs/accounts/gdick_root/ --bind /nfs:/nfs"
 rerun-triggers: mtime

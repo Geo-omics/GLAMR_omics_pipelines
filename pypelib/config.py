@@ -44,3 +44,11 @@ def finish_config_setup(config, base_dir):
                 config['ncbi_api_key'] = key_txt
                 # some tools/rules want this in the environment
                 environ.setdefault('NCBI_API_KEY', key_txt)
+
+    if slurm_status_cmd := config.get('slurm_status_cmd'):
+        slurm_status_cmd = base_dir / slurm_status_cmd
+        if slurm_status_cmd.is_file():
+            environ.setdefault('SLURM_STATUS_CMD', str(slurm_status_cmd))
+        else:
+            print(f'[WARNING] config.slurm_status_cmd set to "{slurm_status_cmd}" '
+                  f'which is not a file')

@@ -12,7 +12,7 @@ resources: [scratch_disk_mb=20000000]
 #resources: [disk_mb=2000000]
 #resources: [cpus=20000, mem_mb=100000000, heavy_network=1, disk_mb=2000000]
 latency-wait: 30
-cluster-generic-status-cmd: "slurm-status.py"
+cluster-generic-status-cmd: "$SLURM_STATUS_CMD"
 max-status-checks-per-second: 1
 singularity-args: "--home /home/$USER:/home/$USER --bind /scratch/gdick_root/ --bind /nfs/turbo/lsa-gdick2/geomicro/data2/kiledal/ --bind /gpfs/accounts/gdick_root/ --bind /nfs:/nfs"
 rerun-triggers: mtime

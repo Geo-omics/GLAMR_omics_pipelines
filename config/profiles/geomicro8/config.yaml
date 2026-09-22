@@ -10,7 +10,7 @@ default-resources: [cpus=1, mem_mb=8000, time_min=120, heavy_network=0, gpu=0, d
 #resources: [disk_mb=2000000]
 resources: [cpus=1000, mem_mb=1000000000, heavy_network=1, disk_mb=2000000]
 latency-wait: 60
-cluster-generic-status-cmd: "slurm-status.py"
+cluster-generic-status-cmd: "$SLURM_STATUS_CMD"
 max-status-checks-per-second: 10
 singularity-args: "--home $HOME:/home/$USER --bind /nfs/turbo/lsa-gdick2/geomicro --bind /nfs:/nfs"
 precommand: "mkdir -p logs/slurm/ logs/ benchmarks/"
