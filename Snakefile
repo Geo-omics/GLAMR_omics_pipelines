@@ -57,6 +57,23 @@ onerror: post_production(log[0], workflow)
 onsuccess: post_production(log[0], workflow)
 
 
+wildcard_constraints:
+    # our wildcards should never have slashes
+    assembly = '[^/]+',
+    bin = '[^/]+',
+    dataset = '[^/]+',
+    direc = '[^/]+',
+    genome = '[^/]+',
+    marker = '[^/]+',
+    project = '[^/]+',
+    reads = '[^/]+',
+    ref_seqs = '[^/]+',
+    sample = '[^/]+',
+    sample_type = '[^/]+',
+    target_spec = '[^/]+',
+    version = '[^/]+',
+
+
 rule make_rulegraph:
     output:
         "rulegraph.pdf",
