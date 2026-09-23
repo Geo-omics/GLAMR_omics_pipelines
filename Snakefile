@@ -3885,10 +3885,11 @@ rule amplicon_hmm:
         """
         logto {log}
         mkdir -p -- {params.outdir}
+        num_workers=$(({threads} - 1))
 
         seqkit head -n 1000 {input} |
             seqkit fq2fa |
-            nhmmscan --cpu {threads} --tblout {output.hmm_tbl} {params.amplicon_hmm_db} - > {output.full_out}
+            nhmmscan --cpu ${{num_workers}} --tblout {output.hmm_tbl} {params.amplicon_hmm_db} - > {output.full_out}
         """
 
 rule amplicon_hmm_summarize_r:
@@ -4100,16 +4101,20 @@ rule amplicon_asv_check:
         alignments = "data/projects/{dataset}/dada2.{target_spec}/rep_seqs_hmm.txt",
         asvs = "data/projects/{dataset}/dada2.{target_spec}/asvs.fasta",
     params: hmm_db = "data/reference/hmm_amplicons/combined.hmm"
+    log: "logs/dada2/{dataset}_{target_spec}_check.log"
+    threads: 3
     resources: mem_mb=4000, time_min=30
     benchmark: "benchmarks/amplicon_asv_test/{dataset}_{target_spec}.txt"
     run:
-        pypelib.amplicon.hmm_check_asvs.main(
-            params.hmm_db,
-            input.asvs,
-            wildcards.target_spec,
-            output.alignments,
-            output.asvs,
-        )
+        with logme(log):
+            pypelib.amplicon.hmm_check_asvs.main(
+                params.hmm_db,
+                input.asvs,
+                wildcards.target_spec,
+                output.alignments,
+                output.asvs,
+                hmmr_threads=threads,
+            )
 
 
 def get_taxonomy_db(target_spec):

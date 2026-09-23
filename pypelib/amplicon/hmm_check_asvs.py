@@ -31,7 +31,8 @@ def cli():
     main(args.hmm_db, args.fasta, args.target_spec, args.hmm_tblout, args.final_asvs)
 
 
-def main(hmm_db_path, fasta_path, target_spec, aln_output, fasta_output):
+def main(hmm_db_path, fasta_path, target_spec, aln_output, fasta_output,
+         hmmr_threads=1):
     hmm, _, _ = HMM.spec2targets(target_spec)
     asvs = {i.id: i for i in SeqIO.parse(fasta_path, 'fasta')}
 
@@ -40,6 +41,7 @@ def main(hmm_db_path, fasta_path, target_spec, aln_output, fasta_output):
     with NamedTemporaryFile('rt') as tbl_out:
         cmd = [
             'nhmmscan',
+            '--cpu', str(hmmr_threads - 1),  # worker threads
             '--tblout', tbl_out.name,
             hmm_db_path,
             fasta_path,
