@@ -4043,14 +4043,16 @@ checkpoint amplicon_dispatch:
     params:
         project_dir = subpath(output.assignments, parent=True)
     resources: mem_mb=100, time_min=2
+    log: "logs/amplicon_dispatch/{dataset}.log"
     run:
-        pypelib.amplicon.dispatch.make(
-            input.fastqs,
-            input.target_tab,
-            params.project_dir,
-            out_assignments=output.assignments,
-            out_samples=output.samples,
-        )
+        with logme(log):
+            pypelib.amplicon.dispatch.make(
+                input.fastqs,
+                input.target_tab,
+                params.project_dir,
+                out_assignments=output.assignments,
+                out_samples=output.samples,
+            )
 
 
 rule hmm_summary_plots:
