@@ -22,8 +22,8 @@ from pypelib.post import post_production
 import pypelib.raw_reads
 from pypelib.raw_reads import parse_runinfo
 import pypelib.sra
-from pypelib.utils import (load_stats, logme, PipelineVersion, save_error_file,
-    shell_prep,
+from pypelib.utils import (Limit, load_stats, logme, PipelineVersion,
+    save_error_file, shell_prep,
 )
 
 
@@ -110,13 +110,14 @@ rule get_sra_metadata:
     params:
         accn = parse_input(input.accession, parse_accession),
     log: "logs/get_sra_metadata/{sample_type}.{sample}.err"
-    resources: mem_mb=100, time_min=5, heavy_network=1
+    resources: mem_mb=100, time_min=5, heavy_network=0
     run:
         with save_error_file(log[0]):
             pypelib.sra.set_api_key(config.get('ncbi_api_key'))
-            with pypelib.sra.get_entry_raw(params.accn, multi=True, slow=True) as data:
-                with open(output[0], 'wb') as ofile:
-                    ofile.write(data.read())
+            with Limit('ncbi_api', size=10, max_wait=300):
+                with pypelib.sra.get_entry_raw(params.accn, multi=True, slow=True) as data:
+                    with open(output[0], 'wb') as ofile:
+                        ofile.write(data.read())
 
 
 rule get_reads_prep:
@@ -127,41 +128,42 @@ rule get_reads_prep:
         runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.json"
     conda: "config/conda_yaml/kingfisher.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-prep.log"
-    resources: mem_mb=2000, time_min=5, heavy_network=1
+    resources: mem_mb=2000, time_min=5, heavy_network=0
     run:
         with logme(log):
             if input.sra_metadata:
                 # SRA dataset
-                ncbi_api_key = config.get('ncbi_api_key', '')
-                pypelib.sra.set_api_key(ncbi_api_key)
-                data = pypelib.sra.get_entry(file=str(input.sra_metadata), multi=True, slow=True)
-                with open(rules.get_sra_metadata.input.accession.format(**wildcards)) as ifile:
-                    accn = parse_accession(ifile)
-                with save_error_file(log[0]):
-                    expack = pypelib.sra.get_experiment(accn, data, sample_type=wildcards.sample_type)
+                with Limit('ncbi_api', size=10, max_wait=300):
+                    ncbi_api_key = config.get('ncbi_api_key', '')
+                    pypelib.sra.set_api_key(ncbi_api_key)
+                    data = pypelib.sra.get_entry(file=str(input.sra_metadata), multi=True, slow=True)
+                    with open(rules.get_sra_metadata.input.accession.format(**wildcards)) as ifile:
+                        accn = parse_accession(ifile)
+                    with save_error_file(log[0]):
+                        expack = pypelib.sra.get_experiment(accn, data, sample_type=wildcards.sample_type)
 
-                info = pypelib.sra.compile_srr_info(expack)
-                with open(output.runinfo0, 'w') as ofile:
-                    json.dump(info, ofile, indent=4)
-                    ofile.write('\n')
-                srr_accn = expack['RUN_SET']['RUN']['accession']
-                accn_str = accn + ' => ' + srr_accn
+                    info = pypelib.sra.compile_srr_info(expack)
+                    with open(output.runinfo0, 'w') as ofile:
+                        json.dump(info, ofile, indent=4)
+                        ofile.write('\n')
+                    srr_accn = expack['RUN_SET']['RUN']['accession']
+                    accn_str = accn + ' => ' + srr_accn
 
-                print(f'Accession for {wildcards.sample}: {accn_str}')
-                kingfisher_slowdown = 'yes' if config.get('kingfisher_slowdown') else ''
-                shell("""
-                    logto {log}
-                    [[ -n "{ncbi_api_key:q}" ]] && export NCBI_API_KEY={ncbi_api_key:q}
-                    [[ -n "{kingfisher_slowdown}" ]] && sleep $((RANDOM % 30))
-                    kingfisher annotate -r {srr_accn:q} -a -f json -o {output.runinfo}
-                """)
-                with open(output.runinfo) as ifile:
-                    runinfo = parse_runinfo(ifile)
-                if runinfo['number_of_runs_for_sample'] > 1:
-                    raise RuntimeError(
-                        f'Multiple runs per sample! {wildcards=} {accn=}\n'
-                        f'{runinfo=}'
-                    )
+                    print(f'Accession for {wildcards.sample}: {accn_str}')
+                    kingfisher_slowdown = 'yes' if config.get('kingfisher_slowdown') else ''
+                    shell("""
+                        logto {log}
+                        [[ -n "{ncbi_api_key:q}" ]] && export NCBI_API_KEY={ncbi_api_key:q}
+                        [[ -n "{kingfisher_slowdown}" ]] && sleep $((RANDOM % 30))
+                        kingfisher annotate -r {srr_accn:q} -a -f json -o {output.runinfo}
+                    """)
+                    with open(output.runinfo) as ifile:
+                        runinfo = parse_runinfo(ifile)
+                    if runinfo['number_of_runs_for_sample'] > 1:
+                        raise RuntimeError(
+                            f'Multiple runs per sample! {wildcards=} {accn=}\n'
+                            f'{runinfo=}'
+                        )
             else:
                 # non-SRA dataset
 
@@ -4760,3 +4762,17 @@ rule eukcc:
 
         rm -rf {output.out_dir}/refine_workdir
         """
+
+
+rule lock_test:
+    output: 'test/lock_test_out_{number}'
+    params: size = 3, max_wait = 30
+    resources: time_min=1
+    run:
+        with Limit('lock_test', params.size, max_wait=params.max_wait, debug_id=wildcards.number):
+            with open(output[0], 'w') as ofile:
+                ofile.write('hello world\n')
+            print(f'[DEBUG] job ({wildcards.number}) simulating work...')
+            time.sleep(5)
+            print(f'[DEBUG] job ({wildcards.number}) finishing work...')
+        print(f'[DEBUG] job ({wildcards.number}) rule done')

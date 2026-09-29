@@ -5,7 +5,7 @@ import gzip
 from inspect import signature
 import json
 from itertools import batched
-from os import PathLike
+import os
 from pathlib import Path
 import random
 import re
@@ -14,6 +14,7 @@ from subprocess import CalledProcessError, PIPE, run
 import sys
 import tarfile
 from tempfile import TemporaryDirectory
+from time import sleep, time
 import traceback
 
 
@@ -116,7 +117,7 @@ def conda_run(prefix, cmd, *args, **kwargs):
         return run(cmd, *args, **kwargs)
     else:
         conda_run_cmd = ['conda', 'run', '--prefix', str(prefix)]
-        if isinstance(cmd, PathLike):
+        if isinstance(cmd, os.PathLike):
             cmd = conda_run_cmd.append(cmd)
         else:
             # a list
@@ -454,3 +455,136 @@ def shell_prep(path):
     base = path.parent.parent
     txt = re.sub(r'^( ?(export) ?BASE=).*$', rf'\1{base}', txt, flags=re.MULTILINE)
     return txt
+
+
+class Limit:
+    """
+    Context manager implementing a semaphore to control entering a block
+    """
+    ACQUIRE = object()
+    RELEASE = object()
+
+    def __init__(self, name, size=1, poll_int=5, max_wait=None, debug_id=None):
+        """
+        name str:
+            Name of the lock.
+        size int:
+            Maximum number of threads can enter the block at a time.
+        poll_int int:
+            Polling interval in seconds.  How long to wait to try again when
+            all free spots got taken.
+        max_wait:
+            Maximum time in seconds, while being blocked, how long to wait for
+            a sign of progress (updates to the lockfile) before giving up.  If
+            None, then no such check will take place.
+        """
+
+        self.path = Path.cwd() / f'.lockfile.{name}'
+        if size < 1:
+            raise ValueError('Size must be 1 or larger')
+        self.size = size
+        if poll_int < 1:
+            raise ValueError('polling interval must be 1 or larger')
+        self.poll_interval = poll_int
+        if max_wait is not None and max_wait < 1:
+            raise ValueError('maximum wait time must be None or largern than 1')
+        self.max_wait_time = max_wait
+        self.debug_id = debug_id
+
+    def __enter__(self):
+        self.total_waited = 0.0
+        while True:
+            value, mtime = self.do_op(self.ACQUIRE)
+            if mtime is None:
+                # success, enter block
+                self.debug('got a spot')
+                break
+
+            age = time() - mtime
+            if self.max_wait_time and self.max_wait_time < age:
+                # lockfile is not being updated much?
+                raise RuntimeError(
+                    f'stale lock file or or other threads make no progress: '
+                    f'{self.path} {age=} {self.debug_id=}'
+                )
+
+            self.debug(f'blocked, backing off {age=}')
+            jitter = random.randrange(-500, 500) / 1000  # +/- 500 ms
+            sleep(self.poll_interval + jitter)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        """ Release our spot """
+        self.do_op(self.RELEASE)
+
+    def do_op(self, op):
+        """
+        Raise/lower the semaphore by the given amount
+
+        May block as it tries to get the lock.
+
+        If the semaphore is at its maximum size, then the lockfile's
+        modification time is retured.
+        """
+        # open: special os.open() dance to get a file writable (for lockf) but
+        # w/o trucation (since we want to read it) and have it get created as
+        # needed.  Impossible with builtin's open().
+        with os.fdopen(os.open(self.path, os.O_CREAT | os.O_RDWR), 'r+') as lfile:
+            self.debug_nn('getting file lock')
+            os.lockf(lfile.fileno(), os.F_LOCK, 0)  # may block
+            self.debug_ok()
+            lfile.seek(0)
+            line = lfile.readline().strip()
+
+            if lfile.read(1):
+                raise ValueError('bad lockfile: multiple lines')
+            if line:
+                try:
+                    value = int(line)
+                except ValueError as e:
+                    raise ValueError(f'bad lockfile: {e}')
+
+                if value < 0:
+                    raise ValueError('bad lockfile: negative value')
+
+                if self.size < value:
+                    print(f'[WARNING] {self} questionable lockfile value, too '
+                          f'large: {value} while {self.size=}')
+            else:
+                # new file
+                value = 0
+
+            match op:
+                case self.ACQUIRE:
+                    if self.size <= value:
+                        # blocked!
+                        return (None, self.path.stat().st_mtime)
+                    else:
+                        value += 1
+                        self.debug(f'aquire {value=}')
+                case self.RELEASE:
+                    if value <= 0:
+                        print(f'[WARNING] {self}: releasing, but was at zero already')
+                    else:
+                        value -= 1
+                        self.debug(f'release {value=}')
+                case _: raise ValueError('invalid operation')
+
+            # save new value
+            self.debug_nn('saving and releasing lockfile')
+            lfile.seek(0)
+            lfile.write(f'{value}\n')
+            # lock is released when lfile closes at end of block
+        self.debug_ok()
+        return value, None
+
+    def debug_nn(self, *args):
+        self.debug(' '.join(str(i) for i in args) + '... ', end='', flush=True)
+
+    def debug_ok(self):
+        if self.debug_id is not None:
+            print('[OK]')
+
+    def debug(self, *args, **kwargs):
+        if self.debug_id is not None:
+            print(f'[DEBUG] <{type(self).__name__} ({id(self)})> ({self.debug_id})',
+                  *args, **kwargs)
