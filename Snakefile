@@ -74,6 +74,10 @@ wildcard_constraints:
     version = '[^/]+',
 
 
+resource_scopes:
+    ncbi_api="global",
+
+
 rule make_rulegraph:
     output:
         "rulegraph.pdf",
@@ -110,7 +114,7 @@ rule get_sra_metadata:
     params:
         accn = parse_input(input.accession, parse_accession),
     log: "logs/get_sra_metadata/{sample_type}.{sample}.err"
-    resources: mem_mb=100, time_min=5, heavy_network=1
+    resources: mem_mb=100, time_min=5, ncbi_api=1
     run:
         with save_error_file(log[0]):
             pypelib.sra.set_api_key(config.get('ncbi_api_key'))
@@ -127,7 +131,7 @@ rule get_reads_prep:
         runinfo = "data/omics/{sample_type}/{sample}/reads/runinfo.json"
     conda: "config/conda_yaml/kingfisher.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-prep.log"
-    resources: mem_mb=2000, time_min=5, heavy_network=1
+    resources: mem_mb=2000, time_min=5, ncbi_api=lambda wc, input: 1 if input.sra_metadata else 0
     run:
         with logme(log):
             if input.sra_metadata:
@@ -152,7 +156,7 @@ rule get_reads_prep:
                 shell("""
                     logto {log}
                     [[ -n "{ncbi_api_key:q}" ]] && export NCBI_API_KEY={ncbi_api_key:q}
-                    [[ -n "{kingfisher_slowdown}" ]] && sleep $((RANDOM % 30))
+                    [[ -n "{kingfisher_slowdown}" ]] && sleep $((RANDOM % 5))
                     kingfisher annotate -r {srr_accn:q} -a -f json -o {output.runinfo}
                 """)
                 with open(output.runinfo) as ifile:
@@ -294,7 +298,7 @@ rule get_reads:
     conda: "config/conda_yaml/kingfisher.yaml"
     log: "logs/get_reads/{sample_type}-{sample}-download.log"
     threads: 2
-    resources: mem_mb=2000, time_min=300, heavy_network=1
+    resources: mem_mb=2000, time_min=300, ncbi_api=1
     run:
         ncbi_api_key = config.get('ncbi_api_key', '')
         kingfisher_slowdown = 'yes' if config.get('kingfisher_slowdown') else ''
@@ -304,7 +308,7 @@ rule get_reads:
             # shell syntax error e.g. [[ -n  ]] if variable is empty str
             [[ -n "{ncbi_api_key:q}" ]] && export NCBI_API_KEY={ncbi_api_key:q}
 
-            [[ -n "{kingfisher_slowdown}" ]] && sleep $((RANDOM % 30))
+            [[ -n "{kingfisher_slowdown}" ]] && sleep $((RANDOM % 5))
 
             # Adding methods in same order as in kingfisher documentation:
             command -v prefetch && have_sra_toolkit=true || have_sra_toolkit=false

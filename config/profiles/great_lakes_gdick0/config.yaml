@@ -6,7 +6,7 @@ cluster-generic-cancel-cmd: "scancel"
 software-deployment-method:
   - conda
   - apptainer
-default-resources: [cpus=1, mem_mb=8000, time_min=120, account=gdick0, partition=standard, heavy_network=0, gpu=0, disk_mb=100]
+default-resources: [cpus=1, mem_mb=8000, time_min=120, account=gdick0, partition=standard, ncbi_api=0, gpu=0, disk_mb=100]
 #resources: [scratch_disk_mb=60000000]
 resources: [scratch_disk_mb=10000000]
 #resources: [disk_mb=2000000]
