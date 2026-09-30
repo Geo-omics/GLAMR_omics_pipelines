@@ -4610,7 +4610,7 @@ rule virsorter2:
     container: "docker://jiarong/virsorter:latest"
     benchmark: "benchmarks/virsorter2/{sample_type}-{project}__{sample}.txt"
     log: "logs/virsorter2/{sample_type}-{project}__{sample}.log"
-    resources: cpus=32, mem_mb=150000, time_min=4320 # standard samples
+    resources: cpus=16, mem_mb = lambda wildcards, attempt: attempt * 24000, time_min=4320 # standard samples
     priority: 3
     shell:
         """
@@ -4636,7 +4636,7 @@ rule genomad:
     conda: "config/conda_yaml/genomad.yaml"
     benchmark: "benchmarks/genomad/{sample_type}-{project}__{sample}.txt"
     log: "logs/genomad/{sample_type}-{project}__{sample}.log"
-    resources: cpus=32, mem_mb=150000, time_min=4320 # standard samples
+    resources: cpus=16, mem_mb = lambda wildcards, attempt: attempt * 32000, time_min=4320 # standard samples
     priority: 3
     shell:
         """
