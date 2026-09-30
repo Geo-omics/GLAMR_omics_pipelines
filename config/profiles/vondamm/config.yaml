@@ -1,7 +1,7 @@
 jobs: 100
-use-conda: true
-conda-frontend: mamba
-use-singularity: true
+software-deployment-method:
+  - conda
+  - apptainer
 default-resources: [cpus=1, mem_mb=16000, time_min=120, heavy_network=0]
 resources: [cpus=32, mem_mb=700000, heavy_network=1]
 latency-wait: 60
