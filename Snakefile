@@ -1053,6 +1053,33 @@ rule count_reads_fastp:
         """
         #printf "bbnorm_reads\t$(($(pigz -dc -p {resources.cpus} {input.bbnorm_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.bbnorm_reads_rev} | wc -l) / 4 ))\n" >> {output}
 
+# Target rule: seqkit stats for the same read files counted by count_reads_fastp
+rule seqkit_stats_fastp:
+    input:
+        expand("data/omics/{sample_type}/{sample}/reads/read_stats/{reads}.txt",
+            reads = ["raw_fwd_reads", "raw_rev_reads",
+                     #"fastp_fwd_reads", "fastp_rev_reads", # temp() outputs; temporarily dropped for backfill so QC isn't re-run
+                     "decon_fwd_reads_fastp", "decon_rev_reads_fastp"],
+            allow_missing = True)
+    output:
+        touch("data/omics/{sample_type}/{sample}/reads/read_stats/.fastp_done")
+    localrule: True
+
+# Target rule: metaT equivalent, covering dedup and no-dedup plus rRNA-removed reads
+rule seqkit_stats_metaT:
+    input:
+        expand("data/omics/metatranscriptomes/{sample}/reads/read_stats/{reads}.txt",
+            reads = ["raw_fwd_reads", "raw_rev_reads",
+                     #"fastp_fwd_reads", "fastp_rev_reads", # temp() outputs; temporarily dropped for backfill so QC isn't re-run
+                     "decon_fwd_reads_fastp", "decon_rev_reads_fastp",
+                     #"fastp_no_dedup_fwd_reads", "fastp_no_dedup_rev_reads", # temp() outputs; temporarily dropped for backfill
+                     "noDedup_decon_fwd_reads_fastp", "noDedup_decon_rev_reads_fastp",
+                     "ribodeplete_noDedup_decon_fwd_reads_fastp", "ribodeplete_noDedup_decon_rev_reads_fastp",
+                     "ribo_only_fwd_reads_fastp", "ribo_only_rev_reads_fastp"],
+            allow_missing = True)
+    output:
+        touch("data/omics/metatranscriptomes/{sample}/reads/read_stats/.metaT_done")
+    localrule: True
 
 rule assemble_metaspades:
     input:
@@ -4610,7 +4637,7 @@ rule virsorter2:
     container: "docker://jiarong/virsorter:latest"
     benchmark: "benchmarks/virsorter2/{sample_type}-{project}__{sample}.txt"
     log: "logs/virsorter2/{sample_type}-{project}__{sample}.log"
-    resources: cpus=16, mem_mb = lambda wildcards, attempt: attempt * 24000, time_min=4320 # standard samples
+    resources: cpus=32, mem_mb=150000, time_min=4320 # standard samples
     priority: 3
     shell:
         """
@@ -4636,7 +4663,7 @@ rule genomad:
     conda: "config/conda_yaml/genomad.yaml"
     benchmark: "benchmarks/genomad/{sample_type}-{project}__{sample}.txt"
     log: "logs/genomad/{sample_type}-{project}__{sample}.log"
-    resources: cpus=16, mem_mb = lambda wildcards, attempt: attempt * 32000, time_min=4320 # standard samples
+    resources: cpus=32, mem_mb=150000, time_min=4320 # standard samples
     priority: 3
     shell:
         """
