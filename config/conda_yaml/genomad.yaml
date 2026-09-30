@@ -3,4 +3,6 @@ channels:
   - bioconda
   - defaults
 dependencies:
-  - genomad=1.11.2
+  - genomad=1.12.0
+  # numba (genomad dep) does not yet support numpy 2.5; genomad itself only pins numpy>=1.21
+  - numpy<2.5
