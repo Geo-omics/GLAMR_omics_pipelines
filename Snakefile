@@ -936,8 +936,7 @@ rule ribodetector:
             -e rrna \
             --chunk_size 256 \
             -r {output.ribo_fwd} {output.ribo_rev} \
-            -o {output.ribo_removed_fwd} {output.ribo_removed_rev} 2>&1 | tee -a {log}
-
+            -o {output.ribo_removed_fwd} {output.ribo_removed_rev}
             # --chunk_size 256 \
         """
 
