@@ -1510,7 +1510,7 @@ rule bakta_proteins:
     conda: "config/conda_yaml/bakta.yaml"
     log: "logs/bakta_proteins/{sample_type}-{sample}.txt"
     benchmark: "benchmarks/bakta_proteins/{sample_type}-{sample}.tsv"
-    resources: cpus=8, mem_mb=32000, time_min=5000, 
+    resources: cpus=8, mem_mb=64000, time_min=5000, 
     shell:
         """
         bakta_proteins --db {params.db} \
