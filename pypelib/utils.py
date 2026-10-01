@@ -5,7 +5,7 @@ import gzip
 from inspect import signature
 import json
 from itertools import batched
-from os import PathLike
+import os
 from pathlib import Path
 import random
 import re
@@ -13,6 +13,7 @@ import shutil
 from subprocess import CalledProcessError, PIPE, run
 import sys
 import tarfile
+from time import sleep
 from tempfile import TemporaryDirectory
 import traceback
 
@@ -116,7 +117,7 @@ def conda_run(prefix, cmd, *args, **kwargs):
         return run(cmd, *args, **kwargs)
     else:
         conda_run_cmd = ['conda', 'run', '--prefix', str(prefix)]
-        if isinstance(cmd, PathLike):
+        if isinstance(cmd, os.PathLike):
             cmd = conda_run_cmd.append(cmd)
         else:
             # a list
@@ -454,3 +455,85 @@ def shell_prep(path):
     base = path.parent.parent
     txt = re.sub(r'^( ?(export) ?BASE=).*$', rf'\1{base}', txt, flags=re.MULTILINE)
     return txt
+
+
+@contextmanager
+def try_getting_lock(path, timeout=120, poll_interval=5, fail_hard=False):
+    """
+    A context manager to run a with block exclusively, if possible.
+
+    The target is a boolean indicating success of acquiring the lock.
+
+    path:
+        Path to the lock file.  File may exist and will be created if not.
+        Write permission is needed.  The file will not be cleaned up.
+    timeout int:
+        How long to wait (in seconds) for a taken lock to be freed up.  If this
+        is None, then there is no such time limit.
+    poll_interval int:
+        How frequently (in seconds) to retry, to see if a taken lock is
+        available.  If this is None then a taken lock results in an immediate
+        failure.  If timeout is also None, this behaviour (equivalent to a
+        timeout of zero) takes precedence.
+    fail_hard bool:
+        If True then a RuntimeError will be raised if the lock can not be
+        acquired.
+
+
+    """
+    if timeout is not None and timeout < 0:
+        raise ValueError('timeout must be non-negative (or None)')
+    if poll_interval is not None and poll_interval < 1:
+        raise ValueError('polling interval must be larger than 1 (or None)')
+
+    if timeout == 0:
+        poll_interval = None  # to trigger the fast fail path below
+
+    try:
+        with os.fdopen(os.open(path, os.O_CREAT | os.O_RDWR), 'r+') as lockfile:
+            while True:
+                try:
+                    os.lockf(lockfile.fileno(), os.F_TLOCK, 0)
+                except BlockingIOError:
+                    if poll_interval is None:
+                        # fast fail requested
+                        raise
+
+                    if timeout is not None and timeout <= 0:
+                        # normal timeout
+                        break
+
+                    sleep(poll_interval)
+                    if timeout is not None:
+                        timeout -= poll_interval
+                else:
+                    try:
+                        lockfile.seek(0)
+                        lockfile.write(
+                            f'host={os.uname().nodename}\n'
+                            f'uid={os.getuid()}\n'
+                            f'pid={os.getpid()}\n'
+                        )
+                        lockfile.flush()
+                    except OSError as e:
+                        print(f'[WARNING] failed writing info to lockfile: {e}')
+
+                    yield True
+
+                    return
+
+    except BlockingIOError as e:
+        # fast fail wa requested, so no message
+        if fail_hard:
+            raise RuntimeError(f'could not acquire lock at {path}') from e
+    except OSError as e:
+        if fail_hard:
+            raise RuntimeError(f'could not acquire lock at {path}') from e
+        print(f'[ERROR] failed locking {path}: {e.__class__.__name__}: {e}')
+    else:
+        # timed out
+        if fail_hard:
+            raise RuntimeError(f'timed out trying to acquire lock at {path}')
+        print(f'[WARNING] timed out trying to lock {path}')
+
+    yield False

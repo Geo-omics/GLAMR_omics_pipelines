@@ -18,7 +18,7 @@ import sys
 
 import yaml
 
-from .utils import PipelineVersion
+from .utils import PipelineVersion, try_getting_lock
 
 
 BASE_SNAKEMAKE_CONDA_ENV = 'config/conda_yaml/snakemake.yaml'
@@ -237,6 +237,7 @@ def update_omics_checkout(
     data_root,
     version_before_mtime=False,
     checkout_file=None,
+    extra_suffix=None,
     dry_run=False,
 ):
     """
@@ -356,6 +357,9 @@ def update_omics_checkout(
         if checkout_file is None or dry_run:
             ofile = sys.stdout
         else:
+            if extra_suffix is not None:
+                checkout_file = \
+                    checkout_file.with_name(checkout_file.name + extra_suffix)
             ofile = estack.enter_context(open(checkout_file, 'a'))
             print(f'Writing {checkout_file} ...', end='', flush=True)
 
@@ -650,7 +654,7 @@ class VersionInfoFile:
             ofile.write('\n')
 
 
-def update_versions_file(workflow, dry_run=False):
+def update_versions_file(workflow, dry_run=False, extra_suffix=None):
     """
     Make new or update an existing version file
 
@@ -736,6 +740,8 @@ def update_versions_file(workflow, dry_run=False):
         )
 
     if vinfo.changed:
+        if extra_suffix is not None:
+            versions_file = versions_file.with_name(versions_file.name + extra_suffix)
         print(f'Writing {versions_file} ...', end='', flush=True)
         if dry_run or not versions_file:
             print()
@@ -761,7 +767,7 @@ def load_benchmark(path):
         ) from e
 
 
-def collect_benchmarks(workflow, dry_run=False):
+def collect_benchmarks(workflow, dry_run=False, extra_suffix=None):
     """
     Collect benchmarks from jobs into single table with added job data
 
@@ -770,12 +776,14 @@ def collect_benchmarks(workflow, dry_run=False):
     Additionally collects a few other bits of information.  For remotely
     executed jobs, "time_min" and "mem_mb" should be declared in resources in
     config/profile files and/or the rules.  Slurm is assumed to be used for
-    remote execution.  If the Snakefile does not declare banchmark for the job
+    remote execution.  If the Snakefile does not declare benchmark for the job
     and the job is ran via slurm, then a few of the benchmark bits are
     recovered from slurm accounting information.
     """
     if outpath := workflow.config.get('collect_benchmarks'):
         outpath = Path(outpath)
+        if extra_suffix is not None:
+            outpath = outpath.with_name(outpath.name + extra_suffix)
     elif dry_run:
         outpath = None
     else:
@@ -921,7 +929,7 @@ def collect_benchmarks(workflow, dry_run=False):
             ofile = None
         else:
             # New benchmark results are appended to existing file!
-            ofile = estack.enter_context(outpath.open('a'))
+            ofile = estack.enter_context(open(outpath, 'a'))
 
         columns = base_cols + bm_cols
         if dry_run or ofile.tell() == 0:
@@ -937,7 +945,7 @@ def collect_benchmarks(workflow, dry_run=False):
 
 
 def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
-                    dry_run=False):
+                    dry_run=False, got_lock=False):
     """
     Post-snakemake run processing
 
@@ -964,81 +972,103 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
         Set to True for testing if no suitable checkout file is available.
         This will print output to stdout.
     """
-    if workflow:
-        post_prod_files = list(filter(None, [
-            workflow.config.get(i)
-            for i in (
-                'checkout_file',
-                'versions_file',
-                'collect_benchmarks',
-            )
-        ]))
-        if post_prod_files:
-            try:
-                make_backup(post_prod_files)
-            except OSError as e:
-                print(
-                    f'[ERROR] failed making backups for post-production files: '
-                    f'{e.__class__.__name__}: {e}'
-                )
+    try:
+        # Assuming multiple workflow instances sharing meta data.  Usually
+        # persistence.path = '.snakemake' but its 'locks' subdirectory gets
+        # deleted when the first instance finishes.  No automatic cleanup for
+        # our lock files!
+        lockdir = Path(workflow.persistence.path) / 'locks2'
+    except (AttributeError, TypeError):
+        # workflow is None
+        lockdir = Path.cwd()
+    else:
+        lockdir.mkdir(parents=True, exist_ok=True)
+
+    lockfile = lockdir / f'{__name__}.lock'
+
+    with try_getting_lock(lockfile, timeout=120) as got_lock:
+        if got_lock:
+            extra_suffix = None
         else:
-            # nothing to do
-            return
-
-    if workflow:
-        checkout_file = workflow.config.get('checkout_file')
-
-    if checkout_file or dry_run:
-        log = Path(log)
-        if data_root is None:
-            # assuming normal OMICS pipeline conventions
-            data_root = log.parent.parent.parent / 'data'
-        else:
-            data_root = Path(data_root)
-
-        if not data_root.is_dir():
-            raise FileNotFoundError(f'no such directory: {data_root}')
+            extra_suffix = f'.{os.uname().nodename}.{os.getpid()}.LOCKFAIL'
 
         if workflow:
-            outputs = [
-                (outfile, job.name)
-                for job in workflow.dag.finished_jobs
-                for outfile in job.output
-                if not outfile.is_temp  # snakemake deletes those
-            ]
-            pl_version = PipelineVersion.current()
-        else:
-            # replay from log file
-            outputs, pl_version = get_info_from_log(log)
-
-        if outputs and checkout_file or dry_run:
-            stats = update_omics_checkout(
-                outputs,
-                data_root,
-                version_before_mtime=pl_version is None,
-                checkout_file=checkout_file,
-                dry_run=dry_run,
-            )
-            if any(stats.values()):
-                print(f' <-- same={stats["no_change"]} new={stats["new"]} '
-                      f'ignored={stats["ignored"]} missing={stats["missing"]}',
-                      end='', flush=True)
-                if stats['errors']:
-                    print(f' *** errors={stats["errors"]} ***')
-                else:
-                    print()
+            post_prod_files = list(filter(None, [
+                workflow.config.get(i)
+                for i in (
+                    'checkout_file',
+                    'versions_file',
+                    'collect_benchmarks',
+                )
+            ]))
+            if post_prod_files:
+                try:
+                    make_backup(post_prod_files)
+                except OSError as e:
+                    print(
+                        f'[ERROR] failed making backups for post-production files: '
+                        f'{e.__class__.__name__}: {e}'
+                    )
             else:
-                print(' (no output files)')
-        else:
-            print('[post production] no output files per log')
+                # nothing to do
+                return
 
-    if workflow and workflow.config.get('versions_file'):
-        update_versions_file(workflow, dry_run=dry_run)
+        if workflow:
+            if checkout_file := workflow.config.get('checkout_file'):
+                checkout_file = Path(checkout_file)
 
-    if workflow:
-        collect_benchmarks(workflow, dry_run=dry_run)
-        with open(log, 'a') as logfile:
-            print('[OK] post-production done', file=logfile)
+        if checkout_file or dry_run:
+            log = Path(log)
+            if data_root is None:
+                # assuming normal OMICS pipeline conventions
+                data_root = log.parent.parent.parent / 'data'
+            else:
+                data_root = Path(data_root)
+
+            if not data_root.is_dir():
+                raise FileNotFoundError(f'no such directory: {data_root}')
+
+            if workflow:
+                outputs = [
+                    (outfile, job.name)
+                    for job in workflow.dag.finished_jobs
+                    for outfile in job.output
+                    if not outfile.is_temp  # snakemake deletes those
+                ]
+                pl_version = PipelineVersion.current()
+            else:
+                # replay from log file
+                outputs, pl_version = get_info_from_log(log)
+
+            if outputs and checkout_file or dry_run:
+                stats = update_omics_checkout(
+                    outputs,
+                    data_root,
+                    version_before_mtime=pl_version is None,
+                    checkout_file=checkout_file,
+                    extra_suffix=extra_suffix,
+                    dry_run=dry_run,
+                )
+                if any(stats.values()):
+                    print(f' <-- same={stats["no_change"]} new={stats["new"]} '
+                          f'ignored={stats["ignored"]} missing={stats["missing"]}',
+                          end='', flush=True)
+                    if stats['errors']:
+                        print(f' *** errors={stats["errors"]} ***')
+                    else:
+                        print()
+                else:
+                    print(' (no output files)')
+            else:
+                print('[post production] no output files per log')
+
+        if workflow and workflow.config.get('versions_file'):
+            update_versions_file(workflow, dry_run=dry_run, extra_suffix=extra_suffix)
+
+        if workflow:
+            collect_benchmarks(workflow, dry_run=dry_run, extra_suffix=extra_suffix)
+            with open(log, 'a') as logfile:
+                print('[OK] post-production done', file=logfile)
 
 
 def replay(log_dir, data_root=None, checkout_file=None, dry_run=False,
