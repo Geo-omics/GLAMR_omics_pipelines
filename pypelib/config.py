@@ -1,16 +1,10 @@
 from os import environ
 
-from snakemake.common.configfile import load_configfile
-
-
-DEFAULTS_CONFIG_FILE = 'default.conf'
-
 
 def finish_config_setup(config, base_dir):
     """
     Finish setting up the config
 
-      * apply default configuration
       * load an NCBI API key from file, if needed
       * pass some settings to the environment
 
@@ -19,13 +13,6 @@ def finish_config_setup(config, base_dir):
     base_dir:
         pathlib.Path to the directory containing the defaults config file.
     """
-    for key, value in load_configfile(base_dir / DEFAULTS_CONFIG_FILE).items():
-        if value is None:
-            # treat None as unset
-            continue
-        if key not in config:
-            config[key] = value
-
     if config.get('ncbi_api_key_file'):
         if config.get('ncbi_api_key'):
             print('[WARNING] Ignoring ncbi_api_key_file setting since '
