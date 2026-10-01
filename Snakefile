@@ -31,8 +31,8 @@ base_dir = Path(workflow.basedir)
 """ The OMICS pipelines base directory """
 
 
-configfile: base_dir / "default.conf"
-configfile: "config.yaml" if Path("config.yaml").is_file() else None
+if Path("config.yaml").is_file():
+    configfile: "config.yaml"
 finish_config_setup(config, base_dir)
 
 
