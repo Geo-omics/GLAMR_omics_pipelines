@@ -5712,3 +5712,90 @@ rule eukcc:
 
         rm -rf {output.out_dir}/refine_workdir
         """
+
+rule test_fail:
+    output:
+        file = 'data/test_fail.{num}.out'
+    wildcard_constraints:
+        num=r'\d+'
+    params: foo='batty'
+    threads: 3
+    resources: time_min=1
+    benchmark: "benchmarks/test_fail/{num}.txt"
+    run:
+        print(f'BORK {workflow.rerun_triggers=}')
+        print(f'BORK {workflow.config.get("rerun-triggers", "<NOTSET>")=}')
+        print(f'BORK {workflow.dag_settings.rerun_triggers=}')
+        print(f'BORK {workflow.cores=}')
+        print(f'BORK {threads=}')
+        print(f'BORK {workflow.config.get("foo", "<NOTSET>")=}')
+        print(f'BORK {workflow.config.get("post-production", "<NOTSET>")=}')
+        if wildcards.num:
+            num = int(wildcards.num)
+
+        time.sleep(num)
+        if num % 2 == 1:
+            raise RuntimeError(f'failing on odds on {output} with {num}')
+        else:
+            with open(output.file, 'w') as ofile:
+                ofile.write(f'Hello World!\n{num} {params.foo}\n')
+
+
+rule test_update:
+    output:
+        one = update('test_update.out'),
+        two = 'test_update2.out'
+    shell:
+        """
+        # comment
+        if [[ -e {output.one} ]]; then
+            wc -l < {output.one} >> {output.one}
+        else
+            echo "hello" > {output.one}
+        fi
+        touch {output.two}
+        """
+
+rule test_a:
+    output: 'test_a.out'
+    shell: """ sleep 30; echo AAA > {output}; """
+
+rule test_b:
+    output: 'test_b.out'
+    shell: """ sleep 30; echo BBB > {output}; """
+
+checkpoint T2:
+    output: 'mystery.{foo}.out'
+    run:
+        from random import randrange
+        with open(output[0], 'w') as ofile:
+            ofile.write(f'{randrange(10)}\n')
+            time.sleep(30)
+
+def get_test_final_input(wc):
+    with checkpoints.T2.get(foo=wc.foo).output[0].open() as ifile:
+        content = ifile.readline().strip()
+        if (num := int(content)) < 5:
+            return [f'test_a.out']
+        else:
+            return [f'test_b.out']
+
+rule test_final:
+    input: get_test_final_input
+    output: 'test_final.{foo}.out'
+    shell: """ cat -n {input} > {output}; """
+
+
+def gettestinfiles(wc):
+    return {'a':'testa', 'b':['testb', 'testbb']}
+
+rule test_ab:
+    input:
+        unpack(gettestinfiles),
+        foo='testc',
+    output: 'testab.out'
+    run:
+        print(f'BORK {input=}')
+        print(f'BORK {input.foo=}')
+        print(f'BORK {dict(input.items())=}')
+        raise RuntimeError('BORK TOTAAL')
