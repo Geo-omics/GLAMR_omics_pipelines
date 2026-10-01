@@ -26,13 +26,19 @@ from pypelib.utils import (load_stats, logme, PipelineVersion, save_error_file,
     shell_prep,
 )
 
+DEFAULT_USER_CONFIG_FILE = Path('config.yaml')
+
 
 base_dir = Path(workflow.basedir)
 """ The OMICS pipelines base directory """
 
 
-if Path("config.yaml").is_file():
-    configfile: "config.yaml"
+if DEFAULT_USER_CONFIG_FILE.is_file():
+    if workflow.configfiles:
+        print(f'Not loading user config ({DEFAULT_USER_CONFIG_FILE}) file '
+              f'because config file was given via --configfile')
+    else:
+        configfile: DEFAULT_USER_CONFIG_FILE
 finish_config_setup(config, base_dir)
 
 
