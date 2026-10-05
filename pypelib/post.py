@@ -353,18 +353,22 @@ def update_omics_checkout(
 
         new_data.append((mtime, version, rule, relpath))
 
-    with ExitStack() as estack:
-        if checkout_file is None or dry_run:
-            ofile = sys.stdout
-        else:
-            if extra_suffix is not None:
-                checkout_file = \
-                    checkout_file.with_name(checkout_file.name + extra_suffix)
-            ofile = estack.enter_context(open(checkout_file, 'a'))
-            print(f'Writing {checkout_file} ...', end='', flush=True)
+    if new_data:
+        with ExitStack() as estack:
+            if checkout_file is None or dry_run:
+                ofile = sys.stdout
+            else:
+                if extra_suffix is not None:
+                    checkout_file = \
+                        checkout_file.with_name(checkout_file.name + extra_suffix)
 
-        for mtime, version, rule, relpath in new_data:
-            ofile.write(f'{mtime}\t{version or ""}\t{rule or ""}\t{relpath}\n')
+                ofile = estack.enter_context(open(checkout_file, 'a'))
+                print(f'[post] Writing {checkout_file} ...', end='', flush=True)
+
+            for mtime, version, rule, relpath in new_data:
+                ofile.write(f'{mtime}\t{version or ""}\t{rule or ""}\t{relpath}\n')
+    else:
+        print('[post] No "new" output files', end=' ')
 
     if checkout_file and not dry_run:
         print('[OK] ', end=' ')  # expect stats printed after this
@@ -742,16 +746,16 @@ def update_versions_file(workflow, dry_run=False, extra_suffix=None):
     if vinfo.changed:
         if extra_suffix is not None:
             versions_file = versions_file.with_name(versions_file.name + extra_suffix)
-        print(f'Writing {versions_file} ...', end='', flush=True)
+        print(f'[post] Writing {versions_file} ...', end='', flush=True)
         if dry_run or not versions_file:
             print()
             print(vinfo.dump())
-            print('[dry run OK]')
+            print('[post] dry run [OK]')
         else:
             vinfo.save(versions_file)
             print('[OK]')
     else:
-        print('[OK] no changes to versions file')
+        print('[post] Versions file does not need update [OK]')
 
 
 def load_benchmark(path):
@@ -924,12 +928,17 @@ def collect_benchmarks(workflow, dry_run=False, extra_suffix=None):
                                 job_data['max_vms'] = f'{max_vms / 1024 / 1024:.2f}'
                 rows[slurm_jobs[slurm_job]].update(job_data)
 
+    if not rows and not dry_run:
+        print('[post] No benchmarks performed [OK]')
+        return
+
     with ExitStack() as estack:
         if dry_run:
             ofile = None
         else:
             # New benchmark results are appended to existing file!
             ofile = estack.enter_context(open(outpath, 'a'))
+            print(f'[post] Writing benchmarks to {outpath} ...', end='', flush=True)
 
         columns = base_cols + bm_cols
         if dry_run or ofile.tell() == 0:
@@ -940,8 +949,7 @@ def collect_benchmarks(workflow, dry_run=False, extra_suffix=None):
             row = [str(row[k]) for k in columns]
             print(*row, sep='\t', file=ofile)
 
-    if not dry_run:
-        print(f'[OK] {len(rows)} benchmarks written to {outpath}')
+        print(f'({len(rows)} rows) [OK]')
 
 
 def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
@@ -958,8 +966,8 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
     log:
         str or PathLike to snakemake log file.
     workflow:
-        Workflow instance passed from Snakefile.  If this is None, then some
-        functionality will be disabled.
+        Workflow instance passed from Snakefile.  If this is None then log
+        replay is performed and some functionality will be disabled.
     data_root:
         The data directory.  If None, this will be derived from path to log
         file.
@@ -970,8 +978,31 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
         and has the checkout_file config setting set.
     dry_run [bool]:
         Set to True for testing if no suitable checkout file is available.
-        This will print output to stdout.
+        This will print output files to stdout.
     """
+    if workflow:
+        post_prod_files = list(filter(None, [
+            workflow.config.get(i)
+            for i in (
+                'checkout_file',
+                'versions_file',
+                'collect_benchmarks',
+            )
+        ]))
+        if not post_prod_files:
+            # didn't get configured to run this
+            return
+
+        outputs = [
+            (outfile, job.name)
+            for job in workflow.dag.finished_jobs
+            for outfile in job.output
+            if not outfile.is_temp  # snakemake deletes those
+        ]
+        if not outputs:
+            print('[post] No output files, nothing to be done.')
+            return
+
     try:
         # Assuming multiple workflow instances sharing meta data.  Usually
         # persistence.path = '.snakemake' but its 'locks' subdirectory gets
@@ -990,30 +1021,19 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
         if got_lock:
             extra_suffix = None
         else:
+            print(f'[post] [WARNING] Failed to acquire the lock: {lockfile}')
             extra_suffix = f'.{os.uname().nodename}.{os.getpid()}.LOCKFAIL'
 
         if workflow:
-            post_prod_files = list(filter(None, [
-                workflow.config.get(i)
-                for i in (
-                    'checkout_file',
-                    'versions_file',
-                    'collect_benchmarks',
+            try:
+                make_backup(post_prod_files)
+            except OSError as e:
+                print(
+                    f'[ERROR] failed making backups for post-production files: '
+                    f'{e.__class__.__name__}: {e}'
                 )
-            ]))
-            if post_prod_files:
-                try:
-                    make_backup(post_prod_files)
-                except OSError as e:
-                    print(
-                        f'[ERROR] failed making backups for post-production files: '
-                        f'{e.__class__.__name__}: {e}'
-                    )
-            else:
-                # nothing to do
-                return
 
-        if workflow:
+        if workflow and checkout_file is None:
             if checkout_file := workflow.config.get('checkout_file'):
                 checkout_file = Path(checkout_file)
 
@@ -1029,16 +1049,12 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
                 raise FileNotFoundError(f'no such directory: {data_root}')
 
             if workflow:
-                outputs = [
-                    (outfile, job.name)
-                    for job in workflow.dag.finished_jobs
-                    for outfile in job.output
-                    if not outfile.is_temp  # snakemake deletes those
-                ]
                 pl_version = PipelineVersion.current()
             else:
                 # replay from log file
                 outputs, pl_version = get_info_from_log(log)
+                if not outputs:
+                    print('[post] no output files per log')
 
             if outputs and checkout_file or dry_run:
                 stats = update_omics_checkout(
@@ -1050,17 +1066,15 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
                     dry_run=dry_run,
                 )
                 if any(stats.values()):
-                    print(f' <-- same={stats["no_change"]} new={stats["new"]} '
-                          f'ignored={stats["ignored"]} missing={stats["missing"]}',
+                    print(f'(stats: same={stats["no_change"]} new={stats["new"]}'
+                          f' ignored={stats["ignored"]} missing={stats["missing"]}',
                           end='', flush=True)
                     if stats['errors']:
-                        print(f' *** errors={stats["errors"]} ***')
+                        print(f' *** errors={stats["errors"]} ***)')
                     else:
-                        print()
+                        print(')')
                 else:
                     print(' (no output files)')
-            else:
-                print('[post production] no output files per log')
 
         if workflow and workflow.config.get('versions_file'):
             update_versions_file(workflow, dry_run=dry_run, extra_suffix=extra_suffix)
