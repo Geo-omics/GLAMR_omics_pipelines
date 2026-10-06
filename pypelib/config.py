@@ -3,7 +3,7 @@ from os import environ
 from snakemake.common.configfile import load_configfile
 
 
-DEFAULTS_CONFIG_FILE = 'default.conf'
+DEFAULTS_CONFIG_FILE = 'config/default.conf'
 
 
 def finish_config_setup(config, base_dir):
