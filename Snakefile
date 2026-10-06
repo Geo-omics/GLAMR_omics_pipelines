@@ -456,8 +456,9 @@ rule clumpify:
     benchmark:
         "benchmarks/clumpify/{sample_type}-{sample}.txt"
     log: "logs/clumpify/{sample_type}-{sample}_initial.log"
-    resources: cpus=16, time_min=2880, mem_mb = lambda wildcards, attempt: attempt * 175000 # standard
-    #resources: partition = "largemem", cpus=16, time_min=2880, mem_mb = 500000 # coassembly or large samples
+    threads: 16
+    resources: time_min=2880, mem_mb = lambda wildcards, attempt: attempt * 175000  # standard
+    # resources: partition = "largemem", time_min=2880, mem_mb = 500000  # coassembly or large samples
     shell:
         """
         set -o pipefail # should be set by snakemake already
@@ -473,7 +474,7 @@ rule clumpify:
             out2={params.clumped_rev_reads} \
             groups=auto \
             zl=9 pigz \
-            t={resources.cpus} \
+            t={threads} \
             2>&1 | tee {log}
 
         rm {input.fwd_reads} {input.rev_reads}
@@ -493,12 +494,12 @@ rule deduplicate:
         dedup_reads_rev = "data/omics/{sample_type}/{sample}/reads/dedup_reads_rev.fastq.gz"
     conda: "config/conda_yaml/main.yaml"
     log: "logs/dedup/{sample_type}-{sample}_dedup.log"
-    # resources: cpus=36, time_min=2880,
+    threads: 24
+    # resources: time_min=2880,
     #     mem_mb = lambda wildcards, attempt: attempt * 170000,
     #     #partition = "largemem"
     resources: 
         partition = "largemem",
-        cpus = 24, 
         time_min = 7200,
         mem_mb = 1000000
     shell:
@@ -511,7 +512,7 @@ rule deduplicate:
             in1={input.fwd_reads} \
             in2={input.rev_reads} \
             out={output.dedup_interleaved} \
-            t={resources.cpus} \
+            t={threads} \
             2>&1 | tee {log}
 
         # Dedup only outputs interleaved files, this just converts back to paired
@@ -529,12 +530,12 @@ rule deduplicate:
 #         reads_rev = "data/omics/{sample_type}/{sample}/reads/raw_rev_reads.fastq.gz"
 #     conda: "config/conda_yaml/main.yaml"
 #     log: "logs/de_interleave/{sample_type}-{sample}.log"
-#     # resources: cpus=36, time_min=2880,
+#     threads: 24
+#     # resources: time_min=2880,
 #     #     mem_mb = lambda wildcards, attempt: attempt * 170000,
 #     #     #partition = "largemem"
 #     resources: 
 #         #partition = "largemem",
-#         cpus = 24, 
 #         time_min = 7200,
 #         mem_mb = 120000
 #     shell:
@@ -569,7 +570,8 @@ rule fastp:
     benchmark:
         "benchmarks/fastp/{sample_type}-{sample}.txt"
     log: "logs/fastp/{sample_type}-{sample}_fastp.log"
-    resources: cpus=16, mem_mb = lambda wildcards, attempt: attempt * 60000,
+    threads: 16
+    resources: mem_mb = lambda wildcards, attempt: attempt * 60000,
         time_min=2880
     shell:
         """
@@ -578,7 +580,7 @@ rule fastp:
             -i {input.fwd_reads} -I {input.rev_reads} \
             -o {output.tmp_fwd} -O {output.tmp_rev} \
             -h {output.html_dedup} -j {output.json_dedup} \
-            --thread {resources.cpus} \
+            --thread {threads} \
             -z 3 \
             --dedup \
             --dup_calc_accuracy 6 2>&1 | tee {log}
@@ -588,7 +590,7 @@ rule fastp:
             -i {output.tmp_fwd} -I {output.tmp_rev} \
             -o {output.fwd_reads} -O {output.rev_reads} \
             -h {output.html} -j {output.json} \
-            --thread {resources.cpus} \
+            --thread {threads} \
             -z 9 \
             --length_required 50 \
             --n_base_limit 5 \
@@ -616,7 +618,8 @@ rule fastp_no_dedup:
     benchmark:
         "benchmarks/fastp_no_dedup/{sample_type}-{sample}.txt"
     log: "logs/fastp_no_dedup/{sample_type}-{sample}_fastp.log"
-    resources: cpus=16, mem_mb = lambda wildcards, attempt: attempt * 60000,
+    threads: 16
+    resources: mem_mb = lambda wildcards, attempt: attempt * 60000,
         time_min=2880
     shell:
         """
@@ -625,7 +628,7 @@ rule fastp_no_dedup:
             -i {input.fwd_reads} -I {input.rev_reads} \
             -o {output.fwd_reads} -O {output.rev_reads} \
             -h {output.html} -j {output.json} \
-            --thread {resources.cpus} \
+            --thread {threads} \
             -z 9 \
             --length_required 50 \
             --n_base_limit 5 \
@@ -649,12 +652,13 @@ rule fastqc_fastp:
         touch("data/omics/{sample_type}/{sample}/reads/fastqc_fastp/.done")
     conda:
           "config/conda_yaml/fastqc.yaml"
-    resources: time_min = 7200, cpus = 1, mem_mb = 60000
+    threads: 1
+    resources: time_min = 7200, mem_mb = 60000
     shell:
         """
         mkdir -p data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_fastp
-        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_fastp -t {resources.cpus} {input.fwd_reads}
-        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_fastp -t {resources.cpus} {input.rev_reads}
+        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_fastp -t {threads} {input.fwd_reads}
+        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_fastp -t {threads} {input.rev_reads}
         """
 
 rule fastqc_raw:
@@ -668,12 +672,13 @@ rule fastqc_raw:
         touch("data/omics/{sample_type}/{sample}/reads/fastqc_raw/.done")
     conda:
           "config/conda_yaml/fastqc.yaml"
-    resources: time_min = 7200, cpus = 1, mem_mb = 60000
+    threads: 1
+    resources: time_min = 7200, mem_mb = 60000
     shell:
         """
         mkdir -p data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_raw
-        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_raw -t {resources.cpus} {input.fwd_reads}
-        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_raw -t {resources.cpus} {input.rev_reads}
+        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_raw -t {threads} {input.fwd_reads}
+        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_raw -t {threads} {input.rev_reads}
         """
 
 rule multiqc:
@@ -688,7 +693,7 @@ rule multiqc:
     benchmark:
         "benchmarks/multiqc/{sample_type}-{sample}.txt"
     log: "logs/multiqc/{sample_type}-{sample}.log"
-    resources: cpus=1, mem_mb = 20000, time_min=2880
+    resources: mem_mb = 20000, time_min=2880
     shell:
         """
         multiqc --interactive -d data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_* -o {output.multiqc_dir}
@@ -698,7 +703,6 @@ rule get_contaminants:
     output: 
         human_genome = "data/reference/contaminants/human.fa.gz",
         spike_ins = "data/reference/contaminants/spike-ins.fa"
-    resources: cpus = 1
     shell:
         """
         wget -O {output.human_genome} http://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_38/GRCh38.p13.genome.fa.gz
@@ -717,13 +721,14 @@ rule bb_index:
     log: "logs/bbmap_index.log"
     benchmark:
         "benchmarks/bb_index.txt"
-    resources: cpus = 8, mem_mb = 50000
+    threads: 8
+    resources: mem_mb = 50000
     shell:
         """        
         bbmap.sh \
             ref={input.human_genome} \
             path={params.bbmap_index_path} \
-            t={resources.cpus} \
+            t={threads} \
             2>&1 | tee {log}
         """
 
@@ -750,7 +755,8 @@ rule remove_contaminants:
     log: "logs/read_qc/{sample_type}-{sample}.log"
     benchmark:
         "benchmarks/remove_contaminants/{sample_type}-{sample}.txt"
-    resources: cpus = 24, mem_mb = lambda wildcards, attempt: attempt * 120000, time_min = 2880
+    threads: 24
+    resources: mem_mb = lambda wildcards, attempt: attempt * 120000, time_min = 2880
     shell:
         """       
         bbmap_mem=$(echo "scale=-1; ({resources.mem_mb}*0.8)/1" | bc)
@@ -763,7 +769,7 @@ rule remove_contaminants:
             in2={input.dedup_reads_rev} \
             out1={output.trimmed_fwd} \
             out2={output.trimmed_rev} \
-            t={resources.cpus} \
+            t={threads} \
             minlen=50 \
             qtrim=rl \
             trimq=15 \
@@ -792,7 +798,7 @@ rule remove_contaminants:
             in2={output.phix_rm_rev} \
             outu1={output.decon_fwd} \
             outu2={output.decon_rev} \
-            t={resources.cpus} fast=t \
+            t={threads} fast=t \
             ref={input.human_genome} \
             path={params.bbmap_index_path} \
             -Xmx{resources.mem_mb}m  \
@@ -841,7 +847,8 @@ rule remove_contaminants_fastp:
     log: "logs/remove_contaminants_fastp/{sample_type}-{sample}.log"
     benchmark:
         "benchmarks/remove_contaminants_fastp/{sample_type}-{sample}.txt"
-    resources: cpus = 24, mem_mb = lambda wildcards, attempt: attempt * 120000, time_min = 2880
+    threads: 24
+    resources: mem_mb = lambda wildcards, attempt: attempt * 120000, time_min = 2880
     shell:
         """
         bbmap_mem=$(echo "scale=-1; ({resources.mem_mb}*0.8)/1" | bc)
@@ -854,7 +861,7 @@ rule remove_contaminants_fastp:
             in2={input.dedup_reads_rev} \
             outu1={output.phix_rm_fwd} \
             outu2={output.phix_rm_rev} \
-            t={resources.cpus} k=31 hdist=1 \
+            t={threads} k=31 hdist=1 \
             ref={input.spike_ins} \
             path={params.bbmap_index_path} \
             2>&1 | tee -a {log}
@@ -866,7 +873,7 @@ rule remove_contaminants_fastp:
             in2={output.phix_rm_rev} \
             outu1={output.decon_fwd} \
             outu2={output.decon_rev} \
-            t={resources.cpus} fast=t \
+            t={threads} fast=t \
             ref={input.human_genome} \
             path={params.bbmap_index_path} \
             2>&1 | tee -a {log}
@@ -890,7 +897,8 @@ rule remove_contaminants_fastp_no_dedup:
     log: "logs/remove_contaminants_fastp_no_dedup/{sample_type}-{sample}.log"
     benchmark:
         "benchmarks/remove_contaminants_fastp_no_dedup/{sample_type}-{sample}.txt"
-    resources: cpus = 24, mem_mb = lambda wildcards, attempt: attempt * 120000, time_min = 2880
+    threads: 24
+    resources: mem_mb = lambda wildcards, attempt: attempt * 120000, time_min = 2880
     shell:
         """
         bbmap_mem=$(echo "scale=-1; ({resources.mem_mb}*0.8)/1" | bc)
@@ -903,7 +911,7 @@ rule remove_contaminants_fastp_no_dedup:
             in2={input.dedup_reads_rev} \
             outu1={output.phix_rm_fwd} \
             outu2={output.phix_rm_rev} \
-            t={resources.cpus} k=31 hdist=1 \
+            t={threads} k=31 hdist=1 \
             ref={input.spike_ins} \
             path={params.bbmap_index_path} \
             2>&1 | tee -a {log}
@@ -915,7 +923,7 @@ rule remove_contaminants_fastp_no_dedup:
             in2={output.phix_rm_rev} \
             outu1={output.decon_fwd} \
             outu2={output.decon_rev} \
-            t={resources.cpus} fast=t \
+            t={threads} fast=t \
             ref={input.human_genome} \
             path={params.bbmap_index_path} \
             2>&1 | tee -a {log}
@@ -935,12 +943,13 @@ rule ribodetector:
     log: "logs/ribodetector/{sample_type}-{sample}.log"
     benchmark:
         "benchmarks/ribodetector/{sample_type}-{sample}.txt"
-    resources: cpus = 24, mem_mb = 120000, time_min = 2880, gpu_mem_gb = 22, partition = "gpu", gpu = 1
+    threads: 24
+    resources: mem_mb = 120000, time_min = 2880, gpu_mem_gb = 22, partition = "gpu", gpu = 1
     priority: 2
     shell:
         """
         ribodetector \
-            -t {resources.cpus} \
+            -t {threads} \
             -i {input.decon_fwd} {input.decon_rev} \
             -m {resources.gpu_mem_gb} \
             -l 150 \
@@ -961,7 +970,7 @@ rule make_read_blastdb:
     conda: "config/conda_yaml/seqtk.yaml"
     log:
         "logs/makeblastdb_reads/{sample}.log"
-    resources: cpus=1, mem_mb=5000, time_min=120
+    resources: mem_mb=5000, time_min=120
     shell:
         """
         seqtk seq -a {input.decon_fwd} > {output.concat_reads}
@@ -980,14 +989,15 @@ rule blast_nuc:
         blast_res = "data/omics/metagenomes/{sample}/BLAST/{query}__{sample}.blastn"
     log:
         "logs/BLAST/{query}__{sample}.log"
-    resources: cpus=32, mem_mb=5000, time_min=120
+    threads: 32
+    resources: mem_mb=5000, time_min=120
     shell:
         """
         blastn -query {input.gene} \
             -db {input.blast_db} \
             -out {output.blast_res} \
             -outfmt '6 std qcovs stitle qseq sseq' \
-            -num_threads {resources.cpus}
+            -num_threads {threads}
 
         # removed additional output columns: -outfmt '6 std qcovs stitle' \
         # also removed database size standardization: -dbsize 1000000 \
@@ -1001,12 +1011,13 @@ rule fastqc_decontam:
         touch("data/omics/{sample_type}/{sample}/reads/fastqc_decontam/.done")
     conda:
           "config/conda_yaml/fastqc.yaml"
-    resources: cpus = 1, mem_mb = 16000, time_min = 2880
+    threads: 1
+    resources: mem_mb = 16000, time_min = 2880
     shell:
         """
         mkdir -p data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_decontam
-        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_decontam -t {resources.cpus} {input.fwd_reads}
-        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_decontam -t {resources.cpus} {input.rev_reads}
+        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_decontam -t {threads} {input.fwd_reads}
+        fastqc -o data/omics/{wildcards.sample_type}/{wildcards.sample}/reads/fastqc_decontam -t {threads} {input.rev_reads}
         """
 
 rule bbnorm:
@@ -1021,7 +1032,8 @@ rule bbnorm:
     log: "logs/bbnorm/{sample_type}/{sample}.log"
     benchmark:
         "benchmarks/bbnorm/{sample_type}/{sample}.txt"
-    resources: cpus = 36, mem_mb = lambda wildcards, attempt: attempt * 80000, time_min = 2880
+    threads: 36
+    resources: mem_mb = lambda wildcards, attempt: attempt * 80000, time_min = 2880
     shell:
         """        
         bbmap_mem=$(echo "scale=-1; ({resources.mem_mb}*0.8)/1" | bc)
@@ -1034,7 +1046,7 @@ rule bbnorm:
             in2={input.rev_reads} \
             out1={output.fwd_norm} \
             out2={output.rev_norm} \
-            t={resources.cpus} \
+            t={threads} \
             {params} \
             1>>{log} 2>&1
         """
@@ -1053,16 +1065,16 @@ rule count_reads_fastp:
         #bbnorm_reads_rev = rules.bbnorm.output.rev_norm,
     output:
         "data/omics/{sample_type}/{sample}/reads/{sample}_read_count_fastp.tsv"
-    resources: cpus=4
+    threads: 4
     shell:
         """
         printf "read_state\tfwd_read_count\trev_read_count\n" > {output} &&
-        printf "raw_reads\t$(($(pigz -dc -p {resources.cpus} {input.raw_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.raw_reads_rev} | wc -l) / 4 ))\n" >> {output} &&
-        printf "deduped_reads\t$(($(pigz -dc -p {resources.cpus} {input.deduped_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.deduped_reads_rev} | wc -l) / 4 ))\n" >> {output} &&
-        printf "filt_and_trimmed_reads\t$(($(pigz -dc -p {resources.cpus} {input.qual_filt_and_trimmed_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.qual_filt_and_trimmed_rev} | wc -l) / 4 ))\n" >> {output} &&
-        printf "decon_reads\t$(($(pigz -dc -p {resources.cpus} {input.decon_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.decon_reads_rev} | wc -l) / 4 ))\n" >> {output}
+        printf "raw_reads\t$(($(pigz -dc -p {threads} {input.raw_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {threads} {input.raw_reads_rev} | wc -l) / 4 ))\n" >> {output} &&
+        printf "deduped_reads\t$(($(pigz -dc -p {threads} {input.deduped_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {threads} {input.deduped_reads_rev} | wc -l) / 4 ))\n" >> {output} &&
+        printf "filt_and_trimmed_reads\t$(($(pigz -dc -p {threads} {input.qual_filt_and_trimmed_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {threads} {input.qual_filt_and_trimmed_rev} | wc -l) / 4 ))\n" >> {output} &&
+        printf "decon_reads\t$(($(pigz -dc -p {threads} {input.decon_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {threads} {input.decon_reads_rev} | wc -l) / 4 ))\n" >> {output}
         """
-        #printf "bbnorm_reads\t$(($(pigz -dc -p {resources.cpus} {input.bbnorm_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {resources.cpus} {input.bbnorm_reads_rev} | wc -l) / 4 ))\n" >> {output}
+        #printf "bbnorm_reads\t$(($(pigz -dc -p {threads} {input.bbnorm_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {threads} {input.bbnorm_reads_rev} | wc -l) / 4 ))\n" >> {output}
 
 
 rule assemble_metaspades:
@@ -1075,16 +1087,17 @@ rule assemble_metaspades:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/assembly/metaspades/{sample_type}_{sample}.log"
     benchmark: "benchmarks/metaspades/{sample_type}_{sample}.txt"
-    #resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
-    #resources: cpus = 24, time_min=20000, mem_mb = 500000, partition = "largemem"
-    resources: cpus = 36, time_min=20000, mem_mb = 170000
-    #resources: cpus = 64, time_min=20000, mem_mb = 500000
+    threads: 36  # 24/24/36/64
+    #resources: time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
+    #resources: time_min=20000, mem_mb = 500000, partition = "largemem"
+    resources: time_min=20000, mem_mb = 170000
+    #resources: time_min=20000, mem_mb = 500000
     shell:
         """
-        export OMP_NUM_THREADS={resources.cpus}
+        export OMP_NUM_THREADS={threads}
 
         metaspades.py \
-            -t {resources.cpus} \
+            -t {threads} \
             --memory $(({resources.mem_mb}/1024)) \
             -1 {input.fwd_reads} \
             -2 {input.rev_reads} \
@@ -1101,16 +1114,17 @@ rule assemble_metaspades_noNORM:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/assembly/metaspades_noNORM/{sample_type}_{sample}.log"
     benchmark: "benchmarks/metaspades_noNORM/{sample_type}_{sample}.txt"
-    #resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
-    #resources: cpus = 24, time_min=20000, mem_mb = 500000, partition = "largemem"
-    #resources: cpus = 36, time_min=20000, mem_mb = 170000
-    resources: cpus = 64, time_min=20000, mem_mb = 500000
+    threads: 64  # 24/24/36/64
+    #resources: time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
+    #resources: time_min=20000, mem_mb = 500000, partition = "largemem"
+    #resources: time_min=20000, mem_mb = 170000
+    resources: time_min=20000, mem_mb = 500000
     shell:
         """
-        export OMP_NUM_THREADS={resources.cpus}
+        export OMP_NUM_THREADS={threads}
 
         metaspades.py \
-            -t {resources.cpus} \
+            -t {threads} \
             --memory $(({resources.mem_mb}/1024)) \
             -1 {input.fwd_reads} \
             -2 {input.rev_reads} \
@@ -1127,16 +1141,17 @@ rule assemble_biosyntheticSPAdes:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/assembly/biosyntheticSPAdes/{sample_type}_{sample}.log"
     benchmark: "benchmarks/biosyntheticSPAdes/{sample_type}_{sample}.txt"
-    #resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
-    resources: cpus = 24, time_min=20000, mem_mb = 500000, partition = "largemem"
-    #resources: cpus = 36, time_min=20000, mem_mb = 170000
-    #resources: cpus = 64, time_min=20000, mem_mb = 500000
+    threads: 24  # 24/24/36/64
+    #resources: time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
+    resources: time_min=20000, mem_mb = 500000, partition = "largemem"
+    #resources: time_min=20000, mem_mb = 170000
+    #resources: time_min=20000, mem_mb = 500000
     shell:
         """
-        export OMP_NUM_THREADS={resources.cpus}
+        export OMP_NUM_THREADS={threads}
 
         metaspades.py \
-            -t {resources.cpus} \
+            -t {threads} \
             --bio \
             --memory $(({resources.mem_mb}/1024)) \
             -1 {input.fwd_reads} \
@@ -1155,16 +1170,17 @@ rule assemble_RNAspades:
     conda: "config/conda_yaml/spades4.yaml"
     log: "logs/assembly/RNAspades/{sample_type}_{sample}.log"
     benchmark: "benchmarks/RNAspades/{sample_type}_{sample}.txt"
-    #resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
-    #resources: cpus = 24, time_min=20000, mem_mb = 500000, partition = "largemem"
-    #resources: cpus = 36, time_min=20000, mem_mb = 170000
-    resources: cpus = 64, time_min=20000, mem_mb = 500000
+    threads: 64  # 24/24/36/64
+    #resources: time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
+    #resources: time_min=20000, mem_mb = 500000, partition = "largemem"
+    #resources: time_min=20000, mem_mb = 170000
+    resources: time_min=20000, mem_mb = 500000
     shell:
         """
-        export OMP_NUM_THREADS={resources.cpus}
+        export OMP_NUM_THREADS={threads}
 
         rnaspades.py \
-            -t {resources.cpus} \
+            -t {threads} \
             --memory $(({resources.mem_mb}/1024)) \
             -1 {input.fwd_reads} \
             -2 {input.rev_reads} \
@@ -1181,16 +1197,17 @@ rule assemble_biosyntheticSPAdes_100x:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/assembly/metaspades_100x/{sample_type}_{sample}.log"
     benchmark: "benchmarks/metaspades_100x/{sample_type}_{sample}.txt"
-    #resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
-    resources: cpus = 24, time_min=20000, mem_mb = 500000, partition = "largemem"
-    #resources: cpus = 36, time_min=20000, mem_mb = 170000
-    #resources: cpus = 64, time_min=20000, mem_mb = 500000
+    threads: 64  # 24/24/36/64
+    #resources: time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 120000
+    resources: time_min=20000, mem_mb = 500000, partition = "largemem"
+    #resources: time_min=20000, mem_mb = 170000
+    #resources: time_min=20000, mem_mb = 500000
     shell:
         """
-        export OMP_NUM_THREADS={resources.cpus}
+        export OMP_NUM_THREADS={threads}
 
         metaspades.py \
-            -t {resources.cpus} \
+            -t {threads} \
             --bio \
             --memory $(({resources.mem_mb}/1024)) \
             -1 {input.fwd_reads} \
@@ -1208,7 +1225,7 @@ rule rename_metaspades_contigs:
         contig_info = "data/projects/{project}/{sample_type}/{sample}/assembly/metaspades_noNORM/contigs_info.tsv"
         #done = touch("data/omics/{sample_type}/{sample}/assembly/megahit/.contigs_renamed")
     container: "docker://eandersk/r_microbiome"
-    resources: cpus = 1, time_min=200, mem_mb = 50000
+    resources: time_min=200, mem_mb = 50000
     shell:
         """
         pwd
@@ -1230,7 +1247,7 @@ rule rename_RNAspades_contigs:
         contig_info = "data/omics/{sample_type}/{sample}/assembly/RNAspades/contigs_info.tsv"
         #done = touch("data/omics/{sample_type}/{sample}/assembly/megahit/.contigs_renamed")
     container: "docker://eandersk/r_microbiome"
-    resources: cpus = 1, time_min=200, mem_mb = 50000
+    resources: time_min=200, mem_mb = 50000
     shell:
         """
         pwd
@@ -1255,11 +1272,12 @@ rule assemble_megahit:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/assembly/megahit/{sample_type}_{sample}.log"
     benchmark: "benchmarks/megahit/{sample_type}_{sample}.txt"
-    resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 100000
+    threads: 24
+    resources: time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 100000
     shell:
         """
         rm -r {params.assembly_dir} # for re-running, megahit doesn't overwrite automatically
-        megahit -t {resources.cpus} --presets meta-sensitive -m 0.5 -1 {input.fwd_reads} -2 {input.rev_reads} -o {params.assembly_dir} > {log}
+        megahit -t {threads} --presets meta-sensitive -m 0.5 -1 {input.fwd_reads} -2 {input.rev_reads} -o {params.assembly_dir} > {log}
         """
 
 rule assemble_megahit_noNORM:
@@ -1274,11 +1292,12 @@ rule assemble_megahit_noNORM:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/assembly/megahit_noNORM/{sample_type}_{sample}.log"
     benchmark: "benchmarks/megahit_noNORM/{sample_type}_{sample}.txt"
-    resources: cpus = 24, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 150000
+    threads: 24
+    resources: time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 150000
     shell:
         """
         rm -r {params.assembly_dir} # for re-running, megahit doesn't overwrite automatically
-        megahit -t {resources.cpus} --presets meta-sensitive -m 0.5 -1 {input.fwd_reads} -2 {input.rev_reads} -o {params.assembly_dir} > {log}
+        megahit -t {threads} --presets meta-sensitive -m 0.5 -1 {input.fwd_reads} -2 {input.rev_reads} -o {params.assembly_dir} > {log}
         """
 
 
@@ -1293,7 +1312,7 @@ rule rename_contigs:
         contig_info = "data/omics/{sample_type}/{sample}/assembly/megahit_noNORM/contigs_info.tsv"
         #done = touch("data/omics/{sample_type}/{sample}/assembly/megahit/.contigs_renamed")
     container: "docker://eandersk/r_microbiome"
-    resources: cpus = 1, time_min=200, mem_mb = 50000
+    resources: time_min=200, mem_mb = 50000
     shell:
         """
         pwd
@@ -1318,7 +1337,7 @@ rule quast_megahit:
     conda:
         "config/conda_yaml/quast.yaml"
     resources:
-        cpus = 1, mem_mb = 20000
+        mem_mb = 20000
     shell:
         """
         quast.py {input.megahit_contigs} -o {params.out_dir} 2>&1 | tee {log}
@@ -1331,7 +1350,7 @@ rule quast_megahit:
 #     output:
 #         concat_fwd = temp("tmp/fwd_concat.fastq"),
 #         concat_rev = temp("tmp/rev_concat.fastq")
-#     resources: cpus = 1, time_min=20000, mem_mb = 4000
+#     resources: time_min=20000, mem_mb = 4000
 #     shell:
 #         """
 #         zcat {input.fwd_reads} > {output.concat_fwd}
@@ -1350,13 +1369,14 @@ rule COassemble_megahit:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/assembly/megahit/{sample_type}_{sample}_coassembly.log"
     benchmark: "benchmarks/megahit/{sample_type}_{sample}_coassembly.txt"
-    #resources: cpus = 92, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 150000
-    resources: cpus = 32, time_min=20000, mem_mb = lambda wildcards, attempt: attempt * 1200000, partition = "largemem"
+    threads: 32  # 92/32
+    #resources: time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 150000
+    resources: time_min=20000, mem_mb = lambda wildcards, attempt: attempt * 1200000, partition = "largemem"
     shell:
         """
         rm -rf {params.assembly_dir} # for re-running, megahit doesn't overwrite automatically
         megahit \
-            -t {resources.cpus} \
+            -t {threads} \
             --min-count 2 \
             --k-list 31,37,47,57,67,77,87,99 \
             -m $(({resources.mem_mb} * 1000000)) \
@@ -1382,16 +1402,17 @@ rule merge_assemblies:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/assembly/merge/{sample}_merge_assemblies.log"
     benchmark: "benchmarks/assembly/merge/{sample}.txt"
-    resources: cpus = 8, time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 100000
+    threads: 8
+    resources: time_min=7200, mem_mb = lambda wildcards, attempt: attempt * 100000
     shell:
         """
         cat {input.metaspades_contigs} {input.megahit_contigs} > {output.concat_contigs}
-        dedupe.sh -da -Xmx{resources.mem_mb}m -eoom in={output.concat_contigs} out={output.dedup1} tuc mid=99 minscaf=200 rnc=f ngn=f fo c pc=t fmj=t rc=t cc=t fcc=t mst=f sort=length absorbcontainment=t mo=200 numaffixmaps=3 overwrite=t t={resources.cpus} 2>&1 | tee {log}
-        dedupe.sh -da -Xmx{resources.mem_mb}m -eoom in={output.dedup1} out={output.dedup2} tuc mid=99 minscaf=200 rnc=t ngn=t fo c pc=t fmj=t rc=t cc=t fcc=t mst=f sort=length absorbcontainment=f mo=200 numaffixmaps=3 overwrite=t t={resources.cpus} 2>&1 | tee -a {log}
-        dedupe.sh -da -Xmx{resources.mem_mb}m -eoom in={output.dedup2} out={output.dedup3} tuc mid=99 minscaf=200 rnc=t ngn=f fo c pc=t fmj=t rc=t cc=t fcc=t mst=f ordered=t absorbcontainment=f mo=200 numaffixmaps=3 overwrite=t t={resources.cpus} 2>&1 | tee -a {log}
-        dedupe.sh -da -Xmx{resources.mem_mb}m -eoom in={output.dedup3} out={output.dedup4} tuc mid=99 minscaf=200 rnc=f ngn=f fo c pc=t fmj=t rc=t cc=t fcc=t mst=f ordered=t absorbcontainment=f mo=200 numaffixmaps=3 overwrite=t dot={output.dedup4_dot} t={resources.cpus} 2>&1 | tee -a {log}
+        dedupe.sh -da -Xmx{resources.mem_mb}m -eoom in={output.concat_contigs} out={output.dedup1} tuc mid=99 minscaf=200 rnc=f ngn=f fo c pc=t fmj=t rc=t cc=t fcc=t mst=f sort=length absorbcontainment=t mo=200 numaffixmaps=3 overwrite=t t={threads} 2>&1 | tee {log}
+        dedupe.sh -da -Xmx{resources.mem_mb}m -eoom in={output.dedup1} out={output.dedup2} tuc mid=99 minscaf=200 rnc=t ngn=t fo c pc=t fmj=t rc=t cc=t fcc=t mst=f sort=length absorbcontainment=f mo=200 numaffixmaps=3 overwrite=t t={threads} 2>&1 | tee -a {log}
+        dedupe.sh -da -Xmx{resources.mem_mb}m -eoom in={output.dedup2} out={output.dedup3} tuc mid=99 minscaf=200 rnc=t ngn=f fo c pc=t fmj=t rc=t cc=t fcc=t mst=f ordered=t absorbcontainment=f mo=200 numaffixmaps=3 overwrite=t t={threads} 2>&1 | tee -a {log}
+        dedupe.sh -da -Xmx{resources.mem_mb}m -eoom in={output.dedup3} out={output.dedup4} tuc mid=99 minscaf=200 rnc=f ngn=f fo c pc=t fmj=t rc=t cc=t fcc=t mst=f ordered=t absorbcontainment=f mo=200 numaffixmaps=3 overwrite=t dot={output.dedup4_dot} t={threads} 2>&1 | tee -a {log}
         perl {input.merge_contigs_script} data/omics/metagenomes/{wildcards.sample}/assembly/{wildcards.sample} 99 2>&1 | tee -a {log}
-        dedupe.sh -da -Xmx{resources.mem_mb}m -eoom in={output.dedup5} out={output.dedup6} t={resources.cpus} tuc mid=99 minscaf=200 overwrite=f 2>&1 | tee -a {log}
+        dedupe.sh -da -Xmx{resources.mem_mb}m -eoom in={output.dedup5} out={output.dedup6} t={threads} tuc mid=99 minscaf=200 overwrite=f 2>&1 | tee -a {log}
         """
 
 rule get_MEC:
@@ -1420,15 +1441,16 @@ rule correct_contigs:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/assembly/correct_contigs/{sample}_correct_contigs.log"
     benchmark: "benchmarks/assembly/correct_contigs/{sample}.txt"
-    resources: cpus = 4, mem_mb = lambda wildcards, attempt: attempt * 100000, time_min = 2880
+    threads: 4
+    resources: mem_mb = lambda wildcards, attempt: attempt * 100000, time_min = 2880
     shell:
         """ 
         use_mem=$(({resources.mem_mb} - 4000)) # bbmap uses more memory than it's told
-        mem_per_thread=$(( ({resources.mem_mb} - 2000) / {resources.cpus}))
+        mem_per_thread=$(( ({resources.mem_mb} - 2000) / {threads}))
 
         #ALIGN READS TO CONTIGS
-        bbmap.sh -da -Xmx${{use_mem}}m -eoom ref={input.assembly} path={params.assembly_dir} t={resources.cpus} ambig=random cigar=f maxindel=100 pairlen=600 idfilter=0.999 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} out={output.read_mapping} 2>&1 | tee {log}
-        samtools view -bShu {output.read_mapping} | samtools sort -m ${{mem_per_thread}}M -@ {resources.cpus} -o {output.read_mapping_sorted} 2>&1 | tee -a {log}
+        bbmap.sh -da -Xmx${{use_mem}}m -eoom ref={input.assembly} path={params.assembly_dir} t={threads} ambig=random cigar=f maxindel=100 pairlen=600 idfilter=0.999 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} out={output.read_mapping} 2>&1 | tee {log}
+        samtools view -bShu {output.read_mapping} | samtools sort -m ${{mem_per_thread}}M -@ {threads} -o {output.read_mapping_sorted} 2>&1 | tee -a {log}
         samtools index {output.read_mapping_sorted} 2>&1 | tee -a {log}
         """
 
@@ -1442,7 +1464,7 @@ rule MEC:
     conda: "config/conda_yaml/mec.yaml"
     log: "logs/assembly/MEC/{sample}.log"
     benchmark: "benchmarks/assembly/MEC/{sample}.txt"
-    resources: cpus = 1, mem_mb = lambda wildcards, attempt: attempt * 40000, time_min = 2880
+    resources: mem_mb = lambda wildcards, attempt: attempt * 40000, time_min = 2880
     shell:
         """
         python {input.mec_script} \
@@ -1463,7 +1485,7 @@ rule quast:
     conda:
         "config/conda_yaml/quast.yaml"
     resources:
-        cpus = 1, mem_mb = 20000
+        mem_mb = 20000
     shell:
         """
         quast.py {input.combined_contigs} {input.metaspades_contigs} {input.megahit_contigs} -o {output} 2>&1 | tee {log}
@@ -1479,7 +1501,7 @@ rule prodigal:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/prodigal/{sample_type}-{sample}.log"
     benchmark: "benchmarks/prodigal/{sample_type}-{sample}.txt"
-    resources: cpus = 1, mem_mb = lambda wildcards, attempt: attempt * 16000, time_min = 2880
+    resources: mem_mb = lambda wildcards, attempt: attempt * 16000, time_min = 2880
     shell:
         """
         prodigal \
@@ -1500,7 +1522,7 @@ rule prodigal_metaT:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/prodigal_metaT/{sample}.log"
     benchmark: "benchmarks/prodigal_metaT/{sample}.txt"
-    resources: cpus = 1, mem_mb = lambda wildcards, attempt: attempt * 16000, time_min = 2880
+    resources: mem_mb = lambda wildcards, attempt: attempt * 16000, time_min = 2880
     shell:
         """
         prodigal \
@@ -1521,12 +1543,13 @@ rule bakta_proteins:
     conda: "config/conda_yaml/bakta.yaml"
     log: "logs/bakta_proteins/{sample_type}-{sample}.txt"
     benchmark: "benchmarks/bakta_proteins/{sample_type}-{sample}.tsv"
-    resources: cpus=8, mem_mb=64000, time_min=5000, 
+    threads: 8
+    resources: mem_mb=64000, time_min=5000, 
     shell:
         """
         bakta_proteins --db {params.db} \
             --output {output.dir} \
-            --threads {resources.cpus} \
+            --threads {threads} \
             {input.proteins} > {log} 2>&1
         """
 
@@ -1548,12 +1571,13 @@ rule calc_gene_abundance:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/calc_gene_abundance/{sample_type}-{sample}.log"
     benchmark: "benchmarks/calc_gene_abundance/{sample_type}-{sample}.txt"
-    resources: cpus = 24, mem_mb = lambda wildcards, attempt: attempt * 64000, time_min = 2880
+    threads: 24
+    resources: mem_mb = lambda wildcards, attempt: attempt * 64000, time_min = 2880
     shell:
         """
-        bbmap.sh t={resources.cpus} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.genes}) ref={input.genes} rpkm={output.reads_vs_genes_rpkm} 2>&1 | tee -a {log}
-        bbmap.sh t={resources.cpus} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.assembly}) ref={input.assembly} rpkm={output.reads_vs_contigs_rpkm} 32bit=t outm={params.reads_vs_assembly_sam} 2>&1 | tee -a {log}
-        pigz -9 -p {resources.cpus} {params.reads_vs_assembly_sam}
+        bbmap.sh t={threads} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.genes}) ref={input.genes} rpkm={output.reads_vs_genes_rpkm} 2>&1 | tee -a {log}
+        bbmap.sh t={threads} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.assembly}) ref={input.assembly} rpkm={output.reads_vs_contigs_rpkm} 32bit=t outm={params.reads_vs_assembly_sam} 2>&1 | tee -a {log}
+        pigz -9 -p {threads} {params.reads_vs_assembly_sam}
         """
 
 rule calc_gene_abundance_metaT:
@@ -1572,12 +1596,13 @@ rule calc_gene_abundance_metaT:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/calc_gene_abundance_metaT/{sample}.log"
     benchmark: "benchmarks/calc_gene_abundance_metaT/{sample}.txt"
-    resources: cpus = 24, mem_mb = lambda wildcards, attempt: attempt * 64000, time_min = 2880
+    threads: 24
+    resources: mem_mb = lambda wildcards, attempt: attempt * 64000, time_min = 2880
     shell:
         """
-        bbmap.sh t={resources.cpus} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.genes}) ref={input.genes} rpkm={output.reads_vs_genes_rpkm} 2>&1 | tee -a {log}
-        bbmap.sh t={resources.cpus} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.assembly}) ref={input.assembly} rpkm={output.reads_vs_contigs_rpkm} 32bit=t outm={params.reads_vs_assembly_sam} 2>&1 | tee -a {log}
-        pigz -9 -p {resources.cpus} {params.reads_vs_assembly_sam}
+        bbmap.sh t={threads} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.genes}) ref={input.genes} rpkm={output.reads_vs_genes_rpkm} 2>&1 | tee -a {log}
+        bbmap.sh t={threads} ambig=random cigar=f maxindel=100 pairlen=600 minid=0.999 idtag=t printunmappedcount=t overwrite=t in1={input.fwd_reads} in2={input.rev_reads} path=$(dirname {input.assembly}) ref={input.assembly} rpkm={output.reads_vs_contigs_rpkm} 32bit=t outm={params.reads_vs_assembly_sam} 2>&1 | tee -a {log}
+        pigz -9 -p {threads} {params.reads_vs_assembly_sam}
         """
     
 ruleorder: calc_gene_abundance_metaT > calc_gene_abundance
@@ -1587,7 +1612,7 @@ ruleorder: calc_gene_abundance_metaT > calc_gene_abundance
 #         uniref100="data/reference/uniref/uniref100.fasta.gz"
 #     #conda: "config/conda_yaml/main.yaml"
 #     log: "logs/make_diamond_uniref_db/download_uniref.log"
-#     resources: cpus = 1, mem_mb=1000
+#     resources: mem_mb=1000
 #     shell:
 #         """
 #         #cd data/reference/uniref
@@ -1605,10 +1630,11 @@ rule make_diamond_uniref_db:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/make_diamond_uniref_db/make_diamond_uniref_db.log"
     benchmark: "benchmarks/make_diamond_uniref_db/make_diamond_uniref_db.txt"
-    resources: cpus = 32, mem_mb=150000, time_min = 2880
+    threads: 32
+    resources: mem_mb=150000, time_min = 2880
     shell:
         """
-        diamond makedb --threads {resources.cpus} --in {input.uniref100} -d data/reference/uniref/uniref100 2>&1 | tee {log}
+        diamond makedb --threads {threads} --in {input.uniref100} -d data/reference/uniref/uniref100 2>&1 | tee {log}
         """
 
 rule align_to_uniref:
@@ -1622,13 +1648,14 @@ rule align_to_uniref:
     conda: "config/conda_yaml/main.yaml"
     log: "logs/align_to_uniref/{sample_type}-{sample}_align_to_uniref.log"
     benchmark: "benchmarks/align_to_uniref/{sample_type}-{sample}_align_to_uniref.txt"
-    resources: cpus = 32, time_min = 2880, mem_mb = lambda wildcards, attempt: attempt * 100000
+    threads: 32
+    resources: time_min = 2880, mem_mb = lambda wildcards, attempt: attempt * 100000
     shell:
         """
         diamond blastx \
             -d {input.diamond_db} \
             -q {input.genes} \
-            --threads {resources.cpus} \
+            --threads {threads} \
             -o {output.gene_uniref_alignment} \
             {params} 2>&1 | tee {log}
         """
@@ -1648,7 +1675,8 @@ rule align_to_uniref_mmseqs2:
     conda:  "config/conda_yaml/mmseqs.yaml"
     log: "logs/align_to_uniref_mmseqs2/{sample_type}-{sample}_align_to_uniref.log"
     benchmark: "benchmarks/align_to_uniref_mmseqs2/{sample_type}-{sample}_align_to_uniref.txt"
-    resources: cpus = 32, time_min = 2880, mem_mb = lambda wildcards, attempt: attempt * 100000
+    threads: 32
+    resources: time_min = 2880, mem_mb = lambda wildcards, attempt: attempt * 100000
     shell:
         """
         mmseqs easy-search \
@@ -1658,7 +1686,7 @@ rule align_to_uniref_mmseqs2:
             {params.sensitivity} \
             {params.filter} \
             {params.format} \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --split-memory-limit 100G \
             2>&1 | tee {log}
         """
@@ -1675,8 +1703,9 @@ rule contig_abund:
     conda: "config/conda_yaml/coverm.yaml"
     log: "logs/contig_abund/{sample}-{sample_type}.log"
     benchmark: "benchmarks/contig_abund/{sample}-{sample_type}.txt"
-    resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
-    #resources: cpus=24, mem_mb=1000000, time_min=2880, partition = "largemem" # coassembly
+    threads: 24
+    resources: mem_mb=120000, time_min=2880  # standard assemblies
+    # resources: mem_mb=1000000, time_min=2880, partition = "largemem"  # coassembly
     shell:
         """
         export TMPDIR={params.tmpdir}
@@ -1692,7 +1721,7 @@ rule contig_abund:
         coverm contig \
             -c $fwd_reads $rev_reads \
             -r {input.contigs} \
-            -t {resources.cpus} \
+            -t {threads} \
             -m mean trimmed_mean covered_bases variance length count reads_per_base rpkm tpm \
             --output-format sparse \
             --output-file {output.coverage_full} 2>&1 | tee {log}
@@ -1712,8 +1741,9 @@ rule contig_abund_metaT:
     conda: "config/conda_yaml/coverm.yaml"
     log: "logs/contig_abund_metaT/{sample}.log"
     benchmark: "benchmarks/contig_abund_metaT/{sample}.txt"
-    resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
-    #resources: cpus=24, mem_mb=1000000, time_min=2880, partition = "largemem" # coassembly
+    threads: 24
+    resources: mem_mb=120000, time_min=2880  # standard assemblies
+    # resources: mem_mb=1000000, time_min=2880, partition = "largemem"  # coassembly
     shell:
         """
         export TMPDIR={params.tmpdir}
@@ -1729,7 +1759,7 @@ rule contig_abund_metaT:
         coverm contig \
             -c $fwd_reads $rev_reads \
             -r {input.contigs} \
-            -t {resources.cpus} \
+            -t {threads} \
             -m mean trimmed_mean covered_bases variance length count reads_per_base rpkm tpm \
             --output-format sparse \
             --output-file {output.coverage_full} 2>&1 | tee {log}
@@ -1745,7 +1775,7 @@ rule kraken_inspect:
     output: 
         inspect_file = "data/reference/kraken_databases/{database}/inspect.txt"
     conda: "config/conda_yaml/kraken.yaml"
-    resources: cpus=1, mem_mb=250000, time_min=5440, mem_gb = 250
+    resources: mem_mb=250000, time_min=5440, mem_gb = 250
     shell:
         """
         kraken2-inspect --db {input.db} > {output.inspect_file}
@@ -1758,7 +1788,7 @@ rule add_lineage_to_inspect_gtdb:
     output: 
         inspect_w_lineage = "data/reference/kraken_databases/gtdb_r202/inspect_w_lineage.txt"
     conda: "config/conda_yaml/taxonkit.yaml"
-    resources: cpus=1, mem_mb=250000, time_min=5440, mem_gb = 250
+    resources: mem_mb=250000, time_min=5440, mem_gb = 250
     shell:
         """
         taxonkit lineage \
@@ -1776,7 +1806,7 @@ rule add_lineage_to_inspect_refseq:
         inspect_w_lineage_unformatted = temp("data/reference/kraken_databases/refseq/unformatted_inspect_w_lineage.txt"),
         inspect_w_lineage = "data/reference/kraken_databases/refseq/inspect_w_lineage.txt"
     conda: "config/conda_yaml/taxonkit.yaml"
-    resources: cpus=1, mem_mb=250000, time_min=5440, mem_gb = 250
+    resources: mem_mb=250000, time_min=5440, mem_gb = 250
     shell:
         """
         taxonkit lineage \
@@ -1800,7 +1830,7 @@ rule kraken_database_tax_merge:
         refseq_tax_info = rules.add_lineage_to_inspect_refseq.output.inspect_w_lineage
     output:
         combined_tax_info = "data/reference/kraken_tax_info_merged.tsv"
-    resources: cpus=1, mem_mb=4000, time_min=60
+    resources: mem_mb=4000, time_min=60
     container: "docker://eandersk/r_microbiome"
     shell:
         """
@@ -1834,11 +1864,12 @@ rule kraken2_gtdb_w_uniq:
     conda: "config/conda_yaml/kraken.yaml"
     log: "logs/kraken2_gtdb_w_uniq/{sample_type}-{sample}.log"
     benchmark: "benchmarks/kraken2_gtdb_w_uniq/{sample_type}-{sample}.txt"
-    resources: cpus=16, mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
+    threads: 16
+    resources: mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
     shell:
         """
         kraken2 \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --report-minimizer-data \
             --report {output.report} \
             --output {output.out} \
@@ -1879,11 +1910,12 @@ rule kraken2_refseq_w_uniq: ##Run kraken2
     conda: "config/conda_yaml/kraken.yaml"
     log: "logs/kraken2_refseq_w_uniq/{sample_type}-{sample}.log"
     benchmark: "benchmarks/kraken2_refseq_w_uniq/{sample_type}-{sample}.txt"
-    resources: cpus=16, mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
+    threads: 16
+    resources: mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
     shell:
         """
         kraken2 \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --report-minimizer-data \
             --report {output.report} \
             --output {output.out} \
@@ -1908,7 +1940,7 @@ rule kraken2_refseq_w_uniq: ##Run kraken2
 #     output:
 #         counts = "data/sample_data/bracken_counts.tsv",
 #         rel_abund = "data/sample_data/bracken_rel_abund.tsv"
-#     resources: cpus=1, mem_mb=5000, time_min=60
+#     resources: mem_mb=5000, time_min=60
 #     container: "docker://eandersk/r_microbiome"
 #     shell:
 #         """
@@ -1928,7 +1960,7 @@ rule kraken2_load_gtdb_DB:
         db = temp(directory("/dev/shm/gtdb_r202")),
         #loaded = service("/tmp/gtdb_copied")
         #temp(directory("/dev/shm/gtdb_r202"))
-    resources: cpus=1, mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
+    resources: mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
     shell:
         """
         mkdir {output.db}
@@ -1959,11 +1991,12 @@ rule kraken2_gtdb_w_uniq_fastp:
         out = temp("data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_out.txt"),
     conda: "config/conda_yaml/kraken.yaml"
     benchmark: "benchmarks/kraken2_gtdb_w_uniq_fastp/{sample_type}-{sample}.txt"
-    resources: cpus=16, mem_mb=25000, time_min=1440, mem_gb = 250, partition = "largemem"
+    threads: 16
+    resources: mem_mb=25000, time_min=1440, mem_gb = 250, partition = "largemem"
     shell:
         """
         kraken2 \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --memory-mapping \
             --report-minimizer-data \
             --report {output.report} \
@@ -1994,7 +2027,7 @@ rule kraken2_load_refseq_DB:
         db = temp(directory("/dev/shm/refseq")),
         #loaded = service("/tmp/refseq_copied")
         #temp(directory("/dev/shm/refseq"))
-    resources: cpus=1, mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
+    resources: mem_mb=250000, time_min=1440, mem_gb = 250, partition = "largemem"
     shell:
         """
         mkdir {output.db}
@@ -2021,12 +2054,13 @@ rule kraken2_refseq_w_uniq_fastp: ##Run kraken2
         uniq_minimizer_threshold = 150
     benchmark: "benchmarks/kraken2_refseq_w_uniq_fastp/{sample_type}-{sample}.txt"
     conda: "config/conda_yaml/kraken.yaml"
-    resources: cpus=16, mem_mb=25000, time_min=1440, mem_gb = 250, partition = "largemem"
+    threads: 16
+    resources: mem_mb=25000, time_min=1440, mem_gb = 250, partition = "largemem"
     priority: 2
     shell:
         """
         kraken2 \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --memory-mapping \
             --report-minimizer-data \
             --report {output.report} \
@@ -2050,7 +2084,7 @@ rule bracken_metacodeR:
             bracken_gtdb = "data/omics/{sample_type}/{sample}/kraken_fastp/gtdb_{sample}_bracken.txt",
             tax_ref = "data/reference/kraken_tax_info_merged.tsv"
         output: "data/omics/{sample_type}/{sample}/kraken_fastp/{sample}_braken_metacodeR.pdf"
-        resources: cpus=1, mem_mb=8000, time_min=60
+        resources: mem_mb=8000, time_min=60
         container: "docker://eandersk/r_microbiome"
         priority: 3
         shell:
@@ -2067,7 +2101,7 @@ rule contig_abund_metacodeR:
         input:
             contig_abund = "data/omics/{sample_type}/{sample}/{sample}_lca_abund_summarized.tsv"
         output: "data/omics/{sample_type}/{sample}/{sample}_lca_abund_metacoder.pdf"
-        resources: cpus=1, mem_mb=8000, time_min=60
+        resources: mem_mb=8000, time_min=60
         container: "docker://eandersk/r_microbiome"
         priority: 3
         shell:
@@ -2101,11 +2135,12 @@ rule reads_unirefLCA_mmseqs:
         tmp_rev_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__rev.fastq.gz"
     benchmark: "benchmarks/reads_unirefLCA_mmseqs/{sample_type}-{sample}.txt"
     log: "logs/reads_unirefLCA_mmseqs/{sample_type}-{sample}.log"
+    threads: 52
     resources:
-        #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
-        #mem_mb = 160000, cpus=48, time_min=20000
-        #cpus=32, mem_mb=170000, time_min=19440 # standard for great lakes
-        cpus=52, mem_mb=700000, time_min=19440 #geomicro
+        #mem_mb = 1450000, time_min=20000, partition = "largemem"
+        #mem_mb = 160000, time_min=20000
+        #mem_mb=170000, time_min=19440  # standard for great lakes
+        mem_mb=700000, time_min=19440  # geomicro
     shell:
         """
         export TMPDIR={params.tmp_dir}
@@ -2137,7 +2172,7 @@ rule reads_unirefLCA_mmseqs:
             --orf-filter-s 3.5 \
             -s 4 \
             --tax-lineage 1 \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --split-memory-limit $((({resources.mem_mb} * 8/10) / 1024))G \
             2>&1 | tee -a {log}
 
@@ -2162,7 +2197,7 @@ rule add_lineage_to_unirefLCAtax:
         inspect_w_lineage = "data/omics/{sample_type}/{sample}/{sample}_report_w_full_lineage",
         inspect_w_7_lev_lineage = "data/omics/{sample_type}/{sample}/{sample}_report_w_standardized_lineage"
     conda: "config/conda_yaml/taxonkit.yaml"
-    resources: cpus=1, mem_mb=10000, time_min=5440, mem_gb = 10
+    resources: mem_mb=10000, time_min=5440, mem_gb = 10
     log: "logs/unirefLCA_mmseqs_add_lineage/{sample_type}-{sample}.log"
     shell:
         """
@@ -2203,10 +2238,11 @@ rule contig_unirefLCA_mmseqs:
         tmp_rev_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__rev.fastq.gz"
     benchmark: "benchmarks/contig_unirefLCA_mmseqs/{sample_type}-{sample}.txt"
     log: "logs/contig_unirefLCA_mmseqs/{sample_type}-{sample}.log"
+    threads: 32
     resources:
-        #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
-        mem_mb = 160000, cpus=32, time_min=7200
-        #mem_mb = 160000, cpus=32, time_min=500
+        #mem_mb = 1450000, time_min=20000, partition = "largemem"
+        mem_mb = 160000, time_min=7200
+        #mem_mb = 160000, time_min=500
     shell:
         """
         export TMPDIR={params.tmp_dir}
@@ -2235,7 +2271,7 @@ rule contig_unirefLCA_mmseqs:
             --orf-filter-s 3.5 \
             -s 4 \
             --tax-lineage 1 \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --split-memory-limit $(echo "scale=0;({resources.mem_mb}*0.8)/1024" | bc)G \
             --db-load-mode 1 \
             2>&1 | tee -a {log}
@@ -2267,10 +2303,11 @@ rule contig_gtdbLCA_mmseqs:
         tmp_rev_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__rev.fastq.gz"
     benchmark: "benchmarks/contig_gtdbLCA_mmseqs/{sample_type}-{sample}-{assembly}.txt"
     log: "logs/contig_gtdbLCA_mmseqs/{sample_type}-{sample}-{assembly}.log"
+    threads: 32
     resources:
-        #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
-        mem_mb = 160000, cpus=32, time_min=7200
-        #mem_mb = 160000, cpus=32, time_min=500
+        #mem_mb = 1450000, time_min=20000, partition = "largemem"
+        mem_mb = 160000, time_min=7200
+        #mem_mb = 160000, time_min=500
     shell:
         """
         export TMPDIR={params.tmp_dir}
@@ -2299,7 +2336,7 @@ rule contig_gtdbLCA_mmseqs:
             --orf-filter-s 3.5 \
             -s 4 \
             --tax-lineage 1 \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --split-memory-limit $(echo "scale=0;({resources.mem_mb}*0.8)/1024" | bc)G \
             --db-load-mode 1 \
             2>&1 | tee -a {log}
@@ -2330,7 +2367,8 @@ rule tax_abund_summary_from_contigs:
         taxdump = "data/reference/ncbi_tax"
     benchmark: "benchmarks/tax_abund_summary_from_contigs/{sample_type}-{sample}.txt"
     container: "docker://eandersk/r_microbiome"
-    resources: cpus = 24, time_min=1000, mem_mb = 150000
+    threads: 24
+    resources: time_min=1000, mem_mb = 150000
     priority: 2
     shell:
         """
@@ -2340,7 +2378,7 @@ rule tax_abund_summary_from_contigs:
             -l {input.lca} \
             -r {input.contig_abund} \
             -o {output.abund_summary} \
-            -c {resources.cpus} \
+            -c {threads} \
             -t {params.taxonkit_path} \
             -d {params.taxdump}
         """
@@ -2366,13 +2404,14 @@ rule kofam_scan:
     #shadow: "shallow"
     benchmark: "benchmarks/kofamscan/{sample_type}-{sample}.txt"
     log: "logs/kofamscan/{sample_type}-{sample}.log"
-    resources: cpus=24, time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 100000
+    threads: 24
+    resources: time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 100000
     shell:
         """
         exec_annotation \
             -o {output.ko_annot} \
             --format=detail-tsv \
-            --cpu={resources.cpus}  \
+            --cpu={threads}  \
             --profile {input.profile} \
             --tmp-dir=/tmp/{wildcards.sample}_kofamscan \
             --ko-list {input.ko_list} {input.genes} | tee {log}
@@ -2393,7 +2432,7 @@ rule annotate_contigs:
     params:
         annotation_dir = directory("data/omics/{sample_type}/{sample}/annotation")
     conda: "config/conda_yaml/main.yaml"
-    resources: cpus=1, time_min = 2880, mem_mb = lambda wildcards, attempt: attempt * 170000
+    resources: time_min = 2880, mem_mb = lambda wildcards, attempt: attempt * 170000
     log: "logs/annotate_contigs/{sample_type}-{sample}.log"
     benchmark: "benchmarks/annotate_contigs/{sample_type}-{sample}.log"
     shell:
@@ -2419,7 +2458,7 @@ rule download_gtdbtk_refs:
     output:
         dir = directory("/geomicro/data2/kiledal/references/gtdbtk"),
         tar = "/geomicro/data2/kiledal/references/gtdbtk/gtdbtk_data.tar.gz"
-    resources: cpus=1, mem_mb=8000, time_min=2880, mem_gb = 8
+    resources: mem_mb=8000, time_min=2880, mem_gb = 8
     shell:
         """
         mkdir -p {output.dir}
@@ -2439,13 +2478,14 @@ rule drep_mag_coverage:
     params:
         drep_bins = "data/projects/{project}/{sample_type}/{sample}/bins/drep/dereplicated_genomes"
     conda: "config/conda_yaml/coverm.yaml"
-    resources: cpus=24, mem_mb=150000, time_min=2880
+    threads: 24
+    resources: mem_mb=150000, time_min=2880
     shell:
         """
         [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/
         
         coverm genome \
-            -t {resources.cpus} \
+            -t {threads} \
             -m relative_abundance mean trimmed_mean covered_bases variance length count reads_per_base rpkm tpm \
             --output-format sparse \
             --min-covered-fraction 0 \
@@ -2474,8 +2514,9 @@ rule humann:
     conda: "config/conda_yaml/humann.yaml"
     log: "logs/humann/{sample_type}-{sample}.log"
     benchmark: "benchmarks/humann/{sample_type}-{sample}.txt"
-    #resources: cpus=36, mem_mb=175000, time_min=20160
-    resources: cpus=36, time_min=20160, partition = "largemem", mem_mb = lambda wildcards, attempt: attempt * 250000
+    threads: 36
+    #resources: mem_mb=175000, time_min=20160
+    resources: time_min=20160, partition = "largemem", mem_mb = lambda wildcards, attempt: attempt * 250000
     shell:
         """
         #Humann needs non-compressed fastqs, and forward and reverse files should be concatenated
@@ -2487,7 +2528,7 @@ rule humann:
         #proj_dir=$PWD
 
         humann3 --bypass-nucleotide-index \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --memory-use {params.mem_use} \
             --nucleotide-database {input.NUC_fol} \
             --protein-database {input.PROT_fol} \
@@ -2516,9 +2557,10 @@ rule humann_fastp:
     conda: "config/conda_yaml/humann.yaml"
     log: "logs/humann/{sample_type}-{sample}_fastp.log"
     benchmark: "benchmarks/humann/{sample_type}-{sample}_fastp.txt"
-    #resources: cpus=36, mem_mb=175000, time_min=20160
-    #resources: cpus=36, time_min=20160, partition = "largemem", mem_mb = lambda wildcards, attempt: attempt * 250000
-    resources: cpus=36, time_min=4320, mem_mb = 175000
+    threads: 36
+    #resources: mem_mb=175000, time_min=20160
+    #resources: time_min=20160, partition = "largemem", mem_mb = lambda wildcards, attempt: attempt * 250000
+    resources: time_min=4320, mem_mb = 175000
     shell:
         """
         #Humann needs non-compressed fastqs, and forward and reverse files should be concatenated
@@ -2530,7 +2572,7 @@ rule humann_fastp:
         #proj_dir=$PWD
 
         humann3 --bypass-nucleotide-index \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --memory-use {params.mem_use} \
             --nucleotide-database {input.NUC_fol} \
             --protein-database {input.PROT_fol} \
@@ -2552,7 +2594,7 @@ rule sourmash_sketch:
     conda: "config/conda_yaml/sourmash.yaml"
     log: "logs/sourmash_sketch/{sample_type}-{sample}.log"
     benchmark: "benchmarks/sourmash_sketch/{sample_type}-{sample}.txt"
-    resources: cpus=1, time_min=4320, mem_mb = 20000
+    resources: time_min=4320, mem_mb = 20000
     shell:
         """
         sourmash sketch dna -p k=21,k=31,k=51,scaled=1000,abund --merge {wildcards.sample} -o {output.sig} {input.f_seq} {input.r_seq} 2>&1 | tee {log}
@@ -2574,7 +2616,7 @@ rule sourmash_gather:
     conda: "config/conda_yaml/sourmash.yaml"
     log: "logs/sourmash/{sample_type}-{sample}.log"
     benchmark: "benchmarks/sourmash/{sample_type}-{sample}.txt"
-    resources: cpus=1, time_min=4320, mem_mb = 80000
+    resources: time_min=4320, mem_mb = 80000
     shell:
         """
         sourmash gather {input.sig} {input.gtdb_refDB} {input.microcystis_refDB} -o {output.reps} 2>&1 | tee -a {log}
@@ -2594,7 +2636,7 @@ rule sourmash_gather_Microcystis:
     conda: "config/conda_yaml/sourmash.yaml"
     log: "logs/sourmash/{sample_type}-{sample}.log"
     benchmark: "benchmarks/sourmash/{sample_type}-{sample}.txt"
-    resources: cpus=1, time_min=4320, mem_mb = 20000
+    resources: time_min=4320, mem_mb = 20000
     shell:
         """
         sourmash gather {input.sig} {input.refDB} -o {output.reps} 2>&1 | tee -a {log}
@@ -2612,7 +2654,7 @@ rule link_reads_w_sample_names:
     output: 
         touch = touch("data/omics/{sample_type}/{sample}/reads/.linked_{dir}_w_sample_name"),
         linked_reads = "data/omics/{sample_type}/{sample}/reads/fastp_decon/{sample}_{dir}.fastq.gz"
-    resources: cpus=1, mem_mb = 500
+    resources: mem_mb = 500
     shell:
         """
         mkdir -p $(dirname {output.linked_reads})
@@ -2635,7 +2677,8 @@ rule map_to_contigs:
         #mapper = "strobealign"
     conda: "config/conda_yaml/coverm.yaml"
     benchmark: "benchmarks/map_to_contigs/{sample_type}-{project}__{sample}.txt"
-    resources: cpus=32, mem_mb=150000, time_min=7200, disk_mb=500000, scratch_disk_mb = 1000000
+    threads: 32
+    resources: mem_mb=150000, time_min=7200, disk_mb=500000, scratch_disk_mb = 1000000
     shell:
         """
         #ulimit -u 1000000 # Increase the number of open files to avoid errors
@@ -2652,7 +2695,7 @@ rule map_to_contigs:
         coverm make -c data/projects/{wildcards.project}/metagenomes/*/reads/fastp_decon/*.fastq.gz \
             -r {input.contigs} \
             --discard-unmapped \
-            -t {resources.cpus} \
+            -t {threads} \
             --mapper {params.mapper} \
             -o {output.bam_dir} 
 
@@ -2673,9 +2716,10 @@ rule contig_coverage:
         tmpdir = "tmp/coverm_contig_coverage/{sample}"
     benchmark: "benchmarks/contig_coverage/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/coverm.yaml"
-    resources: cpus=24, mem_mb=150000, time_min=10000 # standard assemblies
-    #resources: cpus=24, mem_mb=1000000, time_min=14400, partition = "largemem" # coassembly
-    #resources: cpus=24, mem_mb=1500000, time_min=14400, partition = "largemem" # XL coassembly
+    threads: 24
+    resources: mem_mb=150000, time_min=10000 # standard assemblies
+    #resources: mem_mb=1000000, time_min=14400, partition = "largemem" # coassembly
+    #resources: mem_mb=1500000, time_min=14400, partition = "largemem" # XL coassembly
     priority: 2
     shell:
         """
@@ -2685,18 +2729,18 @@ rule contig_coverage:
 
         coverm contig \
             -b {input.bam_dir}/*.bam \
-            -t {resources.cpus} \
+            -t {threads} \
             --output-file {output.coverage}
 
         coverm contig \
             -b {input.bam_dir}/*.bam \
-            -t {resources.cpus} \
+            -t {threads} \
             -m mean trimmed_mean covered_bases variance length count reads_per_base rpkm tpm \
             --output-file {output.coverage_full}
 
         coverm contig \
             -b {input.bam_dir}/*.bam \
-            -t {resources.cpus} \
+            -t {threads} \
             --methods metabat \
             --output-file {output.coverage_metabat}
 
@@ -2715,11 +2759,12 @@ rule index_contig_coverage:
         bam = config["binning_bam_dir"] + "/final.contigs.renamed.fa.decon_fwd_reads_fastp.fastq.gz.bam"
     benchmark: "benchmarks/index_contig_coverage/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/coverm.yaml"
-    resources: cpus=4, mem_mb=60000, time_min=2880
+    threads: 4
+    resources: mem_mb=60000, time_min=2880
     priority: 2
     shell:
         """
-        parallel -j {resources.cpus} samtools index -@ 1 ::: {input.bam_dir}/*.bam
+        parallel -j {threads} samtools index -@ 1 ::: {input.bam_dir}/*.bam
         """
 
 rule concoct:
@@ -2740,19 +2785,20 @@ rule concoct:
         #bam = "/ssd/GLAMR/binning/bams/bams/{project}/{sample_type}/{sample}/*.bam" #changed just for Paul's coassembly
     benchmark: "benchmarks/concoct/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/concoct.yaml"
-    resources: cpus=24, mem_mb=150000, time_min=10080, mem_gb = 50 # standard samples
-    #resources: cpus=24, mem_mb=170000, time_min=10080, mem_gb = 50 # coassembly
-    #resources: cpus=32, mem_mb=1200000, time_min=18720, partition = "largemem" # XLcoassembly
+    threads: 24
+    resources: mem_mb=150000, time_min=10080, mem_gb = 50 # standard samples
+    #resources: mem_mb=170000, time_min=10080, mem_gb = 50 # coassembly
+    #resources: mem_mb=1200000, time_min=18720, partition = "largemem" # XLcoassembly
     priority: 3
     shell:
         """
-        export OMP_THREAD_LIMIT={resources.cpus}
+        export OMP_THREAD_LIMIT={threads}
 
         cut_up_fasta.py {input.contigs} -c 10000 -o 0 --merge_last -b {output.cut_contigs_bed} > {output.cut_contigs}
         
         concoct_coverage_table.py {output.cut_contigs_bed} {params.bam} > {output.cut_coverage}
 
-        concoct --threads {resources.cpus} --composition_file {output.cut_contigs} --coverage_file {output.cut_coverage} -b {params.outdir}/
+        concoct --threads {threads} --composition_file {output.cut_contigs} --coverage_file {output.cut_coverage} -b {params.outdir}/
         
         merge_cutup_clustering.py {params.outdir}/clustering_gt1000.csv > {output.merged_clustering}
 
@@ -2775,13 +2821,14 @@ rule metabat2:
         bin_name = directory("data/projects/{project}/{sample_type}/{sample}/bins/METABAT2/metabat2")
     benchmark: "benchmarks/metabat2/{sample_type}-{project}__{sample}.txt"
     singularity: "docker://metabat/metabat"
-    resources: cpus=16, mem_mb=20000, time_min=2880 # standard samples
-    #resources: cpus=36, mem_mb=150000, time_min=5880 # coassembly
+    threads: 16  # 36 for coassembly
+    resources: mem_mb=20000, time_min=2880 # standard samples
+    #resources: mem_mb=150000, time_min=5880 # coassembly
     priority: 3
     shell:
         """
         pwd
-        metabat2 -i {input.contigs} -a {input.coverm_depth} -o {params.bin_name} -m 2000 -t {resources.cpus} --unbinned
+        metabat2 -i {input.contigs} -a {input.coverm_depth} -o {params.bin_name} -m 2000 -t {threads} --unbinned
         """
 
         #jgi_summarize_bam_contig_depths --outputDepth {output.depth} {input.bam_dir}/*.bam
@@ -2793,8 +2840,8 @@ rule maxbin2_coverage:
     output:
         depths_file = "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/depths.txt"
     singularity: "docker://eandersk/r_microbiome"
-    resources: cpus=1, mem_mb=50000, time_min=1000 # standard samples
-    #resources: cpus=1, mem_mb=120000, time_min=2000 # coassembly
+    resources: mem_mb=50000, time_min=1000 # standard samples
+    #resources: mem_mb=120000, time_min=2000 # coassembly
     priority: 3
     shell:
         """
@@ -2813,15 +2860,16 @@ rule maxbin2:
         bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/maxbin"
     benchmark: "benchmarks/maxbin/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/maxbin.yaml"
-    resources: cpus=16, mem_mb=20000, time_min=10080 # standard samples
-    #resources: cpus=16, mem_mb=80000, time_min=20130 # coassembly
+    threads: 16
+    resources: mem_mb=20000, time_min=10080 # standard samples
+    #resources: mem_mb=80000, time_min=20130 # coassembly
     priority: 3
     shell:
         """
         pwd 
         run_MaxBin.pl -contig {input.contigs} \
             -markerset 107 \
-            -thread {resources.cpus} \
+            -thread {threads} \
             -min_contig_length 2000\
 	        -out {params.bin_dir} \
 	        -abund_list {input.depth}
@@ -2831,7 +2879,7 @@ rule semibin_ref_download:
     output: directory("data/reference/semibin/gtdb")
     params:
     conda: "config/conda_yaml/semibin.yaml"
-    resources: cpus =1, mem_mb = 2000, time_min=2880
+    resources: mem_mb = 2000, time_min=2880
     shell:
         """
         SemiBin download_GTDB --reference-db {output}
@@ -2852,9 +2900,10 @@ rule semibin:
     conda: "config/conda_yaml/semibin.yaml"
     benchmark: "benchmarks/semibin/{sample_type}-{project}__{sample}.txt"
     log: "logs/semibin/{sample_type}-{project}__{sample}.log"
-    resources: cpus=16, mem_mb=170000, time_min=2880, mem_gb = 50 # standard samples
-    #resources: cpus=32, mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
-    #resources: cpus=32, mem_mb=700000, time_min=2880, partition = "largemem" # coassembly on our servers
+    threads: 16  # 16/32/32
+    resources: mem_mb=170000, time_min=2880, mem_gb = 50 # standard samples
+    #resources: mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
+    #resources: mem_mb=700000, time_min=2880, partition = "largemem" # coassembly on our servers
     priority: 3
     shell:
         r"""
@@ -2862,7 +2911,7 @@ rule semibin:
 
         SemiBin \
             single_easy_bin \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --reference-db {input.ref_db}/gtdb \
             -i {input.contigs} \
             -b {input.bam_dir}/*.bam \
@@ -2888,16 +2937,17 @@ rule semibin2:
     conda: "config/conda_yaml/semibin2.yaml"
     benchmark: "benchmarks/semibin2/{sample_type}-{project}__{sample}.txt"
     log: "logs/semibin2/{sample_type}-{project}__{sample}.log"
-    resources: cpus=36, mem_mb=170000, time_min=2880 # standard samples
-    #resources: cpus=32, mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
-    #resources: cpus=32, mem_mb=700000, time_min=2880, partition = "largemem" # coassembly on our servers
+    threads: 36  # 36/32/32
+    resources: mem_mb=170000, time_min=2880 # standard samples
+    #resources: mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
+    #resources: mem_mb=700000, time_min=2880, partition = "largemem" # coassembly on our servers
     priority: 3
     shell:
         """
         WORK_DIR=$PWD
 
         SemiBin2 single_easy_bin \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --compression none \
             -i {input.contigs} \
             -b {input.bam_dir}/*.bam \
@@ -2923,8 +2973,8 @@ rule VAMB:
     #conda: "/home/kiledal/miniconda3/envs/vamb"
     benchmark: "benchmarks/VAMB/{sample_type}-{project}__{sample}.txt"
     log: "logs/VAMB/{sample_type}-{project}__{sample}.log"
-    resources: cpus=1, mem_mb=40000, time_min=5000, partition = "gpu", gpu = 1 # standard samples
-    #resources: cpus=1, mem_mb=120000, time_min=14400, partition = "gpu", gpu = 1 # coassembly
+    resources: mem_mb=40000, time_min=5000, partition = "gpu", gpu = 1 # standard samples
+    #resources: mem_mb=120000, time_min=14400, partition = "gpu", gpu = 1 # coassembly
     priority: 3
     shell:
         """
@@ -2944,8 +2994,8 @@ rule format_coverage_for_metadecoder:
         contigs = rules.rename_contigs.output.contigs
     output: "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/coverage.tsv"
     singularity: "docker://eandersk/r_microbiome"
-    resources: cpus=1, mem_mb = 50000, time_min=360 # standard samples
-    #resources: cpus=1, mem_mb = 140000, time_min=2000 # coassembly
+    resources: mem_mb = 50000, time_min=360 # standard samples
+    #resources: mem_mb = 140000, time_min=2000 # coassembly
     priority: 3
     shell:
         """
@@ -2968,14 +3018,15 @@ rule metadecoder:
     shadow: "minimal"
     benchmark: "benchmarks/metadecoder/{sample_type}-{project}__{sample}.txt"
     log: "logs/metadecoder/{sample_type}-{project}__{sample}.log"
-    resources: cpus=1, mem_mb=150000, time_min=10080, partition = "gpu", gpu = 1 # standard samples
-    #resources: cpus=1, mem_mb=160000, time_min=15080, partition = "gpu", gpu = 1 # coassembly
+    threads: 1
+    resources: mem_mb=150000, time_min=10080, partition = "gpu", gpu = 1 # standard samples
+    #resources: mem_mb=160000, time_min=15080, partition = "gpu", gpu = 1 # coassembly
     priority: 3
     shell:
         """
         mkdir -p {output.bins_dir}
         
-        metadecoder seed --threads {resources.cpus} -f {input.contigs} -o {output.seed}
+        metadecoder seed --threads {threads} -f {input.contigs} -o {output.seed}
 
         metadecoder cluster -f {input.contigs} -c {input.coverage} -s {output.seed}  -o {params.out_prefix} | tee {log}
         """
@@ -3003,7 +3054,7 @@ rule standardize_bins:
         sample_dir = "data/projects/{project}/{sample_type}/{sample}"
     benchmark: "benchmarks/standardize_bins/{sample_type}-{project}__{sample}.txt"
     singularity: "docker://eandersk/r_microbiome"
-    resources: cpus=1, mem_mb = 50000, time_min=360
+    resources: mem_mb = 50000, time_min=360
     priority: 4
     shell:
         """
@@ -3020,11 +3071,12 @@ rule checkm_new_per_sample:
         out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/all_raw_bins/checkm"
     benchmark: "benchmarks/checkm_new_per_sample/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/checkm.yaml"
-    resources: cpus=16, mem_mb=80000, time_min=7200
+    threads: 16
+    resources: mem_mb=80000, time_min=7200
     priority: 4
     shell:
         """
-        checkm lineage_wf --tab_table -f {output.results} -x fa -t {resources.cpus} {params.in_dir} {params.out_dir}
+        checkm lineage_wf --tab_table -f {output.results} -x fa -t {threads} {params.in_dir} {params.out_dir}
         """
 
 rule checkm2:
@@ -3037,14 +3089,15 @@ rule checkm2:
         #out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/checkm2"
     benchmark: "benchmarks/checkm2/{sample_type}-{project}__{sample}.txt"
     conda: "config/conda_yaml/checkm2.yaml"
-    resources: cpus=16, mem_mb=80000, time_min=7200
+    threads: 16
+    resources: mem_mb=80000, time_min=7200
     priority: 4
     shell:
         """
         # Database can be dowloaded with checkm2 database --download --path {{path}}
 
         checkm2 predict \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --input {params.in_dir} \
             --extension fa \
             --database_path {params.database} \
@@ -3071,7 +3124,7 @@ rule make_das_and_drep_inputs:
         VAMB_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/VAMB_contigs.tsv"
     singularity: "docker://eandersk/r_microbiome"
     benchmark: "benchmarks/make_das_and_drep_inputs/{sample_type}-{project}__{sample}.txt"
-    resources: cpus=1, mem_mb = 50000, time_min=1440
+    resources: mem_mb = 50000, time_min=1440
     priority: 4
     shell:
         """
@@ -3089,11 +3142,12 @@ rule checkm_new:
         out_dir = "data/projects/{project}/{sample_type}/metagenome_bins/raw_combined_bins/checkm"
     benchmark: "benchmarks/checkm_new/{sample_type}-{project}.txt"
     conda: "config/conda_yaml/checkm.yaml"
-    resources: cpus=24, mem_mb=120000, time_min=2880
+    threads: 24
+    resources: mem_mb=120000, time_min=2880
     priority: 4
     shell:
         """
-        checkm lineage_wf --tab_table -f {output.results} -x fa -t {resources.cpus} {params.in_dir} {params.out_dir}
+        checkm lineage_wf --tab_table -f {output.results} -x fa -t {threads} {params.in_dir} {params.out_dir}
         """
 
 
@@ -3117,7 +3171,8 @@ checkpoint dastool_new:
     conda: "config/conda_yaml/das_tool.yaml"
     benchmark: "benchmarks/dastool/{sample_type}-{project}__{sample}.txt"
     log: "logs/dastool/{sample_type}-{project}__{sample}.log"
-    resources: cpus=8, mem_mb=50000, time_min=2880, mem_gb = 50
+    threads: 8
+    resources: mem_mb=50000, time_min=2880, mem_gb = 50
     priority: 4
     shell:
         """
@@ -3128,7 +3183,7 @@ checkpoint dastool_new:
             -c {input.contigs} \
             -o {params.das_prefix} \
             -l metabat2,maxbin,concoct,metadecoder,semibin,VAMB \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --write_bins \
              | tee {log}
         """
@@ -3147,7 +3202,8 @@ rule drep_new:
         MAGs= directory("data/projects/{project}/{sample_type}/metagenome_bins/derep/dereplicated_genomes")
     conda: "config/conda_yaml/drep.yaml"
     benchmark: "benchmarks/drep/{sample_type}-{project}__{sample}.txt"
-    resources: cpus=8, mem_mb=150000, time_min=2880
+    threads: 8
+    resources: mem_mb=150000, time_min=2880
     priority: 4
     shell:
         """
@@ -3155,7 +3211,7 @@ rule drep_new:
         
         dRep dereplicate \
             {params.main_dir} \
-            -p {resources.cpus} \
+            -p {threads} \
             --contamination 50 \
             --completeness 30 \
             -pa 0.9 \
@@ -3179,7 +3235,8 @@ rule GTDB:
     conda: "config/conda_yaml/gtdbtk.yaml"
     benchmark: "benchmarks/GTDB/{sample_type}-{project}__{sample}.txt"
     log: "logs/GTDB/{sample_type}-{project}__{sample}.log"
-    resources: cpus=24, mem_mb=120000, time_min=2880
+    threads: 24
+    resources: mem_mb=120000, time_min=2880
     priority: 4
     shell:
         """
@@ -3192,7 +3249,7 @@ rule GTDB:
             --extension fa \
             --genome_dir {params.input_bin_dir} \
             --out_dir {params.out_dir} \
-            --cpus {resources.cpus} \
+            --cpus {threads} \
             --pplacer_cpus {params.pplacer_cpus}
         """
 
@@ -3207,7 +3264,7 @@ rule GTDB_to_NCBI:
     conda: "config/conda_yaml/gtdbtk.yaml"
     benchmark: "benchmarks/GTDB_to_NCBI/{sample_type}-{project}__{sample}.txt"
     log: "logs/GTDB_to_NCBI/{sample_type}-{project}__{sample}.log"
-    resources: cpus=1, mem_mb=4000, time_min=240
+    resources: mem_mb=4000, time_min=240
     priority: 4
     shell:
         """
@@ -3233,7 +3290,8 @@ rule GTDB_versioned:
     conda: "config/conda_yaml/gtdbtk_2.4.0.yaml"
     benchmark: "benchmarks/GTDB/{sample_type}-{project}__{sample}_database-{database_version}.txt"
     log: "logs/GTDB/{sample_type}-{project}__{sample}_database-{database_version}.log"
-    resources: cpus=16, mem_mb=100000, time_min=2880
+    threads: 16
+    resources: mem_mb=100000, time_min=2880
     shell:
         """
         export GTDBTK_DATA_PATH={input.refs}
@@ -3242,7 +3300,7 @@ rule GTDB_versioned:
             --extension fa \
             --genome_dir {params.input_bin_dir} \
             --out_dir {params.out_dir} \
-            --cpus {resources.cpus} \
+            --cpus {threads} \
             --pplacer_cpus {params.pplacer_cpus} \
             --mash_db $GTDBTK_DATA_PATH/mash_db
         """
@@ -3260,7 +3318,8 @@ rule GTDB_r232:
     conda: "config/conda_yaml/gtdbtk_2.7.2.yaml"
     benchmark: "benchmarks/GTDB/{sample_type}-{project}__{sample}_database-r232.txt"
     log: "logs/GTDB/{sample_type}-{project}__{sample}_database-r232.log"
-    resources: cpus=16, mem_mb=150000, time_min=2880
+    threads: 16
+    resources: mem_mb=150000, time_min=2880
     shell:
         """
         export GTDBTK_DATA_PATH={params.refs}
@@ -3270,14 +3329,14 @@ rule GTDB_r232:
             --extension fa \
             --genome_dir {params.input_bin_dir} \
             --out_dir {params.out_dir} \
-            --cpus {resources.cpus} \
+            --cpus {threads} \
             --pplacer_cpus {params.pplacer_cpus}
         """
 
 
 rule gunc_GTDB_db_download:
     output: directory("data/reference/gunc_gtdb")
-    resources: cpus=1, time_min=2880
+    resources: time_min=2880
     conda: "config/conda_yaml/gunc.yaml"
     shell:
         """
@@ -3295,7 +3354,8 @@ rule gunc:
     params: 
         bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep",
         out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/gunc"
-    resources: cpus = 24, mem_mb = 120000, time_min = 2880
+    threads: 24
+    resources: mem_mb = 120000, time_min = 2880
     conda: "config/conda_yaml/gunc.yaml"
     benchmark: "benchmarks/gunc/{sample_type}-{project}__{sample}.txt"
     log: "logs/gunc/{sample_type}-{project}__{sample}.log"
@@ -3306,7 +3366,7 @@ rule gunc:
         gunc run \
             --input_dir {params.bin_dir} \
             -r {input.ref_file} \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --temp_dir /tmp \
             --out_dir {params.out_dir}
         """
@@ -3323,13 +3383,14 @@ rule kofam_scan_bins:
     #shadow: "shallow"
     benchmark: "benchmarks/kofamscan/{project}_{sample}_{sample_type}-{bin}.txt"
     log: "logs/kofamscan/{project}_{sample}_{sample_type}-{bin}.log"
-    resources: cpus=12, time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 50000
+    threads: 12
+    resources: time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 50000
     shell:
         """
         exec_annotation \
             -o {output.ko_annot} \
             --format=detail-tsv \
-            --cpu={resources.cpus}  \
+            --cpu={threads}  \
             --profile {input.profile} \
             --tmp-dir=/tmp/{wildcards.bin}_kofamscan \
             --ko-list {input.ko_list} {input.genes}
@@ -3350,7 +3411,8 @@ rule traitar:
         touch("data/omics/{sample_type}/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/traitar/.done")
     benchmark: "logs/traitar_coassembly/{sample_type}-benchmark.txt"
     container: "library://a_gihawi/traitar3/traitar3"
-    resources: cpus = 16, mem_mb = 170000, time_min=20000 #, partition = "largemem"
+    threads: 16
+    resources: mem_mb = 170000, time_min=20000 #, partition = "largemem"
     shell:
         """
         #mkdir -p {params.out_dir}
@@ -3359,7 +3421,7 @@ rule traitar:
         cd ~/scratch_gdick1/GVHD/
         pwd
 
-        traitar phenotype --overwrite -c {resources.cpus} /db {params.gene_dir} {input.sample_file} from_genes {params.out_dir}
+        traitar phenotype --overwrite -c {threads} /db {params.gene_dir} {input.sample_file} from_genes {params.out_dir}
         """
 
 rule prodigal_mags_DREP:
@@ -3369,7 +3431,7 @@ rule prodigal_mags_DREP:
         proteins = "data/omics/{sample_type}/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/prodigal/{bin}.faa",
         genes = "data/omics/{sample_type}/coassembly/bins/drep_ALL_SAMPLES/dereplicated_genomes/prodigal/{bin}.gff"
     conda: "config/conda_yaml/main.yaml"
-    resources: cpus = 1, mem_mb = 10000
+    resources: mem_mb = 10000
     shell:
         """
         prodigal -p meta -i {input.bin} -a {output.proteins} -d {output.genes} #1>{log} 2>&1
@@ -3382,7 +3444,7 @@ rule prodigal_MAGs_generic:
         proteins = "data/projects/{project}/{sample_type}/{sample}/bins/prodigal/{genome}.faa",
         genes = "data/projects/{project}/{sample_type}/{sample}/bins/prodigal/{genome}.gff"
     conda: "config/conda_yaml/main.yaml"
-    resources: cpus = 1, mem_mb = 10000
+    resources: mem_mb = 10000
     shell:
         """
         prodigal -p meta -i {input.genome} -a {output.proteins} -d {output.genes} #1>{log} 2>&1
@@ -3395,7 +3457,7 @@ rule prodigal_MAGs:
         proteins = "data/projects/{project}/{sample_type}/{sample}/bins/prodigal/{genome}.faa",
         genes = "data/projects/{project}/{sample_type}/{sample}/bins/prodigal/{genome}.gff"
     conda: "config/conda_yaml/main.yaml"
-    resources: cpus = 1, mem_mb = 10000
+    resources: mem_mb = 10000
     shell:
         """
         prodigal -p meta -i {input.genome} -a {output.proteins} -d {output.genes} #1>{log} 2>&1
@@ -3413,13 +3475,14 @@ rule bakta_das_bins:
     conda: "config/conda_yaml/bakta.yaml"
     log: "logs/bakta/{sample_type}-{project}__{sample}__{genome}.tsv"
     benchmark: "benchmarks/bakta/{sample_type}-{project}__{sample}__{genome}.tsv"
-    resources: cpus=8, mem_mb=32000, time_min=5000, 
+    threads: 8
+    resources: mem_mb=32000, time_min=5000,
     shell:
         """
         bakta --db {params.db} \
             --keep-contig-headers \
             --output {output.dir} \
-            --threads {resources.cpus} \
+            --threads {threads} \
             {input.genome} | tee {log}
         """
 
@@ -3435,13 +3498,14 @@ rule bakta_generic:
     conda: "config/conda_yaml/bakta.yaml"
     log: "logs/bakta/{sample_type}-{project}__{sample}__{genome}.tsv"
     benchmark: "benchmarks/bakta/{sample_type}-{project}__{sample}__{genome}.tsv"
-    resources: cpus=8, mem_mb=32000, time_min=5000, 
+    threads: 8
+    resources: mem_mb=32000, time_min=5000,
     shell:
         """
         bakta --db {params.db} \
             --keep-contig-headers \
             --output {output.dir} \
-            --threads {resources.cpus} \
+            --threads {threads} \
             {input.genome} | tee {log}
         """
 
@@ -3459,7 +3523,8 @@ rule antismash:
     conda: "config/conda_yaml/antismash.yaml"
     log: "logs/antismash/{sample_type}-{project}__{sample}__{genome}.tsv"
     benchmark: "benchmarks/antismash/{sample_type}-{project}__{sample}__{genome}.tsv"
-    resources: cpus=8, mem_mb=10000, time_min=5000, 
+    threads: 8
+    resources: mem_mb=10000, time_min=5000,
     shell:
         """
         antismash \
@@ -3467,7 +3532,7 @@ rule antismash:
             --databases {params.db} \
             --genefinding-tool none \
             --output-dir {output.dir} \
-            --cpus {resources.cpus} \
+            --cpus {threads} \
             {params.genome} | tee {log}
         """
 
@@ -3485,7 +3550,8 @@ rule antismash7:
     singularity: "docker://antismash/standalone"
     log: "logs/antismash7/{sample_type}-{project}__{sample}__{genome}.tsv"
     benchmark: "benchmarks/antismash7/{sample_type}-{project}__{sample}__{genome}.tsv"
-    resources: cpus=16, mem_mb=10000, time_min=5000, 
+    threads: 16
+    resources: mem_mb=10000, time_min=5000,
     shell:
         """
         pwd 
@@ -3495,7 +3561,7 @@ rule antismash7:
             --databases {params.db} \
             --genefinding-tool none \
             --output-dir {output.dir} \
-            --cpus {resources.cpus} \
+            --cpus {threads} \
             {params.genome} | tee {log}
         """
 
@@ -3505,7 +3571,8 @@ rule antismash8_db_download:
     conda: "config/conda_yaml/antismash8.yaml"
     log: "logs/antismash8_db_download.txt"
     benchmark: "benchmarks/antismash8_db_download.txt"
-    resources: cpus=4, mem_mb=10000, time_min=10000
+    threads: 4
+    resources: mem_mb=10000, time_min=10000
     shell:
         """
         pwd 
@@ -3522,7 +3589,8 @@ rule antismash8_db_prep:
     conda: "config/conda_yaml/antismash8.yaml"
     log: "logs/antismash8_db_prep.txt"
     benchmark: "benchmarks/antismash8_db_prep.txt"
-    resources: cpus=4, mem_mb=10000, time_min=10000
+    threads: 4
+    resources: mem_mb=10000, time_min=10000
     shell:
         """
         antismash --prepare-data --databases {input.database_dir} | tee {log}
@@ -3542,7 +3610,8 @@ rule antismash8:
     conda: "config/conda_yaml/antismash8.yaml"
     log: "logs/antismash8/{sample_type}-{project}__{sample}__{genome}.tsv"
     benchmark: "benchmarks/antismash8/{sample_type}-{project}__{sample}__{genome}.tsv"
-    resources: cpus=16, mem_mb=10000, time_min=5000, 
+    threads: 16
+    resources: mem_mb=10000, time_min=5000,
     shell:
         """
         antismash \
@@ -3551,7 +3620,7 @@ rule antismash8:
             --databases {params.db} \
             --genefinding-tool none \
             --output-dir {output.dir} \
-            --cpus {resources.cpus} \
+            --cpus {threads} \
             {params.genome} | tee {log}
         """
 
@@ -3566,7 +3635,7 @@ rule antismash_summary:
         summarize_script = "code/multismash/workflow/scripts/tabulate_regions_single.py"
     log: "logs/antismash_summary/AS{version}-{sample_type}-{project}__{sample}__{genome}.tsv"
     benchmark: "benchmarks/antismash_summary/AS{version}-{sample_type}-{project}__{sample}__{genome}.tsv"
-    resources: cpus=1, mem_mb=4000, time_min=120 
+    resources: mem_mb=4000, time_min=120
     shell:
         """
         python3 $BASE/{params.count_script} {input} {output.counts} | tee {log}
@@ -3587,7 +3656,7 @@ rule get_bigscape_db:
 
 rule setup_bigscape:
     output: directory("data/reference/BiG-SCAPE")
-    resources: cpus=1, mem_mb=4000, time_min=100
+    resources: mem_mb=4000, time_min=100
     conda: "config/conda_yaml/bigscape.yaml"
     log: "logs/setup_bigscape.txt"
     shell:
@@ -3616,7 +3685,8 @@ rule bigscape:
     #singularity: "docker://eandersk/big-scape"
     log: "logs/bigscape/{sample_type}-{project}.log"
     benchmark: "benchmarks/bigscape/{sample_type}-{project}.tsv"
-    resources: cpus=24, mem_mb=100000, time_min=20000
+    threads: 24
+    resources: mem_mb=100000, time_min=20000
     shell:
         """
         PATH={input.bigscape_repo}:$PATH
@@ -3625,7 +3695,7 @@ rule bigscape:
             --inputdir {input.antismash_gbk_dir} \
             --outputdir {params.dir} \
             --pfam_dir {input.db} \
-            --cores {resources.cpus} | tee {log}
+            --cores {threads} | tee {log}
         """
 
 rule bakta_assembly:
@@ -3639,7 +3709,8 @@ rule bakta_assembly:
     conda: "config/conda_yaml/bakta.yaml"
     log: "logs/bakta_assembly/{sample_type}-{sample}.tsv"
     benchmark: "benchmarks/bakta_assembly/{sample_type}-{sample}.tsv"
-    resources: cpus=32, mem_mb=120000, time_min=10000
+    threads: 32
+    resources: mem_mb=120000, time_min=10000
     priority: 4 
     shell:
         """
@@ -3654,7 +3725,7 @@ rule bakta_assembly:
             --skip-plot \
             --regions {input.prodigal} \
             --output {output.dir} \
-            --threads {resources.cpus} \
+            --threads {threads} \
             {input.genome} | tee {log}
         """
 
@@ -3671,7 +3742,8 @@ rule bakta_assembly:
 #     conda: "config/conda_yaml/antismash.yaml"
 #     log: "logs/antismash_assembly/{sample_type}-{sample}.tsv"
 #     benchmark: "benchmarks/antismash_assembly/{sample_type}-{sample}.tsv"
-#     resources: cpus=8, mem_mb=90000, time_min=20000
+#     threads: 8
+#     resources: mem_mb=90000, time_min=20000
 #     shell:
 #         """
 #         antismash \
@@ -3679,7 +3751,7 @@ rule bakta_assembly:
 #             --databases {params.db} \
 #             --genefinding-tool prodigal-m \
 #             --output-dir {output.dir} \
-#             --cpus {resources.cpus} \
+#             --cpus {threads} \
 #             {input.genome} | tee {log}
 
 #             #--genefinding-tool none \
@@ -3698,7 +3770,8 @@ rule antismash8_assembly:
     conda: "config/conda_yaml/antismash8.yaml"
     log: "logs/antismash8_assembly/{sample_type}__{sample}.tsv"
     benchmark: "benchmarks/antismash8_assembly/{sample_type}-{sample}.tsv"
-    resources: cpus=1, mem_mb=100000, time_min=14400
+    threads: 1
+    resources: mem_mb=100000, time_min=14400
     priority: 5
     shell:
         """
@@ -3707,7 +3780,7 @@ rule antismash8_assembly:
             -t bacteria \
             --databases {params.db} \
             --output-dir {output.dir} \
-            --cpus {resources.cpus} \
+            --cpus {threads} \
             --genefinding-tool none \
             --no-abort-on-invalid-records \
             {params.genome} | tee {log}
@@ -3730,7 +3803,7 @@ rule antismash_assembly_summary:
         region_summary = "data/omics/{sample_type}/{sample}/antismash{version}_assembly/summaries/region_summary.tsv"
     log: "logs/antismash_assembly_summary/AS{version}-{sample_type}-{sample}.tsv"
     benchmark: "benchmarks/antismash_assembly_summary/AS{version}-{sample_type}-{sample}.tsv"
-    resources: cpus=1, mem_mb=16000, time_min=120 
+    resources: mem_mb=16000, time_min=120
     priority: 6
     shell:
         """
@@ -3753,12 +3826,13 @@ rule ref_read_mapping:
     conda: "config/conda_yaml/minimap2.yaml"
     log: "logs/ref_read_mapping/{sample_type}-{sample}.{ref_seqs}.log"
     benchmark: "benchmarks/ref_read_mapping/{sample_type}-{sample}.{ref_seqs}.tsv"
-    resources: cpus=8
+    threads: 8
+    resources:
     shell:
         """
         minimap2 \
             -ax sr \
-            -t {resources.cpus} \
+            -t {threads} \
             --secondary=no \
             {input.ref} \
             {input.f_reads} {input.r_reads} > {output.sam}
@@ -3771,8 +3845,8 @@ rule ref_read_mapping:
             --minCover 50 \
             --minId 80
         
-        samtools sort -o {output.bam} -@ {resources.cpus} {output.unsorted_bam}
-        samtools index -@ {resources.cpus} {output.bam}
+        samtools sort -o {output.bam} -@ {threads} {output.unsorted_bam}
+        samtools index -@ {threads} {output.bam}
         """
 
 rule ref_read_mapping_pileup:
@@ -3784,7 +3858,7 @@ rule ref_read_mapping_pileup:
     conda: "config/conda_yaml/minimap2.yaml"
     log: "logs/ref_read_mapping_pileup/{sample_type}-{sample}.{ref_seqs}.log"
     benchmark: "benchmarks/ref_read_mapping_pileup/{sample_type}-{sample}.{ref_seqs}.tsv"
-    resources: cpus=1
+    resources:
     shell:
         """
         samtools mpileup -f {input.ref} -o {output.pileup} {input.bam}
@@ -3801,13 +3875,14 @@ rule contig_search:
     conda: "config/conda_yaml/mmseqs.yaml"
     benchmark: "benchmarks/contig_search/{sample_type}_{sample}--{ref_seqs}.txt"
     log: "logs/contig_search/{sample_type}_{sample}--{ref_seqs}.log"
-    resources: cpus=24, mem_mb=120000, time_min=20000
+    threads: 24
+    resources: mem_mb=120000, time_min=20000
     shell:
         """
         mkdir -p {params.tmp_results}
 
         mmseqs easy-search {input.query} {input.contigs} {output} {params.tmp_results} \
-        --threads {resources.cpus} \
+        --threads {threads} \
         --exhaustive-search \
         --search-type 3
         """
@@ -3828,14 +3903,15 @@ rule map_reads_to_microcystis_markers:
     conda: "config/conda_yaml/bwa.yaml"
     benchmark: "benchmarks/map_reads_to_microcystis_markers/{sample_type}_{sample}--{marker}.txt"
     log: "logs/map_reads_to_microcystis_markers/{sample_type}_{sample}--{marker}.log"
-    resources: cpus=4, mem_mb=16000
+    threads: 4
+    resources: mem_mb=16000
     shell:
         """
         mkdir -p $(dirname {output.bam})
 
         minimap2 \
             -ax sr \
-            -t {resources.cpus} \
+            -t {threads} \
             --secondary=no \
             --sam-hit-only \
             {input.ref} \
@@ -3849,8 +3925,8 @@ rule map_reads_to_microcystis_markers:
             --minCover {params.min_cover} \
             --minId {params.min_id}
         
-        samtools sort -o {output.bam} -@ {resources.cpus} {output.unsorted_bam}
-        samtools index -@ {resources.cpus} {output.bam}
+        samtools sort -o {output.bam} -@ {threads} {output.unsorted_bam}
+        samtools index -@ {threads} {output.bam}
         """
 
 rule summarize_marker_mapping:
@@ -3862,7 +3938,7 @@ rule summarize_marker_mapping:
         marker_summary = "data/omics/{sample_type}/{sample}/microcystis_markers/{sample}--{marker}_summary.tsv",
         clade_summary = "data/omics/{sample_type}/{sample}/microcystis_markers/{sample}--{marker}_clade-summary.tsv"
     params:
-    resources: cpus=1, mem_mb=5000, time_min=60
+    resources: mem_mb=5000, time_min=60
     benchmark: "benchmarks/summarize_marker_mapping/{sample_type}_{sample}--{marker}.txt"
     log: "logs/summarize_marker_mapping/{sample_type}_{sample}--{marker}.log"
     container: "docker://eandersk/r_microbiome"
@@ -4252,7 +4328,7 @@ rule deeparg_ls: #this rule is using LS mode and annotated genes
     conda:
         "config/conda_yaml/deeparg.yml"
     resources:
-        cpus=1, mem_mb=20000, time_min=10000
+        mem_mb=20000, time_min=10000
     shell:
         """
         deeparg predict \
@@ -4293,12 +4369,13 @@ rule metaEuk:
         tmp_rev_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__rev.fastq.gz"
     benchmark: "benchmarks/metaEuk/{sample_type}-{sample}.txt"
     log: "logs/metaEuk/{sample_type}-{sample}.log"
+    threads: 32
     resources:
-        #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
-        mem_mb = 160000, cpus=32, time_min=20000
+        #mem_mb = 1450000, time_min=20000, partition = "largemem"
+        mem_mb = 160000, time_min=20000
     shell:
         """
-        export MMSEQS_NUM_THREADS={resources.cpus}
+        export MMSEQS_NUM_THREADS={threads}
         export TMPDIR={params.tmp_dir}
         
         # Different tmp dir if running on lab servers
@@ -4313,7 +4390,7 @@ rule metaEuk:
         
         metaeuk \
             easy-predict \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --split-memory-limit 50G \
             {input.assembly} \
             {params.unirefDB} \
@@ -4365,9 +4442,10 @@ rule reads_unirefLCA_mmseqs_metaT:
         tmp_rev_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__rev.fastq.gz"
     benchmark: "benchmarks/reads_unirefLCA_mmseqs/{sample_type}-{sample}.txt"
     log: "logs/reads_unirefLCA_mmseqs/{sample_type}-{sample}.log"
+    threads: 32
     resources:
-        #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
-        mem_mb = 160000, cpus=32, time_min=20000
+        #mem_mb = 1450000, time_min=20000, partition = "largemem"
+        mem_mb = 160000, time_min=20000
     shell:
         """
         export TMPDIR={params.tmp_dir}
@@ -4400,7 +4478,7 @@ rule reads_unirefLCA_mmseqs_metaT:
             --orf-filter-s 3.5 \
             -s 4 \
             --tax-lineage 1 \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --split-memory-limit 300G \
             2>&1 | tee -a {log}
 
@@ -4425,7 +4503,7 @@ rule add_lineage_to_unirefLCAtax_metaT:
         inspect_w_lineage = "data/omics/{sample_type}/{sample}/uniref_readmap_noDedup/{sample}_report_w_full_lineage",
         inspect_w_7_lev_lineage = "data/omics/{sample_type}/{sample}/uniref_readmap_noDedup/{sample}_report_w_standardized_lineage"
     conda: "config/conda_yaml/taxonkit.yaml"
-    resources: cpus=1, mem_mb=10000, time_min=5440, mem_gb = 10
+    resources: mem_mb=10000, time_min=5440, mem_gb = 10
     log: "logs/unirefLCA_mmseqs_add_lineage/{sample_type}-{sample}.log"
     shell:
         """
@@ -4466,9 +4544,10 @@ rule contig_unirefLCA_mmseqs_generic:
         tmp_rev_reads = "/old-geomicro/kiledal-extra/mmseqs_tmp/{sample}/{sample}__rev.fastq.gz"
     benchmark: "benchmarks/contig_unirefLCA_mmseqs_generic/{sample_type}-{sample}--{assembly}.txt"
     log: "logs/contig_unirefLCA_mmseqs_generic/{sample_type}-{sample}--{assembly}.log"
+    threads: 32
     resources:
-        #mem_mb = 1450000, cpus=32, time_min=20000, partition = "largemem"
-        mem_mb = 160000, cpus=32, time_min=7200
+        #mem_mb = 1450000, time_min=20000, partition = "largemem"
+        mem_mb = 160000, time_min=7200
     shell:
         """
         export TMPDIR={params.tmp_dir}
@@ -4496,7 +4575,7 @@ rule contig_unirefLCA_mmseqs_generic:
             --orf-filter-s 3.5 \
             -s 4 \
             --tax-lineage 1 \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --split-memory-limit $(echo "scale=0;({resources.mem_mb}*0.8)/1024" | bc)G \
             --db-load-mode 1 \
             2>&1 | tee -a {log}
@@ -4524,7 +4603,8 @@ rule plass:
     conda: "config/conda_yaml/plass.yaml"
     log: "logs/plass/{sample}-{sample_type}.log"
     benchmark: "benchmarks/plass/{sample}-{sample_type}.txt"
-    resources: cpus=24, mem_mb=120000, time_min=2880 # standard assemblies
+    threads: 24
+    resources: mem_mb=120000, time_min=2880 # standard assemblies
     shell:
         """
         export TMPDIR={params.tmpdir}
@@ -4532,7 +4612,7 @@ rule plass:
         mkdir -p $TMPDIR
 
         plass assemble \
-            --threads {resources.cpus} \
+            --threads {threads} \
             {input.fwd_reads} \
             {input.rev_reads} \
             {output.assembly} \
@@ -4550,13 +4630,14 @@ rule kofam_scan_plass:
     #shadow: "shallow"
     benchmark: "benchmarks/kofam_scan_plass/{sample}.txt"
     log: "logs/kofam_scan_plass/{sample}.log"
-    resources: cpus=24, time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 100000
+    threads: 24
+    resources: time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 100000
     shell:
         """
         exec_annotation \
             -o {output.ko_annot} \
             --format=detail-tsv \
-            --cpu={resources.cpus}  \
+            --cpu={threads}  \
             --profile {input.profile} \
             --tmp-dir=/tmp/{wildcards.sample}_kofamscan \
             --ko-list {input.ko_list} {input.genes} | tee {log}
@@ -4578,7 +4659,8 @@ rule map_reads_to_plass:
     conda: "config/conda_yaml/diamond_read_map.yaml"
     benchmark: "benchmarks/map_reads_to_plass/{sample}.txt"
     log: "logs/map_reads_to_plass/{sample}.log"
-    resources: cpus=24, time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 150000
+    threads: 24
+    resources: time_min = 20000, mem_mb = lambda wildcards, attempt: attempt * 150000
     shell:
         """
         seqtk mergepe {input.fwd_reads} {input.rev_reads} > {output.interleaved}
@@ -4605,8 +4687,8 @@ rule map_reads_to_plass:
             --minCover 50 \
             --minId 80
         
-        samtools sort -o {output.bam} -@ {resources.cpus} {output.unsorted_bam}
-        samtools index -@ {resources.cpus} {output.bam}       
+        samtools sort -o {output.bam} -@ {threads} {output.unsorted_bam}
+        samtools index -@ {threads} {output.bam}
         """
 
 rule virsorter2:
@@ -4621,7 +4703,8 @@ rule virsorter2:
     container: "docker://jiarong/virsorter:latest"
     benchmark: "benchmarks/virsorter2/{sample_type}-{project}__{sample}.txt"
     log: "logs/virsorter2/{sample_type}-{project}__{sample}.log"
-    resources: cpus=16, mem_mb = lambda wildcards, attempt: attempt * 24000, time_min=4320 # standard samples
+    threads: 16
+    resources: mem_mb = lambda wildcards, attempt: attempt * 24000, time_min=4320 # standard samples
     priority: 3
     shell:
         """
@@ -4630,7 +4713,7 @@ rule virsorter2:
             -w {params.virsorter_dir} \
             -i {input.contigs} \
             --include-groups "dsDNAphage,ssDNA" \
-            -j {resources.cpus} \
+            -j {threads} \
             all > {log} 2>&1
         """
 
@@ -4647,14 +4730,15 @@ rule genomad:
     conda: "config/conda_yaml/genomad.yaml"
     benchmark: "benchmarks/genomad/{sample_type}-{project}__{sample}.txt"
     log: "logs/genomad/{sample_type}-{project}__{sample}.log"
-    resources: cpus=16, mem_mb = lambda wildcards, attempt: attempt * 32000, time_min=4320 # standard samples
+    threads: 16
+    resources: mem_mb = lambda wildcards, attempt: attempt * 32000, time_min=4320 # standard samples
     priority: 3
     shell:
         """
         genomad end-to-end \
             --cleanup \
             --splits {params.splits} \
-            --threads {resources.cpus} \
+            --threads {threads} \
             {input.contigs} \
             {output.genomad_dir} \
             {params.db_path} > {log} 2>&1
@@ -4672,14 +4756,15 @@ rule gutsmash:
     singularity: "docker://nmendozam/gutsmash"
     log: "logs/gutsmash/{sample_type}__{sample}.tsv"
     benchmark: "benchmarks/gutsmash/{sample_type}-{sample}.tsv"
-    resources: cpus=1, mem_mb=100000, time_min=14400
+    threads: 1
+    resources: mem_mb=100000, time_min=14400
     shell:
         """
         run_gutsmash.py \
             --minimal \
             --cb-knownclusters \
             --enable-genefunctions \
-            --cpus {resources.cpus} \
+            --cpus {threads} \
             --output-dir {output.dir} \
             {params.genome} | tee {log}
         """
@@ -4692,11 +4777,12 @@ rule seqkit_stats:
     conda: "config/conda_yaml/seqkit.yaml"
     benchmark: "benchmarks/seqkit_stats/{sample_type}-{sample}__{reads}.txt"
     log: "logs/seqkit_stats/{sample_type}_{sample}__{reads}.log"
-    resources: cpus=4, mem_mb=16000, time_min=1000 # standard samples
+    threads: 4
+    resources: mem_mb=16000, time_min=1000 # standard samples
     priority: 3
     shell:
         """
-        seqkit stats --all --tabular --threads {resources.cpus} {input.fastq} > {output.stats}
+        seqkit stats --all --tabular --threads {threads} {input.fastq} > {output.stats}
         """
 
 
@@ -4713,7 +4799,8 @@ rule sylph:
     conda: "config/conda_yaml/sylph.yaml"
     benchmark: "benchmarks/sylph/{sample_type}-{sample}__{database}.txt"
     log: "logs/sylph/{sample_type}_{sample}__{database}.log"
-    resources: cpus=30, mem_mb=50000, time_min=1440, mem_gb = 40
+    threads: 30
+    resources: mem_mb=50000, time_min=1440, mem_gb = 40
     shell:
         """
         # Record metadata to the log file
@@ -4726,7 +4813,7 @@ rule sylph:
             {input.db} \
             -1 {input.f_seq} \
             -2 {input.r_seq} \
-            -t {resources.cpus} \
+            -t {threads} \
             --estimate-unknown \
             --read-seq-id 99.5 \
             > {output.profile} 2>> {log}
@@ -4752,7 +4839,8 @@ rule sylph_ribodeplete:
     conda: "config/conda_yaml/sylph.yaml"
     benchmark: "benchmarks/sylph_ribodeplete/{sample_type}-{sample}__{database}.txt"
     log: "logs/sylph_ribodeplete/{sample_type}_{sample}__{database}.log"
-    resources: cpus=30, mem_mb=50000, time_min=1440, mem_gb = 40
+    threads: 30
+    resources: mem_mb=50000, time_min=1440, mem_gb = 40
     shell:
         """
         # Record metadata to the log file
@@ -4765,7 +4853,7 @@ rule sylph_ribodeplete:
             {input.db} \
             -1 {input.f_seq} \
             -2 {input.r_seq} \
-            -t {resources.cpus} \
+            -t {threads} \
             --estimate-unknown \
             --read-seq-id 99.5 \
             > {output.profile} 2>> {log}
@@ -4790,7 +4878,8 @@ rule sylph_hifi:
     conda: "config/conda_yaml/sylph.yaml"
     benchmark: "benchmarks/sylph_hifi/{sample_type}-{sample}__{database}.txt"
     log: "logs/sylph_hifi/{sample_type}_{sample}__{database}.log"
-    resources: cpus=30, mem_mb=50000, time_min=1440, mem_gb = 40
+    threads: 30
+    resources: mem_mb=50000, time_min=1440, mem_gb = 40
     shell:
         """
         # Record metadata to the log file
@@ -4802,7 +4891,7 @@ rule sylph_hifi:
         sylph profile \
             {input.db} \
             -r {input.reads} \
-            -t {resources.cpus} \
+            -t {threads} \
             --estimate-unknown \
             --read-seq-id 99.5 \
             > {output.profile} 2>> {log}
@@ -4829,8 +4918,8 @@ rule eukcc:
     conda: "config/conda_yaml/eukcc.yaml" # Or your dedicated eukaryotic bin assessment environment
     benchmark: "benchmarks/eukcc/{sample_type}-{project}__{sample}.txt"
     log: "logs/eukcc/{sample_type}-{project}__{sample}.log"
+    threads: 16
     resources: 
-        cpus = 16, 
         mem_mb = 80000, 
         time_min = 1440
     priority: 4
@@ -4839,7 +4928,7 @@ rule eukcc:
         rm -rf {output.out_dir}
         
         eukcc folder \
-            --threads {resources.cpus} \
+            --threads {threads} \
             --db {input.ref_db} \
             --out {output.out_dir} \
             --suffix .fa \

@@ -1,14 +1,14 @@
 jobs: 1000
 local-cores: 1
 executor: cluster-generic
-cluster-generic-submit-cmd: "mkdir -p logs/slurm && sbatch --parsable --time={resources.time_min} --mem={resources.mem_mb} -c {resources.cpus} -o logs/slurm/{rule}_{wildcards} -e logs/slurm/{rule}_{wildcards} --nodelist=vondamm" #--exclude=alpena
+cluster-generic-submit-cmd: "mkdir -p logs/slurm && sbatch --parsable --time={resources.time_min} --mem={resources.mem_mb} -c {threads} -o logs/slurm/{rule}_{wildcards} -e logs/slurm/{rule}_{wildcards} --nodelist=vondamm" #--exclude=alpena
 cluster-generic-cancel-cmd: "scancel"
 software-deployment-method:
   - conda
   - apptainer
-default-resources: [cpus=1, mem_mb=8000, time_min=120, ncbi_api=0, gpu=0, disk_mb=100]
+default-resources: [mem_mb=4000, time_min=120, ncbi_api=0, gpu=0, disk_mb=100]
 #resources: [disk_mb=2000000]
-resources: [cpus=1000, mem_mb=1000000000, ncbi_api=5, disk_mb=2000000]
+resources: [mem_mb=700000, ncbi_api=5, disk_mb=2000000]
 latency-wait: 10
 cluster-generic-status-cmd: "${SLURM_STATUS_CMD:-/nfs/turbo/lsa-kiledal/GLAMR/pypelib/slurm_status.py}"
 max-status-checks-per-second: 10

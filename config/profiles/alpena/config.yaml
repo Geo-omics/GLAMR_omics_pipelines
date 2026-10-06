@@ -1,9 +1,9 @@
-jobs: 100
+cores: 45
 software-deployment-method:
   - conda
   - apptainer
-default-resources: [cpus=1, mem_mb=16000, time_min=120, ncbi_api=0]
-resources: [cpus=92, mem_mb=160000, ncbi_api=5]
+default-resources: [mem_mb=4000, time_min=120, ncbi_api=0]
+resources: [mem_mb=700000, ncbi_api=5]
 latency-wait: 60
 singularity-args: "--home $HOME:$HOME --bind /geomicro:/geomicro --bind /nfs:/nfs"
 rerun-triggers: mtime
