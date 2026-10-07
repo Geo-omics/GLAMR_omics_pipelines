@@ -1,7 +1,7 @@
 jobs: 2000
 local-cores: 1
 executor: cluster-generic
-cluster-generic-submit-cmd: "sbatch --parsable --account={resources.account} --partition={resources.partition} --time={resources.time_min} --mem={resources.mem_mb} -c {threads} --gres=gpu:{resources.gpu} -o logs/slurm/{rule}_{wildcards} -e logs/slurm/{rule}_{wildcards}"
+cluster-generic-submit-cmd: "sbatch --parsable --account={resources.account} --partition={resources.partition} --time={resources.time_min} --mem={resources.mem_mb} -c {threads} --gres=gpu:{resources.gpu} -o logs/slurm/%j.{rule}.{wildcards}.log -e logs/slurm/%j.{rule}.{wildcards}.log"
 cluster-generic-cancel-cmd: "scancel"
 software-deployment-method:
   - conda

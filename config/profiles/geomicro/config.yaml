@@ -1,7 +1,7 @@
 jobs: 1000
 local-cores: 1
 executor: cluster-generic
-cluster-generic-submit-cmd: "mkdir -p logs/slurm && sbatch --parsable --time={resources.time_min} --mem={resources.mem_mb} -c {threads} -o logs/slurm/{rule}_{wildcards} -e logs/slurm/{rule}_{wildcards}" #--exclude=alpena
+cluster-generic-submit-cmd: "mkdir -p logs/slurm && sbatch --parsable --time={resources.time_min} --mem={resources.mem_mb} -c {threads} -o logs/slurm/%j.{rule}.{wildcards}.log -e logs/slurm/%j.{rule}.{wildcards}.log" #--exclude=alpena
 cluster-generic-cancel-cmd: "scancel"
 software-deployment-method:
   - conda
