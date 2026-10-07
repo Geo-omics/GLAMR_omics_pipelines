@@ -4276,6 +4276,7 @@ def get_dada2_output(wc):
 
     wc_str = ' '.join(f'{k}={v}' for k, v in wc.items())
     targets = Counter(assignments.values())
+    print(f'[INFO] target assignments {targets}')
     if bad_count := targets.pop(pypelib.amplicon.dispatch.UNKNOWN, 0):
         print(
             f'[WARNING] ({wc_str}) There are {bad_count} samples that do not '
@@ -4294,26 +4295,49 @@ def get_dada2_output(wc):
         for i in specs:
             print(' ', i)
     else:
-        print('[WARNING] no dada2 jobs for wildcard {wc_str} ???')
-    files = []
+        print(f'[WARNING] no dada2 jobs for wildcards {wc_str} ???')
+    files = {}
     for i in specs:
+        files[i] = []
         for j in rules.amplicon_dada2_target.output:
-            files.append(j.format(dataset=wc.dataset, target_spec=i))
+            files[i].append(j.format(dataset=wc.dataset, target_spec=i))
         for j in rules.amplicon_asv_check.output:
-            files.append(j.format(dataset=wc.dataset, target_spec=i))
+            files[i].append(j.format(dataset=wc.dataset, target_spec=i))
         for j in rules.amplicon_dada2_taxonomy_polish.output:
-            files.append(j.format(dataset=wc.dataset, target_spec=i))
+            files[i].append(j.format(dataset=wc.dataset, target_spec=i))
     return files
 
 rule amplicon_pipeline_dataset:
     """ The top rule for the amplicon pipeline """
-    input: get_dada2_output
+    input:
+        unpack(get_dada2_output),
+        assignments = rules.amplicon_dispatch.output.assignments,
     output: "data/projects/{dataset}/amplicon_pipeline_done"
     resources: mem_mb=100, time_min=2
-    shell:
-        """
-        for i in {input:q}; do echo "$i" >> {output}; done
-        """
+    run:
+        assignments = pypelib.amplicon.dispatch.get_assignments(path=input['assignments'])
+
+        if pypelib.amplicon.dispatch.UNKNOWN in assignments.values():
+            # got UNKNOWN -- rule will fail with missing output file
+            out_suffix = '.INCOMPLETE'
+        else:
+            # OK -- make correct output file
+            out_suffix = ''
+
+        with open(output[0] + out_suffix, 'w') as ofile:
+            ofile.write('** Target Accounting **\nassigned:\n')
+            for k, v in Counter(assignments.values()).items():
+                ofile.write(f'  {k}: {v}\n')
+            ofile.write('dada2 out:\n')
+            for target_spec in input.keys():
+                if target_spec == 'assignments':
+                    continue
+                abund = rules.amplicon_dada2_target.output.abund.format(dataset=wildcards.dataset, target_spec=target_spec)
+                with open(abund) as ifile:
+                    # count rows (one per sample) w/o table header
+                    num_rows = sum(1 for _ in ifile) - 1
+                ofile.write(f'  {target_spec}: {num_rows}\n')
+
 
 rule deeparg_ls: #this rule is using LS mode and annotated genes  
     input:
