@@ -340,7 +340,7 @@ rule get_reads:
 
 checkpoint get_runinfo:
     input: rules.get_reads_prep.output.runinfo
-    output: "data/omics/{sample_type}/{sample}/reads/runinfo1.tsv"
+    output: "data/omics/{sample_type}/{sample}/reads/runinfo1.json"
     resources: mem_mb=100, time_min=1
     shell: "ln -- {input} {output}"
 
