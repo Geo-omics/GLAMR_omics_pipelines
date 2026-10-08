@@ -45,15 +45,20 @@ INFILE_TAIL = Path('detect_region') / 'target_info.json'
 
 @logme()
 def main(infiles, output=None, dataset=None, project_dir=None):
-    project_dir = Path(project_dir)
-    if not project_dir.is_dir():
-        raise UsageError(f'no such directory: {project_dir}')
-
     # 1. get input files if needed
     if infiles is None:
+        if project_dir is None:
+            raise ValueError('either infiles or projects_dir must be given')
+        project_dir = Path(project_dir)
+        if not project_dir.is_dir():
+            raise UsageError(f'no such directory: {project_dir}')
+
         infiles = find_info_files(project_dir)
     else:
         infiles = [Path(i) for i in infiles]
+
+    if not infiles:
+        raise UsageError('got no target info files to work with')
 
     # 2. extract sample IDs if possible
     samp_ids = []

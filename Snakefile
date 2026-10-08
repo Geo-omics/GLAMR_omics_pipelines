@@ -4056,6 +4056,8 @@ def get_target_info_files(wc):
         if i in skips:
             continue
         ret.append(target_info.format(sample_type='amplicons', sample=i.name))
+    if not ret:
+        print(f'[WARNING] there are no symlinks to sample data at: {project_samples}')
     return ret
 
 checkpoint amplicon_collect_target_guesses:
@@ -4063,11 +4065,9 @@ checkpoint amplicon_collect_target_guesses:
         get_target_info_files
     output:
         target_tab="data/projects/{dataset}/target_info.tsv"
-    params:
-        project_dir = subpath(output.target_tab, parent=True)
     resources: mem_mb=100, time_min=5
     log: "logs/amplicon_collect_target_guesses/{dataset}.log"
-    run: pypelib.amplicon.tabulate_targets.main(input, output=output.target_tab, log=log, **params, **wildcards)
+    run: pypelib.amplicon.tabulate_targets.main(input, output=output.target_tab, log=log, **wildcards)
 
 rule remove_primers_pe:
     input:
