@@ -953,7 +953,7 @@ def collect_benchmarks(workflow, dry_run=False, extra_suffix=None):
 
 
 def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
-                    dry_run=False, got_lock=False):
+                    dry_run=False):
     """
     Post-snakemake run processing
 
