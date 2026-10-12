@@ -980,6 +980,9 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
         Set to True for testing if no suitable checkout file is available.
         This will print output files to stdout.
     """
+    if not workflow.config.get('post-production'):
+        return
+
     if workflow:
         post_prod_files = list(filter(None, [
             workflow.config.get(i)
