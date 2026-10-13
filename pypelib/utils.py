@@ -260,7 +260,7 @@ class PipelineVersion:
         ))
 
     def __lt__(self, other):
-        if self.base == self.base:
+        if self.base == other.base:
             if self.count == other.count:
                 if self.hash == other.hash:
                     # non-suffix sorts before suffix, otherwise
