@@ -150,6 +150,15 @@ def filter_fastq(discards, infilename, outfile):
     outfile.flush()
 
 
+def rc(seq):
+    """
+    Helper to compute the reverse complement of a sequence
+
+    Takes a str and returns a str
+    """
+    return str(Seq(seq).reverse_complement())
+
+
 @logme()
 def main_single(
     target_info=None,
@@ -158,12 +167,12 @@ def main_single(
     log=None,
     conda_env=None,
 ):
-    fwd_pr, rev_pr, swapped, clean, rc = load_target_info(target_info)
+    fwd_pr, rev_pr, swapped, clean, rc_mode = load_target_info(target_info)
 
     if swapped:
         raise ValueError('single data should not be swapped')
 
-    if rc:
+    if rc_mode:
         # Reads look like the reverse reads of paired-ended data.
         # What we call the reverse primer is actually sequenced at the
         # single read's 5' end, so just for cutadapts benefit, here we're
@@ -171,7 +180,7 @@ def main_single(
         fwd_clean = clean['rev']
         rev_clean = clean['fwd']
         fwd_pr_sequence = rev_pr.sequence
-        rev_pr_sequence = str(Seq(fwd_pr.sequence).reverse_complement())
+        rev_pr_sequence = fwd_pr.sequence
     else:
         fwd_clean = clean['fwd']
         rev_clean = clean['rev']
@@ -183,7 +192,7 @@ def main_single(
         if not fwd_clean:
             args += ['-g', fwd_pr_sequence]
         if not rev_clean:
-            args += ['-a', rev_pr_sequence]
+            args += ['-a', rc(rev_pr_sequence)]
     except AttributeError as e:
         # e.g. primer is None
         raise RuntimeError(
@@ -228,9 +237,9 @@ def main_paired(
     log=None,
     conda_env=None,
 ):
-    fwd_pr, rev_pr, swapped, clean, rc = load_target_info(target_info)
+    fwd_pr, rev_pr, swapped, clean, rc_mode = load_target_info(target_info)
 
-    if rc:
+    if rc_mode:
         raise ValueError('RC\'d paired data should not be a thing')
 
     if swapped:
@@ -249,11 +258,11 @@ def main_paired(
         if not clean['fwd']:
             args += ['-g', fwd_pr_sequence]
         if not clean['fwd_rev']:
-            args += ['-a', str(Seq(rev_pr_sequence).reverse_complement())]
+            args += ['-a', rc(rev_pr_sequence)]
         if not clean['rev']:
             args += ['-G', rev_pr_sequence]
         if not clean['rev_fwd']:
-            args += ['-A', str(Seq(fwd_pr_sequence).reverse_complement())]
+            args += ['-A', rc(fwd_pr_sequence)]
     except AttributeError as e:
         # e.g. primer is None
         raise RuntimeError(
