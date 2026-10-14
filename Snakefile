@@ -4034,7 +4034,7 @@ rule amplicon_guess_target:
 
 def get_target_info_files(wc):
     """
-    input function for amplicon_dispatch
+    input function for amplicon_collect_target_guesses
 
     Collects target info files for each amplicon sample in given dataset.
     """
@@ -4053,8 +4053,23 @@ def get_target_info_files(wc):
     target_info = rules.amplicon_guess_target.output.target_info
     ret = []
     for i in project_samples.glob("samp_*"):
-        if i in skips:
+        sample = i.name
+        if sample in skips:
             continue
+
+        accession_file = rules.get_sra_metadata.input.accession.format(sample_type='amplicons', sample=sample)
+        try:
+            with open(accession_file) as ifile:
+                accn = parse_accession(ifile)
+        except FileNotFoundError as e:
+            pass
+        else:
+            if accn == 'missing':
+                # accession is unavailable and not forthcoming, skip this
+                # TODO: There may be other indicators for this condition e.g.
+                # "NF" -- need to be standardized and documented
+                continue
+
         ret.append(target_info.format(sample_type='amplicons', sample=i.name))
     if not ret:
         print(f'[WARNING] there are no symlinks to sample data at: {project_samples}')
