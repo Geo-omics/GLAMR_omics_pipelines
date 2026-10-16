@@ -215,7 +215,9 @@ def update_json(primers, output=None):
 def locate_sequences(primers, db=DEFAULT_AMPLICON_HMM_DB, output=None):
     if not Path(db).is_file():
         raise ValueError(f'hmm DB not found (no such file): {db}')
-    data = b''.join(f'>{i.name}\n{i.sequence}\n'.encode() for i in primers)
+
+    seqs = [(i.name, i.sequence) for i in primers if i.sequence is not None]
+    data = b''.join(f'>{name}\n{sequence}\n'.encode() for name, sequence in seqs)
     cmd = [
         'nhmmscan', '--cpu', '4', '--tblout', 'primer_alignments.csv',
         '--max',  # !important
