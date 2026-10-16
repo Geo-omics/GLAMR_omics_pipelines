@@ -242,17 +242,6 @@
         "region": null
     },
     {
-        "name": "1046R",
-        "sequence": null,
-        "direction": "reverse",
-        "gene_target": null,
-        "citation": null,
-        "hmm_name": null,
-        "start": null,
-        "end": null,
-        "region": null
-    },
-    {
         "name": "804R",
         "sequence": null,
         "direction": "reverse",
@@ -396,6 +385,72 @@
         "region": null
     },
     {
+        "name": "Copepod_16S_F",
+        "sequence": "TAAGGTAGCATARTAATTWG",
+        "direction": "forward",
+        "gene_target": "mito 16S",
+        "citation": "Clarke et al (2017) via paper_61",
+        "hmm_name": "16S_rRNA_mito",
+        "start": 946,
+        "end": 964,
+        "region": null
+    },
+    {
+        "name": "Copepod_16S_R",
+        "sequence": "TAATTCAACATCGAGGTC",
+        "direction": "reverse",
+        "gene_target": "mito 16S",
+        "citation": "Clarke et al (2017) via paper_61",
+        "hmm_name": "16S_rRNA_mito",
+        "start": 1377,
+        "end": 1393,
+        "region": null
+    },
+    {
+        "name": "Insect_16S_F",
+        "sequence": "TGCAAAGGTAGCATAATMATTAG",
+        "direction": "forward",
+        "gene_target": "mito 16S",
+        "citation": "Epp et al (2012) via paper_61",
+        "hmm_name": "16S_rRNA_mito",
+        "start": 942,
+        "end": 964,
+        "region": null
+    },
+    {
+        "name": "Insect_16S_R",
+        "sequence": "TCCATAGGGTCTTCTCGTC",
+        "direction": "reverse",
+        "gene_target": "mito 16S",
+        "citation": "Epp et al (2012) via paper_61",
+        "hmm_name": "16S_rRNA_mito",
+        "start": 1072,
+        "end": 1090,
+        "region": null
+    },
+    {
+        "name": "Mollusk_16S_F",
+        "sequence": "RRWRGACRAGAAGACCCT",
+        "direction": "forward",
+        "gene_target": "mito 16S",
+        "citation": "Klymus et al (2017) via paper_61",
+        "hmm_name": "16S_rRNA_mito",
+        "start": 1070,
+        "end": 1085,
+        "region": null
+    },
+    {
+        "name": "Mollusk_16S_R",
+        "sequence": "ARTCCAACATCGAGGT",
+        "direction": "reverse",
+        "gene_target": "mito 16S",
+        "citation": "Klymus et al (2017) via paper_61",
+        "hmm_name": "16S_rRNA_mito",
+        "start": 1378,
+        "end": 1392,
+        "region": null
+    },
+    {
         "name": "V5F",
         "sequence": "ACCTGCCTGCCGATTAGATACCCNGGTAG",
         "direction": "forward",
@@ -415,6 +470,61 @@
         "hmm_name": "16S_rRNA_bac",
         "start": 1036,
         "end": 1060,
+        "region": "-V6"
+    },
+    {
+        "name": "967F_PP",
+        "sequence": "CNACGCGAAGAACCTTANC",
+        "direction": "forward",
+        "gene_target": "bac 16S rRNA",
+        "citation": "Eren et al (2013) via paper_51",
+        "hmm_name": "16S_rRNA_bac",
+        "start": 958,
+        "end": 975,
+        "region": "V6-"
+    },
+    {
+        "name": "967F_AQ",
+        "sequence": "CTAACCGANGAACCTYACC",
+        "direction": "forward",
+        "gene_target": "bac 16S rRNA",
+        "citation": "Eren et al (2013) via paper_51",
+        "hmm_name": "16S_rRNA_bac",
+        "start": 958,
+        "end": 975,
+        "region": "V6-"
+    },
+    {
+        "name": "967F_U2",
+        "sequence": "CAACGCGMARAACCTTACC",
+        "direction": "forward",
+        "gene_target": "bac 16S rRNA",
+        "citation": "Eren et al (2013) via paper_51",
+        "hmm_name": "16S_rRNA_bac",
+        "start": 958,
+        "end": 975,
+        "region": "V6-"
+    },
+    {
+        "name": "967F_U3",
+        "sequence": "ATACGCGARGAACCTTACC",
+        "direction": "forward",
+        "gene_target": "bac 16S rRNA",
+        "citation": "Eren et al (2013) via paper_51",
+        "hmm_name": "16S_rRNA_bac",
+        "start": 958,
+        "end": 975,
+        "region": "V6-"
+    },
+    {
+        "name": "1046R",
+        "sequence": "CGACRRCCATGCANCACCT",
+        "direction": "reverse",
+        "gene_target": "bac 16S rRNA",
+        "citation": "Eren et al (2013) via paper_51",
+        "hmm_name": "16S_rRNA_bac",
+        "start": 1036,
+        "end": 1054,
         "region": "-V6"
     }
 ]
