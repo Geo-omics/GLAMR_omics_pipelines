@@ -3988,10 +3988,14 @@ rule amplicon_hmm_summarize_r:
     input: rules.amplicon_hmm.output.hmm_tbl
     output: "data/omics/amplicons/{sample}/detect_region/{direc}_summary.tsv"
     resources: mem_mb=10000, time_min=500
-    benchmark: "benchmarks/amplicon_hmm_summarize_a/{sample}_{direc}.txt"
-    log: "logs/amplicon_hmm_summarize_a/{sample}_{direc}.log"
+    benchmark: "benchmarks/amplicon_hmm_summarize_r/{sample}_{direc}.txt"
+    log: "logs/amplicon_hmm_summarize_r/{sample}_{direc}.log"
     container: "docker://eandersk/r_microbiome"
-    shell: "$BASE/code/summarize_hmmscan.R --input {input} --output {output} |& tee {log}"
+    shell:
+        """
+        logto {log}
+        $BASE/code/summarize_hmmscan.R --input {input} --output {output}
+        """
 
 rule amplicon_hmm_summarize:
     input: rules.amplicon_hmm.output.hmm_tbl
