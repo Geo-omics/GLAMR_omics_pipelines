@@ -1188,8 +1188,8 @@ rule assemble_biosyntheticSPAdes:
 
 rule assemble_RNAspades:
     input:
-        fwd_reads = rules.remove_contaminants_fastp.output.decon_fwd,
-        rev_reads = rules.remove_contaminants_fastp.output.decon_rev
+        fwd_reads = rules.ribodetector.output.ribo_removed_fwd,
+        rev_reads = rules.ribodetector.output.ribo_removed_rev
     output:
         contigs = "data/omics/{sample_type}/{sample}/assembly/RNAspades/transcripts.fasta"
     params:
