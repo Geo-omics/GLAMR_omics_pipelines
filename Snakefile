@@ -786,7 +786,7 @@ rule remove_contaminants:
             in2={output.trimmed_rev} \
             outu1={output.phix_rm_fwd} \
             outu2={output.phix_rm_rev} \
-            t={resources.cpus} k=31 hdist=1 \
+            t={threads} k=31 hdist=1 \
             ref={input.spike_ins} \
             path={params.bbmap_index_path} \
             2>&1 | tee -a {log}
