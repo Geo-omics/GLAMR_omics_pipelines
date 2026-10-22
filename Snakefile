@@ -1076,6 +1076,33 @@ rule count_reads_fastp:
         """
         #printf "bbnorm_reads\t$(($(pigz -dc -p {threads} {input.bbnorm_reads_fwd} | wc -l) / 4 ))\t$(($(pigz -dc -p {threads} {input.bbnorm_reads_rev} | wc -l) / 4 ))\n" >> {output}
 
+# Target rule: seqkit stats for the same read files counted by count_reads_fastp
+rule seqkit_stats_fastp:
+    input:
+        expand("data/omics/{sample_type}/{sample}/reads/read_stats/{reads}.txt",
+            reads = ["raw_fwd_reads", "raw_rev_reads",
+                     "fastp_fwd_reads", "fastp_rev_reads",
+                     "decon_fwd_reads_fastp", "decon_rev_reads_fastp"],
+            allow_missing = True)
+    output:
+        touch("data/omics/{sample_type}/{sample}/reads/read_stats/.fastp_done")
+    localrule: True
+
+# Target rule: metaT equivalent, covering dedup and no-dedup plus rRNA-removed reads
+rule seqkit_stats_metaT:
+    input:
+        expand("data/omics/metatranscriptomes/{sample}/reads/read_stats/{reads}.txt",
+            reads = ["raw_fwd_reads", "raw_rev_reads",
+                     "fastp_fwd_reads", "fastp_rev_reads",
+                     "decon_fwd_reads_fastp", "decon_rev_reads_fastp",
+                     "fastp_no_dedup_fwd_reads", "fastp_no_dedup_rev_reads",
+                     "noDedup_decon_fwd_reads_fastp", "noDedup_decon_rev_reads_fastp",
+                     "ribodeplete_noDedup_decon_fwd_reads_fastp", "ribodeplete_noDedup_decon_rev_reads_fastp",
+                     "ribo_only_fwd_reads_fastp", "ribo_only_rev_reads_fastp"],
+            allow_missing = True)
+    output:
+        touch("data/omics/metatranscriptomes/{sample}/reads/read_stats/.metaT_done")
+    localrule: True
 
 rule assemble_metaspades:
     input:
