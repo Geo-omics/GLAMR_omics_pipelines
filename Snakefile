@@ -4807,6 +4807,7 @@ rule virsorter2:
             -w {params.virsorter_dir} \
             -i {input.contigs} \
             --include-groups "dsDNAphage,ssDNA" \
+            --min-length 1000 \
             -j {threads} \
             all > {log} 2>&1
         """
