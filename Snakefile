@@ -3199,7 +3199,8 @@ rule drep_new:
         input_bins = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/*.fa",
         genome_info = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/genome_info.csv", # Will need to be moved to inputs 
         main_dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/drep/"),
-        MAGs= directory("data/projects/{project}/{sample_type}/metagenome_bins/derep/dereplicated_genomes")
+        MAGs= directory("data/projects/{project}/{sample_type}/metagenome_bins/derep/dereplicated_genomes"),
+        no_bins_marker = "data/projects/{project}/{sample_type}/{sample}/bins/.no_qualifying_bins"
     conda: "config/conda_yaml/drep.yaml"
     benchmark: "benchmarks/drep/{sample_type}-{project}__{sample}.txt"
     threads: 8
@@ -3208,6 +3209,12 @@ rule drep_new:
     shell:
         """
         rm -rf {params.main_dir} # Clear any old drep output
+
+        # No bins passed the make_das_and_drep_inputs quality filter; nothing to dereplicate
+        if ! ls {params.input_bins} > /dev/null 2>&1; then
+            echo "No bins passed the quality filter, skipping dRep" | tee {params.no_bins_marker}
+            exit 0
+        fi
         
         dRep dereplicate \
             {params.main_dir} \
@@ -3260,6 +3267,8 @@ rule GTDB_to_NCBI:
     params:
         refs = "data/reference/GTDBtk/release232",
         out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/GTDB_r232",
+        input_bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep",
+        no_bins_marker = "data/projects/{project}/{sample_type}/{sample}/bins/.no_qualifying_bins"
     output: "data/projects/{project}/{sample_type}/{sample}/bins/GTDB_r232/gtdb_to_ncbi_taxonmy.tsv"
     conda: "config/conda_yaml/gtdbtk.yaml"
     benchmark: "benchmarks/GTDB_to_NCBI/{sample_type}-{project}__{sample}.txt"
@@ -3269,6 +3278,14 @@ rule GTDB_to_NCBI:
     shell:
         """
         export GTDBTK_DATA_PATH={params.refs}
+
+        # No bins passed the quality filter, so GTDB-Tk had nothing to classify; write a header-only table
+        if ! ls {params.input_bin_dir}/*.fa > /dev/null 2>&1; then
+            echo "No bins passed the quality filter, writing empty GTDB to NCBI table" | tee {params.no_bins_marker}
+            mkdir -p {params.out_dir}
+            printf "Genome ID\\tGTDB classification\\tMajority vote NCBI classification\\n" > {output}
+            exit 0
+        fi
 
         python $BASE/code/GTDBtk_scripts/gtdb_to_ncbi_majority_vote.py \
             --gtdbtk_output_dir {params.out_dir} \
@@ -3312,7 +3329,8 @@ rule GTDB_r232:
         input_bin_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep",
         out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/GTDB_r232",
         pplacer_cpus = 1,
-        refs = "data/reference/GTDBtk/release232"
+        refs = "data/reference/GTDBtk/release232",
+        no_bins_marker = "data/projects/{project}/{sample_type}/{sample}/bins/.no_qualifying_bins"
     output:
         done = touch("data/projects/{project}/{sample_type}/{sample}/bins/.done_GTDB_r232")
     conda: "config/conda_yaml/gtdbtk_2.7.2.yaml"
@@ -3323,6 +3341,12 @@ rule GTDB_r232:
     shell:
         """
         export GTDBTK_DATA_PATH={params.refs}
+
+        # No bins passed the quality filter; GTDB-Tk errors on an empty genome_dir
+        if ! ls {params.input_bin_dir}/*.fa > /dev/null 2>&1; then
+            echo "No bins passed the quality filter, skipping GTDB-Tk" | tee {params.no_bins_marker}
+            exit 0
+        fi
 
         # R232's reference package is the pre-sketched skani "split" package;
         gtdbtk classify_wf \
