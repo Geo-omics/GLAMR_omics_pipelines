@@ -237,6 +237,7 @@ def update_omics_checkout(
     data_root,
     version_before_mtime=False,
     checkout_file=None,
+    start_time=None,
     extra_suffix=None,
     dry_run=False,
 ):
@@ -249,6 +250,9 @@ def update_omics_checkout(
     checkout_file:
         Path to new or existing checkout file.  If this is None, then the
         output file will be written to stdout instead.
+
+    start_time:
+        A datetime instance of when the workflow started.
 
     Returns dict of statistics.
     """
@@ -335,8 +339,13 @@ def update_omics_checkout(
             elif mtime < old_mtime:
                 # ? maybe data loss
                 raise RuntimeError('old time more recent than current')
+            elif start_time and start_time < old_mtime:
+                # file was written by other workflow instance running
+                # concurrently, just notify, this would require manual
+                # unravelling
+                print(f'[ERROR] was output of concurrent workflow instance: {relpath}')
             else:
-                # file got updated, append below
+                # all is good, file got updated, append below
                 pass
 
         if version_before_mtime:
@@ -1060,11 +1069,22 @@ def post_production(log, workflow=None, *, data_root=None, checkout_file=None,
                     print('[post] no output files per log')
 
             if outputs and checkout_file or dry_run:
+                try:
+                    # workflow startime is encoded in log file name (see
+                    # snakemake.logging.setup_logfile())
+                    start_time = datetime.fromisoformat(
+                        log.name.removesuffix('.snakemake.log')
+                    ).astimezone()
+                except ValueError as e:
+                    start_time = None
+                    print(f'[WARNING] failed getting the workflow start time: {e}')
+
                 stats = update_omics_checkout(
                     outputs,
                     data_root,
                     version_before_mtime=pl_version is None,
                     checkout_file=checkout_file,
+                    start_time=start_time,
                     extra_suffix=extra_suffix,
                     dry_run=dry_run,
                 )
