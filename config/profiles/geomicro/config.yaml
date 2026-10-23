@@ -10,7 +10,7 @@ default-resources: [mem_mb=4000, time_min=120, ncbi_api=0, gpu=0, disk_mb=100]
 #resources: [disk_mb=2000000]
 resources: [mem_mb=700000, ncbi_api=5, disk_mb=2000000]
 latency-wait: 60
-cluster-generic-status-cmd: "${SLURM_STATUS_CMD:-/nfs/turbo/lsa-kiledal/GLAMR/pypelib/slurm_status.py}"
+cluster-generic-status-cmd: "${SLURM_STATUS_CMD:-/nfs/turbo/lsa-kiledal/GLAMR/code/slurm_status}"
 max-status-checks-per-second: 10
 singularity-args: "--home $HOME:/home/$USER --bind /nfs/turbo/lsa-gdick2/geomicro --bind /nfs:/nfs"
 precommand: "mkdir -p logs/slurm/ logs/ benchmarks/"
