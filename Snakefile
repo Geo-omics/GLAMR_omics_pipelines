@@ -4277,7 +4277,7 @@ rule amplicon_asv_check:
 
 def get_taxonomy_db(target_spec):
     """
-    Return the taxonomy reference DB path for a given target spec, or None.
+    Return the taxonomy reference DB path for a given target spec.
 
     Looks up the HMM model name prefix in config['amplicon_taxonomy_dbs'].
     To add taxonomy for a new marker (18S, ITS, COI, etc.) add an entry to
@@ -4286,12 +4286,16 @@ def get_taxonomy_db(target_spec):
         amplicon_taxonomy_dbs:
           16S_rRNA_bac: data/reference/dada2/silva_nr99_v138.2_toSpecies_trainset.fa.gz
           18S_rRNA_euk: data/reference/dada2/pr2_version_5_SSU_dada2.fasta.gz
+
+    To avoid raising exceptions, in case of error return a non-existing path.
     """
     dbs = config.get('amplicon_taxonomy_dbs', {})
     for model_prefix, db_path in dbs.items():
-        if target_spec.startswith(model_prefix):
+        if target_spec.startswith(model_prefix + '.'):
             return db_path
-    return None
+
+    print(f'[ERROR] No matching amplicon taxonomy DB for {target_spec}')
+    return '/doesnotexist'
 
 
 rule amplicon_dada2_taxonomy:
@@ -4310,6 +4314,7 @@ rule amplicon_dada2_taxonomy:
     shell:
         """
         logto {log}
+        [[ -f "{params.ref}" ]] || {{ echo "[ERROR] No such file: {params.ref}"; exit 1; }}
         $BASE/code/dada2_assign_taxonomy.R \
             --ref {params.ref} \
             --seqs {input.seqs} \
