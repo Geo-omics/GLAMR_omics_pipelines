@@ -29,7 +29,6 @@ def cli():
     )
     argp.add_argument(
         'raw_rev_fastq',
-        required=False,
         help='Reverse raw fastq file, gzipped',
     )
     argp.add_argument('--fwd-out', required=True,
@@ -38,7 +37,7 @@ def cli():
     argp.add_argument('--log', help='log file, will otherwise go to stdout')
     args = argp.parse_args()
 
-    with ExitStack as estack:
+    with ExitStack() as estack:
         if args.log:
             log = estack.enter_context(open(args.log, 'w'))
         else:
