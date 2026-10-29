@@ -58,6 +58,7 @@ assignments <- read.delim(
     header=TRUE,
     fill=TRUE,
 ) |> tibble() |>
+    mutate(override = sub('^__AUTO__', '', override)) |>
     mutate(assigned=if_else(override == "", target, override, missing=target)) |>
     filter(assigned %in% valid_targets)
 
