@@ -95,6 +95,7 @@ def find_5p_primer(primer_sequence, fastq, test_profile, log, conda_env):
             else:
                 # always discard those with error
                 discards.append(idx)
+        total = idx + 1
         if environ.get('KEEP_CUTADAPT_INFO'):
             dst = Path(fastq).with_suffix('.cutadapt_info.txt')
             shutil.copyfile(info_file.name, dst)
@@ -122,12 +123,11 @@ def find_5p_primer(primer_sequence, fastq, test_profile, log, conda_env):
                     discards.append(idx)
         case _:
             raise ValueError('invalid test profile')
-            discards.append(idx)
 
-    good_count = idx + 1 - len(discards)
+    good_count = total - len(discards)
     print(
         f'{fastq}: keeping {good_count} reads, discarding '
-        f'{len(discards) / (idx + 1):.1%}\nstats: {stats}',
+        f'{len(discards) / total:.1%}\nstats: {stats}',
         file=log
     )
     return discards
