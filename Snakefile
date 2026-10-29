@@ -2444,6 +2444,117 @@ rule kofam_scan:
             --ko-list {input.ko_list} {input.genes} | tee {log}
         """
         
+
+rule eggnog_sif_download:
+    output:
+        sif = "data/reference/singularity/eggnog-mapper-3.0.0-beta6.sif"
+    log: "logs/eggnog_sif_download/eggnog-mapper-3.0.0-beta6.log"
+    benchmark: "benchmarks/eggnog_sif_download/eggnog-mapper-3.0.0-beta6.txt"
+    resources: cpus=1, mem_mb=4000, time_min=120, heavy_network=1
+    shell:
+        """
+        mkdir -p data/reference/singularity logs/eggnog_sif_download
+        wget -c -P data/reference/singularity https://data.cgmlab.org/eggnog-mapper/emapper-3.0/eggnog-mapper-3.0.0-beta6.sif 2>&1 | tee {log}
+        """
+
+rule eggnog_db_download:
+    output:
+        database_dir = directory("data/reference/eggnog")
+    params:
+        base_url = "https://data.cgmlab.org/eggnog-mapper/emapper-3.0/data"
+    log: "logs/eggnog_db_download/eggnog-mapper-3.0.0-beta6.log"
+    benchmark: "benchmarks/eggnog_db_download/eggnog-mapper-3.0.0-beta6.txt"
+    resources: cpus=1, mem_mb=8000, time_min=2880, heavy_network=1
+    shell:
+        """
+        files="eggnog.db eggnog.db.fieldpresence.bin eggnog.db.taxids.bin eggnog.taxa.db eggnog.taxa.db.traverse.pkl eggnog_proteins.dmnd go-basic.obo"
+        mkdir -p {output.database_dir} logs/eggnog_db_download
+        for f in $files; do
+            wget -c -P {output.database_dir} {params.base_url}/$f >> {log} 2>&1 || exit 1
+        done
+        for f in $files; do
+            if [[ ! -s {output.database_dir}/$f ]]; then
+                echo "eggNOG db file missing or empty: $f" >&2
+                exit 1
+            fi
+        done
+        echo "eggNOG 7 database (emapper-3.0) complete:"
+        ls -lh {output.database_dir}
+        """
+
+rule eggnog:
+    input:
+        proteins = "data/omics/{sample_type}/{sample}/proteins/{sample}_PROTEINS.faa",
+        db = "data/reference/eggnog",
+        sif = "data/reference/singularity/eggnog-mapper-3.0.0-beta6.sif"
+    output:
+        annotations = "data/omics/{sample_type}/{sample}/eggnog/{sample}.emapper.annotations"
+    params:
+        out_dir = "data/omics/{sample_type}/{sample}/eggnog"
+    singularity: "data/reference/singularity/eggnog-mapper-3.0.0-beta6.sif"
+    log: "logs/eggnog/{sample_type}-{sample}.log"
+    benchmark: "benchmarks/eggnog/{sample_type}-{sample}.txt"
+    threads: 12
+    resources: time_min=2880, mem_mb = lambda wildcards, attempt: attempt * 120000
+    shell:
+        """
+        # Keep temp files and the eggNOG db copy on node-local disk, off turbo (emapper defaults to the cwd): on Great Lakes the
+        # job's private /tmp (node-local, cleared by SLURM); on alpena/cayman/vondamm the node's /scratch/$USER; else /tmp
+        if [[ "${{SLURM_CLUSTER_NAME:-}}" == greatlakes ]]; then
+            LOCAL_DIR=/tmp/$USER
+        elif [[ -d /scratch/$USER ]]; then
+            LOCAL_DIR=/scratch/$USER
+        else
+            LOCAL_DIR=/tmp/$USER
+        fi
+        TMP_DIR=$LOCAL_DIR/eggnog_tmp/{wildcards.sample}
+        rm -rf $TMP_DIR
+        mkdir -p logs/eggnog $TMP_DIR
+        trap 'rm -rf "$TMP_DIR"' EXIT
+
+        # Many jobs reading one shared 22 GB eggnog.db (SQLite) over NFS slows annotation to a crawl (~2 q/s vs ~100 node-local).
+        # Keep a node-local copy, made under a lock (node-local, so flock is reliable) and re-made if the source
+        # db changes; shared by jobs on a lab node, per job on Great Lakes. The DIAMOND db is read sequentially, so just link it.
+        DB_CACHE=$LOCAL_DIR/eggnog_db
+        SRC_STAMP=$(stat -L -c '%s %Y' {input.db}/eggnog.db)
+        mkdir -p $DB_CACHE
+        (
+            flock 9
+            if [[ "$(cat $DB_CACHE/.complete 2>/dev/null)" != "$SRC_STAMP" ]]; then
+                rm -rf $DB_CACHE/db.partial $DB_CACHE/.complete
+                mkdir -p $DB_CACHE/db.partial
+                for f in {input.db}/*; do
+                    [[ $(basename $f) == eggnog_proteins.dmnd ]] && ln -s $(realpath $f) $DB_CACHE/db.partial/ || cp $f $DB_CACHE/db.partial/
+                done
+                rm -rf $DB_CACHE/db
+                mv $DB_CACHE/db.partial $DB_CACHE/db
+                echo "$SRC_STAMP" > $DB_CACHE/.complete
+            fi
+        ) 9> $DB_CACHE/.lock
+        DB_DIR=$DB_CACHE/db
+
+        # emapper 3.0.0-beta6 hard-codes the annotation worker timeout at 2 s/seed (250 s per 125-seed sub-batch), which slow
+        # db reads exceed. Run a per-job copy of the package with a 20 s/seed timeout (min 30 min), shadowing the container's.
+        EMAPPER_PKG=$(python3 -c 'import eggnogmapper, os; print(os.path.dirname(eggnogmapper.__file__))')
+        mkdir -p $TMP_DIR/pylib
+        cp -r $EMAPPER_PKG $TMP_DIR/pylib/
+        sed -i 's/_TASK_TIMEOUT = max(120, sub_batch_size \* 2)/_TASK_TIMEOUT = max(1800, sub_batch_size * 20)/' $TMP_DIR/pylib/eggnogmapper/annotator/e7/annotate.py
+        grep -q '_TASK_TIMEOUT = max(1800, sub_batch_size \* 20)' $TMP_DIR/pylib/eggnogmapper/annotator/e7/annotate.py
+        export PYTHONPATH=$TMP_DIR/pylib
+
+        rm -rf {params.out_dir}
+        mkdir -p {params.out_dir}
+        emapper.py \
+            -i {input.proteins} \
+            -o {wildcards.sample} \
+            --itype proteins \
+            --data_dir $DB_DIR \
+            --output_dir {params.out_dir} \
+            --temp_dir $TMP_DIR \
+            --cpu {threads} 2>&1 | tee {log}
+        [[ -s {output.annotations} ]]
+        """
+
 rule annotate_contigs:
     input:
         genes = rules.prodigal.output.genes,
