@@ -1,7 +1,7 @@
 [
     {
         "name": "515F",
-        "sequence": "GTGCCAGCMGCCGCGGTAA",
+        "sequence": "GTGYCAGCMGCCGCGGTAA",
         "direction": "forward",
         "gene_target": "bac 16S rRNA",
         "citation": "doi: 10.1128/mSystems.00009-15",
@@ -12,7 +12,7 @@
     },
     {
         "name": "806R",
-        "sequence": "GGACTACHVGGGTWTCTAAT",
+        "sequence": "GGACTACNVGGGTWTCTAAT",
         "direction": "reverse",
         "gene_target": "bac 16S rRNA",
         "citation": "doi: 10.1128/mSystems.00009-15",
