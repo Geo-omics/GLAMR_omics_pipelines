@@ -12,6 +12,6 @@ resources: [mem_mb=1000000000, ncbi_api=5, disk_mb=2000000]
 latency-wait: 10
 cluster-generic-status-cmd: "${SLURM_STATUS_CMD:-/nfs/turbo/lsa-kiledal/GLAMR/code/slurm_status}"
 max-status-checks-per-second: 10
-singularity-args: "--home $HOME:/home/$USER --bind /nfs/turbo/lsa-gdick2/geomicro --bind /nfs:/nfs"
+singularity-args: "--home $HOME:/home/$USER --bind /nfs/turbo/lsa-gdick2/geomicro --bind /nfs:/nfs --bind /scratch:/scratch"
 precommand: "mkdir -p logs/slurm/ logs/ benchmarks/"
 rerun-triggers: mtime
