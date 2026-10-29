@@ -4763,13 +4763,13 @@ rule contig_unirefLCA_mmseqs_generic:
         export TMPDIR={params.tmp_dir}
         
         # Different tmp dir if running on lab servers
-        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" ]] && export TMPDIR=/scratch/$USER/mmseqs2/{wildcards.sample}_contigs
-        
+        [[ "${{HOSTNAME}}" == "cayman" || "${{HOSTNAME}}" == "vondamm" || "${{HOSTNAME}}" == "alpena" ]] && export TMPDIR=/scratch/$USER/mmseqs2/{wildcards.sample}_contigs
+
         mkdir -p $TMPDIR
 
         # Log how much temp space is available, can cause job to fail
         printf "\nTemp directory storage available:\n" 2>&1 | tee {log}
-        df -h $ 2>&1 | tee -a {log}
+        df -h $TMPDIR 2>&1 | tee -a {log}
         printf "\n\n" 2>&1 | tee -a {log}
 
         #mmseqs touchdb {params.unirefDB} # loads the database into memory, only use in large memory systems / nodes
@@ -4779,7 +4779,7 @@ rule contig_unirefLCA_mmseqs_generic:
             {input.contigs} \
             {params.unirefDB} \
             ./{params.out_prefix} \
-            $ \
+            $TMPDIR \
             --lca-mode 3 \
             --orf-filter 1 \
             --orf-filter-s 3.5 \
@@ -4794,11 +4794,11 @@ rule contig_unirefLCA_mmseqs_generic:
 
         # Prior to clearing temp files, log temp space to see if potential reason for fail
         printf "\nTemp directory storage available:\n" 2>&1 | tee -a {log}
-        df -h $ 2>&1 | tee -a {log}
+        df -h $TMPDIR 2>&1 | tee -a {log}
         printf "\n\n" 2>&1 | tee -a {log}
 
-        #rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} $ 2>&1 | tee -a {log}
-        rm -r $ 2>&1 | tee -a {log}
+        #rm -r {params.tmp_fwd_reads} {params.tmp_rev_reads} $TMPDIR 2>&1 | tee -a {log}
+        rm -r $TMPDIR 2>&1 | tee -a {log}
         printf "Done, and deleted temp dir" 2>&1 | tee -a {log}
         """
 
