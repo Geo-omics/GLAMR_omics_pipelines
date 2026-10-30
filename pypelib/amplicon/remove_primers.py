@@ -218,6 +218,7 @@ def main_single(
         cmd = [
             'cutadapt',
             *args,
+            '--times', '2',  # remove both 5' primer and read-through 3' primer
             '--minimum-length', '50',  # avoid dada2 qual plotting breaking
             '--output', single_out,
             single_fastq if fwd_clean else single_tmp.name,
@@ -292,6 +293,7 @@ def main_paired(
         cmd = [
             'cutadapt',
             *args,
+            '--times', '2',  # remove both 5' primer and read-through 3' primer
             '--output', fwd_out,
             '--paired-output', rev_out,
             '--info-file', Path(fwd_out).with_name('trim_info.txt'),
