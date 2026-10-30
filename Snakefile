@@ -4116,6 +4116,25 @@ rule summarize_marker_mapping:
         """
 
 
+rule build_coi_hmm:
+    """
+    Build a nucleotide HMM of the full-length COI gene from MIDORI2, for
+    detecting COI amplicons.  Gets added to the combined amplicon HMM by
+    code/make_amplicon_hmm_combined.sh.
+    """
+    input: "data/reference/midori2/GB273/MIDORI2_LONGEST_NUC_GB273_CO1_DADA2.fasta.gz"
+    output: "data/reference/hmm_amplicons/coi/COI_mito.hmm"
+    log: "logs/build_coi_hmm/COI_mito.log"
+    conda: "config/conda_yaml/hmmer.yaml"
+    threads: 16
+    resources: mem_mb=16000, time_min=120
+    shell:
+        """
+        logto {log}
+        $BASE/code/build_coi_hmm.sh {input} {output} {threads}
+        """
+
+
 rule amplicon_hmm:
     input: "data/omics/amplicons/{sample}/reads/raw_{direc}_reads.fastq.gz"
     output:
@@ -4386,6 +4405,25 @@ rule amplicon_asv_check:
             )
 
 
+rule amplicon_coi_asv_check:
+    """
+    Flag COI ASVs that are likely pseudogenes (NUMTs) or errors, by stop codons
+    and length (frame shifts).  Does not filter the ASV table.
+    """
+    input: asvs = rules.amplicon_asv_check.output.asvs
+    output: checks = "data/projects/{dataset}/dada2.{target_spec}/asv_coi_check.tsv"
+    wildcard_constraints:
+        target_spec = r"COI_mito\..+",
+    log: "logs/amplicon_coi_asv_check/{dataset}_{target_spec}.log"
+    container: "docker://eandersk/r_microbiome"
+    resources: mem_mb=4000, time_min=30
+    shell:
+        """
+        logto {log}
+        $BASE/code/coi_asv_check.R --seqs {input.asvs} --out {output.checks}
+        """
+
+
 def get_taxonomy_db(target_spec):
     """
     Return the taxonomy reference DB path for a given target spec.
@@ -4431,6 +4469,21 @@ def get_taxonomy_levels(target_spec):
     return 'Kingdom,Phylum,Class,Order,Family,Genus,Species'
 
 
+def get_taxonomy_mem_mb(target_spec):
+    """
+    Return memory (MB) for assigning taxonomy with the DB for a given target spec.
+
+    DADA2's assignTaxonomy memory scales with the number of distinct lineages in
+    the reference, e.g. MIDORI2 CO1 needs ~67 GB.  Looks up the HMM model name
+    prefix in config['amplicon_taxonomy_mem_mb'], default 16000.
+    """
+    mems = config.get('amplicon_taxonomy_mem_mb') or {}
+    for model_prefix, mem_mb in mems.items():
+        if target_spec.startswith(model_prefix + '.'):
+            return int(mem_mb)
+    return 16000
+
+
 rule amplicon_dada2_taxonomy:
     """Assign taxonomy to DADA2 ASVs using a configured reference database."""
     input:
@@ -4444,7 +4497,9 @@ rule amplicon_dada2_taxonomy:
     benchmark: "benchmarks/amplicon_dada2_taxonomy/{dataset}_{target_spec}.txt"
     container: "docker://eandersk/r_microbiome"
     threads: 8
-    resources: mem_mb=16000, time_min=120
+    resources:
+        mem_mb = lambda wc: get_taxonomy_mem_mb(wc.target_spec),
+        time_min = 120,
     shell:
         """
         logto {log}
@@ -4609,6 +4664,9 @@ def get_dada2_output(wc):
             files[i].append(j.format(dataset=wc.dataset, target_spec=i))
         for j in rules.amplicon_dada2_taxonomy_polish.output:
             files[i].append(j.format(dataset=wc.dataset, target_spec=i))
+        if i.startswith('COI_mito.'):
+            for j in rules.amplicon_coi_asv_check.output:
+                files[i].append(j.format(dataset=wc.dataset, target_spec=i))
     return files
 
 rule amplicon_pipeline_dataset:

@@ -6,3 +6,4 @@ channels:
 dependencies:
   - hmmer=3.4
   - seqkit=2.8.2
+  - mafft=7.525

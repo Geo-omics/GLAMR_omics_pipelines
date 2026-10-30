@@ -48,6 +48,14 @@ HMM_MODEL_DATA = {
     '12S_rRNA_mito': {
         'length': 947,
     },
+    # full-length COI, built by rule build_coi_hmm from MIDORI2 (see code/build_coi_hmm.sh)
+    #       LCO1490 starts at 121, HCO2198 ends at 830
+    'COI_mito': {
+        'regions': {
+            'Folmer': (121, 830),
+        },
+        'length': 1729,
+    },
     '23S_rRNA_bac': {'length': 2906},
     '23S_rRNA_arc': {'length': 2978},
     '28S_rRNA_euk': {'length': 3729},

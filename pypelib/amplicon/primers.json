@@ -309,47 +309,47 @@
     },
     {
         "name": "F",
-        "sequence": "GGTCAACAAATCATAAAGATATTGG",
+        "sequence": "GGTCAACAAATCATAAAGAYATYGG",
         "direction": "forward",
         "gene_target": "COI-F230",
-        "citation": "paper_15 / Gibson et al. (2015)",
-        "hmm_name": null,
-        "start": null,
-        "end": null,
-        "region": null
+        "citation": "paper_15 / Gibson et al. (2015); dgLCO1490 (Meyer 2003) variant of LCO1490 (Folmer et al. 1994)",
+        "hmm_name": "COI_mito",
+        "start": 121,
+        "end": 143,
+        "region": "COI"
     },
     {
         "name": "230_R",
-        "sequence": "CTTATRTTRTTTATICGIGGRAAIGC",
+        "sequence": "CTTATRTTRTTTATNCGNGGRAANGC",
         "direction": "reverse",
         "gene_target": "COI-F230",
         "citation": "paper_15 / Gibson et al. (2015)",
-        "hmm_name": null,
-        "start": null,
-        "end": null,
-        "region": null
+        "hmm_name": "COI_mito",
+        "start": 376,
+        "end": 401,
+        "region": "COI"
     },
     {
         "name": "B",
-        "sequence": "CCIGAYATRGCITTYCCICG",
+        "sequence": "CCNGAYATRGCNTTYCCNCG",
         "direction": "forward",
         "gene_target": "COI-BE",
         "citation": "paper_15 / Gibson et al. (2015)",
-        "hmm_name": null,
-        "start": null,
-        "end": null,
-        "region": null
+        "hmm_name": "COI_mito",
+        "start": 367,
+        "end": 386,
+        "region": "COI"
     },
     {
         "name": "R5",
-        "sequence": "GTRATIGCICCIGCIARIAC",
+        "sequence": "GTRATNGCNCCNGCNARNAC",
         "direction": "reverse",
         "gene_target": "COI-BE",
         "citation": "paper_15 / Gibson et al. (2015)",
-        "hmm_name": null,
-        "start": null,
-        "end": null,
-        "region": null
+        "hmm_name": "COI_mito",
+        "start": 700,
+        "end": 719,
+        "region": "COI"
     },
     {
         "name": "16Sar",
@@ -526,5 +526,126 @@
         "start": 1036,
         "end": 1054,
         "region": "-V6"
+    },
+    {
+        "name": "jgHCO2198",
+        "sequence": "TANACYTCNGGRTGNCCRAARAAYCA",
+        "direction": "reverse",
+        "gene_target": "COI",
+        "citation": "Geller et al. (2013); includes HCO2198, dgHCO2198, LepR1, FishR1",
+        "hmm_name": "COI_mito",
+        "start": 805,
+        "end": 830,
+        "region": "COI"
+    },
+    {
+        "name": "mlCOIintF-XT",
+        "sequence": "GGWACWRGWTGRACWNTNTAYCCYCC",
+        "direction": "forward",
+        "gene_target": "COI",
+        "citation": "Wangensteen et al. (2018); includes mlCOIintF (Leray et al. 2013)",
+        "hmm_name": "COI_mito",
+        "start": 466,
+        "end": 491,
+        "region": "COI"
+    },
+    {
+        "name": "BF2",
+        "sequence": "GCHCCHGAYATRGCHTTYCC",
+        "direction": "forward",
+        "gene_target": "COI",
+        "citation": "Elbrecht & Leese (2017)",
+        "hmm_name": "COI_mito",
+        "start": 364,
+        "end": 383,
+        "region": "COI"
+    },
+    {
+        "name": "BR2",
+        "sequence": "TCDGGRTGNCCRAARAAYCA",
+        "direction": "reverse",
+        "gene_target": "COI",
+        "citation": "Elbrecht & Leese (2017)",
+        "hmm_name": "COI_mito",
+        "start": 805,
+        "end": 824,
+        "region": "COI"
+    },
+    {
+        "name": "ZBJ-ArtF1c",
+        "sequence": "AGATATTGGAACWTTATATTTTATTTTTGG",
+        "direction": "forward",
+        "gene_target": "COI",
+        "citation": "Zeale et al. (2011)",
+        "hmm_name": "COI_mito",
+        "start": 135,
+        "end": 164,
+        "region": "COI"
+    },
+    {
+        "name": "ZBJ-ArtR2c",
+        "sequence": "WACTAATCAATTWCCAAATCCTCC",
+        "direction": "reverse",
+        "gene_target": "COI",
+        "citation": "Zeale et al. (2011)",
+        "hmm_name": "COI_mito",
+        "start": 325,
+        "end": 347,
+        "region": "COI"
+    },
+    {
+        "name": "CO1-CFMRa",
+        "sequence": "GGWACTAATCAATTTCCAAATCC",
+        "direction": "reverse",
+        "gene_target": "COI",
+        "citation": "Jusino et al. (2019), ANML with LCO1490",
+        "hmm_name": "COI_mito",
+        "start": 328,
+        "end": 350,
+        "region": "COI"
+    },
+    {
+        "name": "C1-J-1718",
+        "sequence": "GGAGGATTTGGAAATTGATTAGTTCC",
+        "direction": "forward",
+        "gene_target": "COI",
+        "citation": "Simon et al. (1994)",
+        "hmm_name": "COI_mito",
+        "start": 325,
+        "end": 350,
+        "region": "COI"
+    },
+    {
+        "name": "C1-J-2183",
+        "sequence": "CAACATTTATTTTGATTTTTTGG",
+        "direction": "forward",
+        "gene_target": "COI",
+        "citation": "Simon et al. (1994)",
+        "hmm_name": "COI_mito",
+        "start": 793,
+        "end": 815,
+        "region": "COI"
+    },
+    {
+        "name": "C1-N-2191",
+        "sequence": "CCCGGTAAAATTAAAATATAAACTTC",
+        "direction": "reverse",
+        "gene_target": "COI",
+        "citation": "Simon et al. (1994)",
+        "hmm_name": "COI_mito",
+        "start": 823,
+        "end": 848,
+        "region": "COI"
+    },
+    {
+        "name": "C1-N-2776",
+        "sequence": "GGATAATCAGAATATCGTCGAGG",
+        "direction": "reverse",
+        "gene_target": "COI",
+        "citation": "Simon et al. (1994)",
+        "hmm_name": "COI_mito",
+        "start": 1408,
+        "end": 1430,
+        "region": "COI"
     }
 ]
