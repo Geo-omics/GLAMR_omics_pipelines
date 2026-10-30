@@ -4396,7 +4396,10 @@ def get_taxonomy_db(target_spec):
 
         amplicon_taxonomy_dbs:
           16S_rRNA_bac: data/reference/dada2/silva_nr99_v138.2_toSpecies_trainset.fa.gz
-          18S_rRNA_euk: data/reference/dada2/pr2_version_5_SSU_dada2.fasta.gz
+          18S_rRNA_euk: data/reference/dada2/pr2_version_5.1.1_SSU_dada2.fasta.gz
+
+    If the DB's ranks differ from DADA2's default (Kingdom..Species), also add
+    the rank names to config['amplicon_taxonomy_levels'], see get_taxonomy_levels().
 
     To avoid raising exceptions, in case of error return a non-existing path.
     """
@@ -4409,6 +4412,25 @@ def get_taxonomy_db(target_spec):
     return '/doesnotexist'
 
 
+def get_taxonomy_levels(target_spec):
+    """
+    Return comma-separated taxonomic rank names for a given target spec.
+
+    Looks up the HMM model name prefix in config['amplicon_taxonomy_levels'],
+    e.g. PR2 (18S) has 9 ranks:
+
+        amplicon_taxonomy_levels:
+          18S_rRNA_euk: Domain,Supergroup,Division,Subdivision,Class,Order,Family,Genus,Species
+
+    Defaults to DADA2's Kingdom,Phylum,Class,Order,Family,Genus,Species.
+    """
+    levels = config.get('amplicon_taxonomy_levels') or {}
+    for model_prefix, tax_levels in levels.items():
+        if target_spec.startswith(model_prefix + '.'):
+            return tax_levels
+    return 'Kingdom,Phylum,Class,Order,Family,Genus,Species'
+
+
 rule amplicon_dada2_taxonomy:
     """Assign taxonomy to DADA2 ASVs using a configured reference database."""
     input:
@@ -4417,6 +4439,7 @@ rule amplicon_dada2_taxonomy:
         taxonomy = "data/projects/{dataset}/dada2.{target_spec}/taxonomy.seqs.tsv",
     params:
         ref = lambda wc: get_taxonomy_db(wc.target_spec),
+        tax_levels = lambda wc: get_taxonomy_levels(wc.target_spec),
     log: "logs/amplicon_dada2_taxonomy/{dataset}_{target_spec}.log"
     benchmark: "benchmarks/amplicon_dada2_taxonomy/{dataset}_{target_spec}.txt"
     container: "docker://eandersk/r_microbiome"
@@ -4430,7 +4453,8 @@ rule amplicon_dada2_taxonomy:
             --ref {params.ref} \
             --seqs {input.seqs} \
             --out {output.taxonomy} \
-            --cpus {threads}
+            --cpus {threads} \
+            --tax-levels {params.tax_levels}
         """
 
 rule amplicon_dada2_taxonomy_polish:
