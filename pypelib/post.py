@@ -567,15 +567,19 @@ class VersionInfoFile:
 
         return cls(data)
 
-    def get_current(self, env_name):
+    def get_existing(self, env_name, version):
         """
-        look up most recent pkg info for given env name
+        look up pkg info for given env name and version
 
         Returns None if the env is not yet listed.
         """
         rules = None
         packages = None
         for plver, data in self.data.items():
+            if version < plver:
+                # this is newer data than given version
+                break
+
             if env_data := data.get(env_name):
                 if env_data.rules is None:
                     # usually a base env
@@ -599,48 +603,38 @@ class VersionInfoFile:
         if rules or rules is None:
             return EnvPackageInfo(env_name, rules=rules, packages=packages)
         else:
-            # env not used by any rules (anymore)
+            # env not used by any rules (yet, anymore)
             return None
 
     def update(self, pipeline_version, env_pkg_info):
         """
         Incorporate given information on a single conda env.
         """
-        if self.data:
-            last_version = list(self.data)[-1]
-        else:
-            last_version = None
-        if last_version and pipeline_version < last_version:
-            # rebasing will get us here, too
-            raise ValueError(
-                f'can\'t update data for old pipeline version: '
-                f'{last_version=} {pipeline_version=}'
-            )
-
-        if current := self.get_current(env_pkg_info.name):
-            if env_pkg_info.packages == current.packages:
-                if env_pkg_info.rules is None and current.rules is None:
+        if existing_info := self.get_existing(env_pkg_info.name, pipeline_version):
+            if env_pkg_info.packages == existing_info.packages:
+                if env_pkg_info.rules is None and existing_info.rules is None:
                     # nothing to be done
                     return
-                if set(env_pkg_info.rules).issubset(current.rules):
+                if set(env_pkg_info.rules).issubset(existing_info.rules):
                     # also nothing to be done
                     return
 
         # something changed!
-        if pipeline_version == last_version:
-            # get old data for update
-            data = self.data[pipeline_version]
+        if data := self.data.get(pipeline_version, {}):
+            # got old data for update
             if env_pkg_info.name in data:
                 # keeping those rules even if packages/versions change
                 env_pkg_info.add_rules(data[env_pkg_info.name].rules)
         else:
-            # data for new pipline version to be added
-            data = {}
+            # is a new pipeline version, will be added below
+            pass
 
         data[env_pkg_info.name] = env_pkg_info
         # re-sort in case env was new to existing pipeline version
         data = dict(sorted(data.items()))
         self.data[pipeline_version] = data
+        # also ensure versions are in order
+        self.data = dict(sorted(self.data.items()))
         self.changed = True
 
     @staticmethod
