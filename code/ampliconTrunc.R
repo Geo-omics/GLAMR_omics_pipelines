@@ -3,7 +3,7 @@
 'Using dada2 with amplicon sequencing data
 
 Usage:
-  ampliconTrunc.R [--glamr-root <PATH>] --quality <N> --outdir <PATH> [--cpus <N>] --assignments <PATH> --samples <PATH> --targets <PATH> <target_spec>
+  ampliconTrunc.R [--glamr-root <PATH>] --quality <N> --outdir <PATH> [--cpus <N>] [--concatenate] --assignments <PATH> --samples <PATH> --targets <PATH> <target_spec>
 
 Options:
   -h --help             Show this screen
@@ -21,6 +21,11 @@ Options:
                         [default: ./]
   -q --quality=<N>      Quality threshold
   --cpus=<N>            Number of threads/cpus [default: 1]
+  --concatenate         Do not merge pairs by overlap, instead truncate fwd and
+                        rev reads independently by quality and concatenate them
+                        (dada2 mergePairs justConcatenate).  This is done
+                        automatically when the reads are not expected to
+                        overlap enough, e.g. for long amplicons.
 ' -> doc
 
 library(Rcpp)
@@ -36,6 +41,7 @@ library(tibble)
 message(str_glue("DADA2 version: {packageVersion('dada2')}"))
 
 MIN_OVERLAP = 20
+MIN_CONCAT_LEN = 100  # shortest truncation length per read when concatenating
 
 
 args <- docopt(doc)
@@ -193,58 +199,79 @@ overlap_len = end_overlap_hmm - begin_overlap_hmm
 cat('  hmm/fwds:', fwd_start, '-', fwd_end, '\n')
 cat('  hmm/revs:', rev_start, '-', rev_end, '\n')
 cat('  hmm/over:', begin_overlap_hmm, '-', end_overlap_hmm, ' (length:', overlap_len, ')', '\n')
-if (overlap_len < MIN_OVERLAP) {
-    stop(paste("Not enough overlap. Expected ", MIN_OVERLAP, "+. Overlap is:", overlap_len))
+concatenate = args$concatenate
+if (!concatenate && overlap_len < MIN_OVERLAP) {
+    cat("  Not enough overlap for merging (expected ", MIN_OVERLAP, "+, overlap is ", overlap_len,
+        "), switching to concatenating fwd and rev reads\n", sep='')
+    concatenate = TRUE
 }
 # Note: length of start and end on hmm does not necessarily correlate with length of start and end on seq
 
-# translate into read coordinates
-begin_overlap_seq_fwd = begin_overlap_hmm - fwd_start
-end_overlap_seq_fwd = min(begin_overlap_seq_fwd + overlap_len, max(fwd_quality$Cycle))
-begin_overlap_seq_rev = min(rev_end - begin_overlap_hmm, max(rev_quality$Cycle))
-end_overlap_seq_rev = rev_end - end_overlap_hmm
-cat('  begin_overlap_seq_fwd:', begin_overlap_seq_fwd, '\n')
-cat('    end_overlap_seq_fwd:', end_overlap_seq_fwd, '\n')
-cat('  begin_overlap_seq_rev:', begin_overlap_seq_rev, '\n')
-cat('    end_overlap_seq_rev:', end_overlap_seq_rev, '\n')
-
-# find 20-base window with maximum quality score
-fwd_window = begin_overlap_seq_fwd:(begin_overlap_seq_fwd + MIN_OVERLAP - 1)
-rev_window = (begin_overlap_seq_rev - MIN_OVERLAP + 1):begin_overlap_seq_rev
-high_score = -1
-while (last(fwd_window) < end_overlap_seq_fwd && first(rev_window) > end_overlap_seq_rev) {
-    fwd_window = fwd_window + 1
-    rev_window = rev_window - 1
-    score = sum(
-        fwd_quality$mean[fwd_window],
-        rev_quality$mean[rev_window]
-    )
-    if (score > high_score) {
-        high_score = score
-        forTrunc = last(fwd_window)
-        revTrunc = last(rev_window)
-    }
-}
-cat('  Initial trunc params:: fwd:', forTrunc, 'rev:', revTrunc, '\n')
-
-# extend to the "right"
-while (mean(fwd_quality$mean[(forTrunc - 1):(forTrunc + 1)], na.rm=TRUE) > threshold) {
-    if (forTrunc >= end_overlap_seq_fwd) {
-      break
-    }
-    forTrunc <- forTrunc + 1
+# Truncation for concatenation: each read gets truncated at the last cycle
+# before the (3-cycle running) mean quality drops below the threshold, but
+# not shorter than MIN_CONCAT_LEN and not beyond the read's extent on the HMM.
+quality_trunc <- function(quality, threshold, max_len) {
+    q = quality$mean[order(quality$Cycle)]
+    q_smooth = sapply(seq_along(q), function(i) mean(q[max(1, i - 1):min(length(q), i + 1)]))
+    below = which(q_smooth < threshold)
+    trunc = if (length(below) == 0) length(q) else below[1] - 1
+    max(MIN_CONCAT_LEN, min(trunc, max_len))
 }
 
-# extend to the "left
-while (mean(rev_quality$mean[(revTrunc - 1):(revTrunc + 1)], na.rm=TRUE) > threshold) {
-    if (revTrunc >= begin_overlap_seq_rev) {
-      break
+if (concatenate) {
+    forTrunc = quality_trunc(fwd_quality, args$quality, fwd_end - fwd_start + 1)
+    revTrunc = quality_trunc(rev_quality, args$quality, rev_end - rev_start + 1)
+    cat("  Concatenation trunc params:: fwd:", forTrunc, "rev:", revTrunc, '\n')
+} else {
+
+    # translate into read coordinates
+    begin_overlap_seq_fwd = begin_overlap_hmm - fwd_start
+    end_overlap_seq_fwd = min(begin_overlap_seq_fwd + overlap_len, max(fwd_quality$Cycle))
+    begin_overlap_seq_rev = min(rev_end - begin_overlap_hmm, max(rev_quality$Cycle))
+    end_overlap_seq_rev = rev_end - end_overlap_hmm
+    cat('  begin_overlap_seq_fwd:', begin_overlap_seq_fwd, '\n')
+    cat('    end_overlap_seq_fwd:', end_overlap_seq_fwd, '\n')
+    cat('  begin_overlap_seq_rev:', begin_overlap_seq_rev, '\n')
+    cat('    end_overlap_seq_rev:', end_overlap_seq_rev, '\n')
+
+    # find 20-base window with maximum quality score
+    fwd_window = begin_overlap_seq_fwd:(begin_overlap_seq_fwd + MIN_OVERLAP - 1)
+    rev_window = (begin_overlap_seq_rev - MIN_OVERLAP + 1):begin_overlap_seq_rev
+    high_score = -1
+    while (last(fwd_window) < end_overlap_seq_fwd && first(rev_window) > end_overlap_seq_rev) {
+        fwd_window = fwd_window + 1
+        rev_window = rev_window - 1
+        score = sum(
+            fwd_quality$mean[fwd_window],
+            rev_quality$mean[rev_window]
+        )
+        if (score > high_score) {
+            high_score = score
+            forTrunc = last(fwd_window)
+            revTrunc = last(rev_window)
+        }
     }
-    revTrunc <- revTrunc + 1
-}
-cat(" Extended trunc params:: fwd:", forTrunc, "rev:", revTrunc, '\n')
-final_overlap = overlap_len - (end_overlap_seq_fwd - forTrunc) - (begin_overlap_seq_rev - revTrunc)
-cat(" Estimated overlap:", final_overlap, '\n')
+    cat('  Initial trunc params:: fwd:', forTrunc, 'rev:', revTrunc, '\n')
+
+    # extend to the "right"
+    while (mean(fwd_quality$mean[(forTrunc - 1):(forTrunc + 1)], na.rm=TRUE) > threshold) {
+        if (forTrunc >= end_overlap_seq_fwd) {
+          break
+        }
+        forTrunc <- forTrunc + 1
+    }
+
+    # extend to the "left
+    while (mean(rev_quality$mean[(revTrunc - 1):(revTrunc + 1)], na.rm=TRUE) > threshold) {
+        if (revTrunc >= begin_overlap_seq_rev) {
+          break
+        }
+        revTrunc <- revTrunc + 1
+    }
+    cat(" Extended trunc params:: fwd:", forTrunc, "rev:", revTrunc, '\n')
+    final_overlap = overlap_len - (end_overlap_seq_fwd - forTrunc) - (begin_overlap_seq_rev - revTrunc)
+    cat(" Estimated overlap:", final_overlap, '\n')
+}  # end of overlap-based truncation
 
 # filter and trim
 cat("Filtering reads...\n")
@@ -305,8 +332,13 @@ dadaForward <- dada(filtAndTrimForward, err=errorForward, multithread=cpus)
 dadaReverse <- dada(filtAndTrimReverse, err=errorReverse, multithread=cpus)
 
 # merging forward and reverse reads
-cat("Merging pairs...\n")
-mergeReads <- mergePairs(dadaForward, filtAndTrimForward, dadaReverse, filtAndTrimReverse, verbose=TRUE)
+if (concatenate) {
+    cat("Concatenating pairs...\n")
+} else {
+    cat("Merging pairs...\n")
+}
+mergeReads <- mergePairs(dadaForward, filtAndTrimForward, dadaReverse, filtAndTrimReverse,
+                         justConcatenate=concatenate, verbose=TRUE)
 
 # construct sequence table
 seqtable <- makeSequenceTable(mergeReads)
