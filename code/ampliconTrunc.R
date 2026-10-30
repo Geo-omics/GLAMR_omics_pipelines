@@ -188,6 +188,18 @@ rev_quality <- reversePlot$data %>%
 
 threshold <- args$quality
 
+# Longest truncation that keeps most reads: filterAndTrim drops reads shorter
+# than truncLen, e.g. reads with read-through primers trimmed off.
+MIN_READ_FRAC = 0.9
+max_read_len <- function(plot_data) {
+    counts = plot_data %>% group_by(Cycle) %>% summarize(n = sum(Count)) %>% arrange(Cycle)
+    max(counts$Cycle[counts$n >= MIN_READ_FRAC * max(counts$n)])
+}
+fwd_max_len <- max_read_len(forwardPlot$data)
+rev_max_len <- max_read_len(reversePlot$data)
+cat('  read lengths reached by ', MIN_READ_FRAC * 100, '% of reads: fwd: ', fwd_max_len,
+    ' rev: ', rev_max_len, '\n', sep='')
+
 # reads in HMM coordinates
 fwd_start <- round(median(samples$fwd_hmmfrom))
 fwd_end <- round(median(samples$fwd_hmmto))
@@ -219,15 +231,15 @@ quality_trunc <- function(quality, threshold, max_len) {
 }
 
 if (concatenate) {
-    forTrunc = quality_trunc(fwd_quality, args$quality, fwd_end - fwd_start + 1)
-    revTrunc = quality_trunc(rev_quality, args$quality, rev_end - rev_start + 1)
+    forTrunc = quality_trunc(fwd_quality, args$quality, min(fwd_end - fwd_start + 1, fwd_max_len))
+    revTrunc = quality_trunc(rev_quality, args$quality, min(rev_end - rev_start + 1, rev_max_len))
     cat("  Concatenation trunc params:: fwd:", forTrunc, "rev:", revTrunc, '\n')
 } else {
 
     # translate into read coordinates
     begin_overlap_seq_fwd = begin_overlap_hmm - fwd_start
-    end_overlap_seq_fwd = min(begin_overlap_seq_fwd + overlap_len, max(fwd_quality$Cycle))
-    begin_overlap_seq_rev = min(rev_end - begin_overlap_hmm, max(rev_quality$Cycle))
+    end_overlap_seq_fwd = min(begin_overlap_seq_fwd + overlap_len, fwd_max_len)
+    begin_overlap_seq_rev = min(rev_end - begin_overlap_hmm, rev_max_len)
     end_overlap_seq_rev = rev_end - end_overlap_hmm
     cat('  begin_overlap_seq_fwd:', begin_overlap_seq_fwd, '\n')
     cat('    end_overlap_seq_fwd:', end_overlap_seq_fwd, '\n')
