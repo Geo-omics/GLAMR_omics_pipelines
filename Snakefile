@@ -4471,6 +4471,100 @@ rule amplicon_dada2_taxonomy_polish:
     run: pypelib.amplicon.fix_taxonomy.main(input.seqs, input.taxonomy, output.taxonomy)
 
 
+def get_organelle_setting(organelle, key):
+    """ Get a setting for an organelle from config['amplicon_organelle_taxonomy'] """
+    return config['amplicon_organelle_taxonomy'][organelle][key]
+
+
+rule pr2_organelle_dada2_db:
+    """
+    Build a DADA2 training set of organelle (plastid or mitochondria) 16S
+    sequences, labeled with their host taxonomy, from the PR2 merged table
+    """
+    input:
+        merged = "data/reference/pr2/v{pr2_version}/pr2_version_{pr2_version}_merged.xlsx",
+    output:
+        db = "data/reference/dada2/pr2_version_{pr2_version}_{organelle}16S_dada2.fasta.gz",
+    wildcard_constraints:
+        organelle = "plastid|mitochondria",
+    params:
+        pr2_organelles = lambda wc: get_organelle_setting(wc.organelle, 'pr2_organelles'),
+    log: "logs/pr2_organelle_dada2_db/{pr2_version}_{organelle}.log"
+    container: "docker://eandersk/r_microbiome"
+    resources: mem_mb=8000, time_min=30
+    shell:
+        """
+        logto {log}
+        $BASE/code/build_pr2_organelle_dada2.R \
+            --merged {input.merged} \
+            --organelles {params.pr2_organelles} \
+            --out {output.db}
+        """
+
+
+rule amplicon_dada2_organelle_taxonomy:
+    """
+    Re-classify ASVs that SILVA calls chloroplast or mitochondria against PR2's
+    organelle 16S sequences to get the eukaryotic host taxonomy
+    """
+    input:
+        seqs = rules.amplicon_asv_check.output.asvs,
+        taxonomy = rules.amplicon_dada2_taxonomy_polish.output.taxonomy,
+        ref = lambda wc: get_organelle_setting(wc.organelle, 'db'),
+    output:
+        taxonomy = "data/projects/{dataset}/dada2.{target_spec}/taxonomy_{organelle}.seqs.tsv",
+    wildcard_constraints:
+        organelle = "plastid|mitochondria",
+    params:
+        silva_rank = lambda wc: get_organelle_setting(wc.organelle, 'silva_rank'),
+        silva_value = lambda wc: get_organelle_setting(wc.organelle, 'silva_value'),
+        tax_levels = lambda wc: get_organelle_setting(wc.organelle, 'tax_levels'),
+        subset = "data/projects/{dataset}/dada2.{target_spec}/taxonomy_{organelle}.query.fasta",
+    log: "logs/amplicon_dada2_organelle_taxonomy/{dataset}_{target_spec}_{organelle}.log"
+    benchmark: "benchmarks/amplicon_dada2_organelle_taxonomy/{dataset}_{target_spec}_{organelle}.txt"
+    container: "docker://eandersk/r_microbiome"
+    threads: 8
+    resources: mem_mb=8000, time_min=60
+    shell:
+        """
+        logto {log}
+        # ASVs with the organelle assignment in the SILVA taxonomy
+        awk -F'\\t' -v rank={params.silva_rank} -v val={params.silva_value} \
+            'NR==1 {{for (i=1; i<=NF; i++) if ($i == rank) col = i; next}} col && $col == val {{print $1}}' \
+            {input.taxonomy} \
+            | awk 'NR==FNR {{keep[$1]; next}} /^>/ {{p = (substr($1, 2) in keep)}} p' - {input.seqs} \
+            > {params.subset}
+
+        if [[ -s {params.subset} ]]; then
+            $BASE/code/dada2_assign_taxonomy.R \
+                --ref {input.ref} \
+                --seqs {params.subset} \
+                --out {output.taxonomy} \
+                --cpus {threads} \
+                --tax-levels {params.tax_levels}
+        else
+            echo "No {params.silva_value} ASVs, writing empty taxonomy"
+            echo "asv_id,{params.tax_levels}" | tr ',' '\\t' > {output.taxonomy}
+        fi
+        rm -f {params.subset}
+        """
+
+
+rule amplicon_dada2_organelle_taxonomy_polish:
+    """
+    Replace the sequences in the first column of the organelle taxonomy assignment with ASV IDs
+    """
+    input:
+        seqs = rules.amplicon_asv_check.output.asvs,
+        taxonomy = rules.amplicon_dada2_organelle_taxonomy.output.taxonomy,
+    output:
+        taxonomy = "data/projects/{dataset}/dada2.{target_spec}/taxonomy_{organelle}.tsv",
+    wildcard_constraints:
+        organelle = "plastid|mitochondria",
+    resources: mem_mb=1000, time_min=1
+    run: pypelib.amplicon.fix_taxonomy.main(input.seqs, input.taxonomy, output.taxonomy)
+
+
 def get_dada2_output(wc):
     """
     input function: get dada2 output files for given dataset
