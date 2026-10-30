@@ -4667,6 +4667,10 @@ def get_dada2_output(wc):
         if i.startswith('COI_mito.'):
             for j in rules.amplicon_coi_asv_check.output:
                 files[i].append(j.format(dataset=wc.dataset, target_spec=i))
+        if i.startswith('16S_rRNA_bac.'):
+            for organelle in config.get('amplicon_organelle_taxonomy') or {}:
+                for j in rules.amplicon_dada2_organelle_taxonomy_polish.output:
+                    files[i].append(j.format(dataset=wc.dataset, target_spec=i, organelle=organelle))
     return files
 
 rule amplicon_pipeline_dataset:
