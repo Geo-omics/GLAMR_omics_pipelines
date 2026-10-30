@@ -4474,7 +4474,7 @@ def get_taxonomy_mem_mb(target_spec):
     Return memory (MB) for assigning taxonomy with the DB for a given target spec.
 
     DADA2's assignTaxonomy memory scales with the number of distinct lineages in
-    the reference, e.g. MIDORI2 CO1 needs ~67 GB.  Looks up the HMM model name
+    the reference, e.g. MIDORI2 CO1 needed ~67 GB.  Looks up the HMM model name
     prefix in config['amplicon_taxonomy_mem_mb'], default 16000.
     """
     mems = config.get('amplicon_taxonomy_mem_mb') or {}
@@ -4484,12 +4484,32 @@ def get_taxonomy_mem_mb(target_spec):
     return 16000
 
 
+def get_vsearch_taxonomy_setting(target_spec, key):
+    """
+    Get a setting from config['amplicon_taxonomy_vsearch'] for a target spec,
+    by its HMM model name prefix
+    """
+    for model_prefix, settings in (config.get('amplicon_taxonomy_vsearch') or {}).items():
+        if target_spec.startswith(model_prefix + '.'):
+            return settings[key]
+    raise ValueError(f'no vsearch taxonomy settings for {target_spec}')
+
+
+# target specs (by model) that get taxonomy from vsearch instead of assignTaxonomy
+VSEARCH_TAXONOMY_MODELS = '(?:{})\\.'.format(
+    '|'.join(map(re.escape, config.get('amplicon_taxonomy_vsearch') or {})) or '(?!)'
+)
+VSEARCH_TAXONOMY_SPECS = VSEARCH_TAXONOMY_MODELS + '[^/]+'
+
+
 rule amplicon_dada2_taxonomy:
     """Assign taxonomy to DADA2 ASVs using a configured reference database."""
     input:
         seqs = rules.amplicon_asv_check.output.asvs,
     output:
         taxonomy = "data/projects/{dataset}/dada2.{target_spec}/taxonomy.seqs.tsv",
+    wildcard_constraints:
+        target_spec = f'(?!{VSEARCH_TAXONOMY_MODELS})[^/]+',
     params:
         ref = lambda wc: get_taxonomy_db(wc.target_spec),
         tax_levels = lambda wc: get_taxonomy_levels(wc.target_spec),
@@ -4512,13 +4532,86 @@ rule amplicon_dada2_taxonomy:
             --tax-levels {params.tax_levels}
         """
 
+rule amplicon_vsearch_hits:
+    """
+    Global alignment of ASVs to the taxonomy DB, keeping the top hits, for
+    targets where assignTaxonomy does poorly (e.g. COI, see
+    amplicon_taxonomy_vsearch in the config)
+    """
+    input:
+        seqs = rules.amplicon_asv_check.output.asvs,
+    output:
+        hits = "data/projects/{dataset}/dada2.{target_spec}/taxonomy.vsearch_hits.tsv",
+    wildcard_constraints:
+        target_spec = VSEARCH_TAXONOMY_SPECS,
+    params:
+        ref = lambda wc: get_taxonomy_db(wc.target_spec),
+        queries = "data/projects/{dataset}/dada2.{target_spec}/taxonomy.vsearch_queries.fasta",
+    log: "logs/amplicon_vsearch_hits/{dataset}_{target_spec}.log"
+    benchmark: "benchmarks/amplicon_vsearch_hits/{dataset}_{target_spec}.txt"
+    conda: "config/conda_yaml/hmmer.yaml"
+    threads: 16
+    resources: mem_mb=8000, time_min=120
+    shell:
+        """
+        logto {log}
+        [[ -f "{params.ref}" ]] || {{ echo "[ERROR] No such file: {params.ref}"; exit 1; }}
+        # Search the parts of concatenated ASVs (joined by 10 Ns) separately, as
+        # <ASV>|<part>, otherwise the Ns and the unsequenced gap between the
+        # parts count against the identity
+        seqkit seq -w 0 {input.seqs} \
+            | awk '/^>/ {{id = substr($1, 2); next}}
+                   {{n = split($0, parts, "NNNNNNNNNN")
+                    for (i = 1; i <= n; i++) print ">" (n > 1 ? id "|" i : id) "\\n" parts[i]}}' \
+            > {params.queries}
+        vsearch --usearch_global {params.queries} \
+            --db {params.ref} \
+            --id 0.7 \
+            --strand both \
+            --maxaccepts 100 \
+            --maxrejects 500 \
+            --top_hits_only \
+            --threads {threads} \
+            --userfields query+id+target \
+            --userout {output.hits}
+        rm {params.queries}
+        """
+
+
+rule amplicon_vsearch_taxonomy:
+    """ Consensus taxonomy of the vsearch top hits, with per-rank identity thresholds """
+    input:
+        seqs = rules.amplicon_asv_check.output.asvs,
+        hits = rules.amplicon_vsearch_hits.output.hits,
+    output:
+        taxonomy = "data/projects/{dataset}/dada2.{target_spec}/taxonomy.seqs.tsv",
+    wildcard_constraints:
+        target_spec = VSEARCH_TAXONOMY_SPECS,
+    params:
+        tax_levels = lambda wc: get_taxonomy_levels(wc.target_spec),
+        min_identity = lambda wc: get_vsearch_taxonomy_setting(wc.target_spec, 'min_identity'),
+    log: "logs/amplicon_vsearch_taxonomy/{dataset}_{target_spec}.log"
+    container: "docker://eandersk/r_microbiome"
+    resources: mem_mb=4000, time_min=20
+    shell:
+        """
+        logto {log}
+        $BASE/code/vsearch_lca_taxonomy.R \
+            --seqs {input.seqs} \
+            --hits {input.hits} \
+            --out {output.taxonomy} \
+            --tax-levels {params.tax_levels} \
+            --min-identity {params.min_identity}
+        """
+
+
 rule amplicon_dada2_taxonomy_polish:
     """
     Replace the sequences in the first column of the taxonomy assignment with ASV IDs
     """
     input:
         seqs = rules.amplicon_asv_check.output.asvs,
-        taxonomy = rules.amplicon_dada2_taxonomy.output.taxonomy
+        taxonomy = "data/projects/{dataset}/dada2.{target_spec}/taxonomy.seqs.tsv",
     output:
         taxonomy = "data/projects/{dataset}/dada2.{target_spec}/taxonomy.tsv",
     resources: mem_mb=1000, time_min=1
