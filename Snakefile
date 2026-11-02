@@ -2497,7 +2497,7 @@ rule eggnog:
     threads: 12
     resources: time_min=2880, mem_mb = lambda wildcards, attempt: attempt * 120000
     shell:
-        """
+        r"""
         # Keep temp files and the eggNOG db copy on node-local disk, off turbo (emapper defaults to the cwd): on Great Lakes the
         # job's private /tmp (node-local, cleared by SLURM); on alpena/cayman/vondamm the node's /scratch/$USER; else /tmp
         if [[ "${{SLURM_CLUSTER_NAME:-}}" == greatlakes ]]; then
