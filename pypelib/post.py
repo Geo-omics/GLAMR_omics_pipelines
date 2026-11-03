@@ -18,7 +18,7 @@ import sys
 
 import yaml
 
-from .utils import PipelineVersion, try_getting_lock
+from .utils import IncomparableVersions, PipelineVersion, try_getting_lock
 
 
 BASE_SNAKEMAKE_CONDA_ENV = 'config/conda_yaml/snakemake.yaml'
@@ -576,9 +576,12 @@ class VersionInfoFile:
         rules = None
         packages = None
         for plver, data in self.data.items():
-            if version < plver:
-                # this is newer data than given version
-                break
+            try:
+                if version < plver:
+                    # this is newer data than given version
+                    break
+            except IncomparableVersions:
+                continue
 
             if env_data := data.get(env_name):
                 if env_data.rules is None:
@@ -634,7 +637,7 @@ class VersionInfoFile:
         data = dict(sorted(data.items()))
         self.data[pipeline_version] = data
         # also ensure versions are in order
-        self.data = dict(sorted(self.data.items()))
+        self.data = dict(sorted(self.data.items(), key=lambda x: x[0].sort_key()))
         self.changed = True
 
     @staticmethod

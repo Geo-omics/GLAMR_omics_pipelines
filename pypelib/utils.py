@@ -209,6 +209,15 @@ def test_logme(good='good', bad='bad'):
     raise RuntimeError('the ugly')
 
 
+class IncomparableVersions(Exception):
+    """
+    Two pipeline versions are incomparable
+
+    E.g. when they live on different branches
+    """
+    pass
+
+
 @total_ordering
 class PipelineVersion:
     """
@@ -269,19 +278,23 @@ class PipelineVersion:
                         return True
                     elif self.suffix and other.suffix and self.suffix != other.suffix:  # noqa:E501
 
-                        raise ValueError(
+                        raise IncomparableVersions(
                             'versions differing by suffix are non-comparable'
                         )
                     else:
                         False  # they're equal
                 else:
-                    raise ValueError(
+                    raise IncomparableVersions(
                         'versions differing only by hash are non-comparable'
                     )
             else:
                 return self.count < other.count
         else:
             return self.base < other.base
+
+    def sort_key(self):
+        """ Sorting key function that newer raises IncomparableVersions """
+        return (self.base, self.count, self.hash, self.suffix or '')
 
     LOG_MSG_PREFIX = 'omics pipeline version: '
 
