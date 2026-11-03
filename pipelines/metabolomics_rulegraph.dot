@@ -1,0 +1,99 @@
+// Metabolomics sub-pipeline (pipelines/metabolomics.smk): rules and what flows between them.
+// Drawn by hand from the rules' inputs/outputs, because `snakemake --rulegraph` stops at the
+// metab_run_manifest checkpoint. Render with:
+//   dot -Tsvg pipelines/metabolomics_rulegraph.dot -o pipelines/metabolomics_rulegraph.svg
+//   dot -Tpng -Gdpi=150 pipelines/metabolomics_rulegraph.dot -o pipelines/metabolomics_rulegraph.png
+// Dashed = optional: landmark RT alignment (rt_correction.method), SIRIUS (run_sirius),
+// CPM (run_cpm, positive-mode groups only). Keep in sync when rules change.
+digraph metabolomics {
+    graph [rankdir=TB, fontname="Helvetica", fontsize=12, nodesep=0.35, ranksep=0.45, newrank=true,
+           label="GLAMR metabolomics sub-pipeline (pipelines/metabolomics.smk)", labelloc=t, fontsize=16];
+    node  [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, fillcolor="#ffffff", color="#555555"];
+    edge  [color="#777777", fontname="Helvetica", fontsize=8, fontcolor="#555555"];
+
+    subgraph cluster_sample {
+        label="per sample: data/omics/metabolomes/{sample}/spectra/"; style="rounded,filled"; fillcolor="#eef4fb"; color="#9db8d9";
+        raw_thermo [label="Thermo .raw", shape=note, fillcolor="#f7f7f7"];
+        raw_vendor [label="other vendor files\n(Agilent .d, mzXML, ...)", shape=note, fillcolor="#f7f7f7"];
+        raw_mzml   [label="imported mzML", shape=note, fillcolor="#f7f7f7"];
+        metab_convert_thermo   [label="metab_convert_thermo\nThermoRawFileParser"];
+        metab_convert_vendor   [label="metab_convert_vendor\nmsconvert (Wine)"];
+        metab_mzml_fixup       [label="metab_mzml_fixup\nclean msconvert mzML"];
+        mzml [label="{sample}.mzML", shape=note, fillcolor="#f7f7f7"];
+        metab_harvest_metadata [label="metab_harvest_metadata\nrun_metadata.json\n(instrument, polarity, scans, date)"];
+    }
+
+    subgraph cluster_dataset {
+        label="per dataset: data/projects/{dataset}/metabolomics/"; style="rounded,filled"; fillcolor="#f3f0fa"; color="#b3a6d6";
+        metab_run_manifest [label="checkpoint metab_run_manifest\nrun_manifest.tsv (role, batch)\nprocessing_groups.tsv\n(method profile x polarity)", fillcolor="#e6e0f5"];
+    }
+
+    subgraph cluster_group {
+        label="per processing group: .../metabolomics/{group_id}/"; style="rounded,filled"; fillcolor="#eef7ee"; color="#a3cfa3";
+        metab_rt_landmarks    [label="metab_rt_landmarks\nlandmark ions from\nreference runs", style="rounded,filled,dashed"];
+        metab_rt_align        [label="metab_rt_align\nper-run LOESS RT correction\nrt_align/mzml/{sample}.mzML", style="rounded,filled,dashed"];
+        metab_mzmine_metadata [label="metab_mzmine_metadata\nMZmine sample types"];
+        metab_mzmine_batch    [label="metab_mzmine_batch\nMZmine 4: features, alignment,\ngap filling, MS2 export", fillcolor="#d8eed8"];
+        metab_feature_qc      [label="metab_feature_qc\nblank filter, per-batch drift,\nCV filter, normalization"];
+        metab_ms2query        [label="metab_ms2query\nlibrary/analog matches"];
+        metab_sirius          [label="metab_sirius\nformula, CSI:FingerID,\nCANOPUS classes", style="rounded,filled,dashed"];
+        metab_metams_one      [label="metab_metams_one\nmetaMS/CoreMS per run"];
+        metab_metams          [label="metab_metams"];
+        metab_cpm_metadata    [label="metab_cpm_metadata", style="rounded,filled,dashed"];
+        metab_cpm_ms1_points  [label="metab_cpm_ms1_points", style="rounded,filled,dashed"];
+        metab_cpm             [label="metab_cpm\nCyanopeptideMatching\n(per cyanopeptide class)", style="rounded,filled,dashed"];
+    }
+
+    subgraph cluster_ref {
+        label="one-time reference / setup"; style="rounded,filled"; fillcolor="#fbf6ea"; color="#dcc690";
+        metab_download_gnps_msp        [label="metab_download_gnps_msp\nGNPS curated MSP"];
+        metab_download_ms2query_models [label="metab_download_ms2query_models\n(per polarity)"];
+        metab_mzmine_check_user        [label="metab_mzmine_check_user\nMZmine login"];
+    }
+
+    outputs [label="feature table (QC-filtered) + MGF\nMS2Query, SIRIUS/CANOPUS, metaMS, CPM tables\n-> code/postgres_metabolomics.Rmd (GLAMR DB)", shape=note, fillcolor="#fff7d6"];
+    metabolomics_pipeline_dataset [label="metabolomics_pipeline_dataset\n(top rule)", fillcolor="#ffe9a8"];
+
+    // conversion
+    raw_thermo -> metab_convert_thermo -> mzml;
+    raw_vendor -> metab_convert_vendor -> metab_mzml_fixup;
+    raw_mzml -> metab_mzml_fixup -> mzml;
+    mzml -> metab_harvest_metadata;
+    metab_harvest_metadata -> metab_run_manifest [label="all samples\nin dataset"];
+
+    // per-group processing
+    metab_run_manifest -> metab_mzmine_metadata;
+    metab_harvest_metadata -> metab_rt_landmarks [style=dashed];
+    mzml -> metab_rt_landmarks [style=dashed, label="reference runs"];
+    metab_rt_landmarks -> metab_rt_align [style=dashed];
+    mzml -> metab_rt_align [style=dashed];
+    metab_rt_align -> metab_mzmine_batch [style=dashed, label="aligned mzML\n(landmark mode)"];
+    mzml -> metab_mzmine_batch [label="original mzML\n(other modes)"];
+    metab_mzmine_metadata -> metab_mzmine_batch;
+    metab_mzmine_check_user -> metab_mzmine_batch;
+
+    metab_mzmine_batch -> metab_feature_qc [label="feature table"];
+    metab_run_manifest -> metab_feature_qc [label="roles, batches"];
+    metab_mzmine_batch -> metab_ms2query [label="MGF"];
+    metab_download_ms2query_models -> metab_ms2query;
+    metab_mzmine_batch -> metab_sirius [label="MGF", style=dashed];
+
+    raw_thermo -> metab_metams_one [label=".raw if Thermo", style=dotted];
+    mzml -> metab_metams_one [label="mzML otherwise"];
+    metab_download_gnps_msp -> metab_metams_one;
+    metab_metams_one -> metab_metams;
+
+    metab_run_manifest -> metab_cpm_metadata [style=dashed];
+    metab_rt_align -> metab_cpm_ms1_points [style=dashed];
+    metab_rt_align -> metab_cpm [style=dashed];
+    metab_cpm_metadata -> metab_cpm [style=dashed];
+    metab_cpm_ms1_points -> metab_cpm [style=dashed];
+
+    // finish
+    metab_feature_qc -> metabolomics_pipeline_dataset;
+    metab_ms2query -> metabolomics_pipeline_dataset;
+    metab_sirius -> metabolomics_pipeline_dataset [style=dashed];
+    metab_metams -> metabolomics_pipeline_dataset;
+    metab_cpm -> metabolomics_pipeline_dataset [style=dashed];
+    metabolomics_pipeline_dataset -> outputs [style=dotted, arrowhead=none];
+}
