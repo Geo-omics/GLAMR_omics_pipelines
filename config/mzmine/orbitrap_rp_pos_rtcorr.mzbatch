@@ -306,6 +306,13 @@
       this correction genuinely helps once there are >= 3 batches to
       interpolate between, and slightly hurts with fewer - metab_mzmine_batch
       only selects this batch file when that condition holds.
+
+      Retention time tolerance raised 0.3 to 0.5 min: it is the window for
+      matching a landmark between reference runs, and set_41's raw
+      between-batch shift reaches ~0.4 min at 7 to 8 min (2016 vs 2019
+      batches), so 0.3 silently dropped landmarks exactly where correction
+      was needed most. Which runs are references comes from the metadata
+      TSV (see rt_correction.py, "samples" reference mode).
     -->
     <batchstep method="io.github.mzmine.modules.dataprocessing.norm_rtcalibration2.ScanRtCorrectionModule" module_name="Retention time correction on scans" parameter_version="2">
         <parameter name="Feature lists" type="BATCH_LAST_FEATURELISTS"/>
@@ -316,7 +323,7 @@
             <absolutetolerance>0.01</absolutetolerance>
             <ppmtolerance>15.0</ppmtolerance>
         </parameter>
-        <parameter name="Retention time tolerance" unit="MINUTES">0.3</parameter>
+        <parameter name="Retention time tolerance" unit="MINUTES">0.5</parameter>
         <parameter name="Minimum standard intensity">500000.0</parameter>
         <parameter name="RT standard calculation">median</parameter>
         <parameter name="Correction method" selected_item="MultiLinearCorrection">

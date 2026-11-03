@@ -26,8 +26,8 @@ KNOWN_UNSUPPORTED = {
     '.fid': 'Bruker FID (bare, not in a .d directory) is not supported by our msconvert route',
 }
 
-# formats mzmine/metaMS can read directly, no conversion needed
-PASSTHROUGH_SUFFIXES = {'.mzml', '.mzxml'}
+# already mzML, no conversion needed
+PASSTHROUGH_SUFFIXES = {'.mzml'}
 
 
 @dataclass(frozen=True)
@@ -96,6 +96,10 @@ def _detect_file_format(path: Path) -> FormatInfo:
 
     if suffix in PASSTHROUGH_SUFFIXES:
         return FormatInfo(suffix.removeprefix('.'), path, False, None)
+
+    if suffix == '.mzxml':
+        # open format, but the pipeline needs real mzML (rt_align, harvest_metadata)
+        return FormatInfo('mzxml', path, True, 'msconvert')
 
     if suffix == '.raw':
         with open(path, 'rb') as ifile:

@@ -39,7 +39,14 @@ message("Reading manifest: ", args$manifest)
 manifest <- read_tsv(args$manifest, show_col_types = FALSE)
 
 message("Reading feature table: ", args$features)
-features <- read_csv(args$features, show_col_types = FALSE)
+# Read every per-sample area column as numeric: readr guesses types from the
+# first 1000 rows, and a run with no signal there (a blank, a low calibration
+# level) otherwise comes back as a character column and breaks the arithmetic.
+feature_cols <- names(read_csv(args$features, n_max = 0, show_col_types = FALSE))
+area_types <- setNames(rep(list(col_double()), sum(str_detect(feature_cols, ":area$"))),
+                       str_subset(feature_cols, ":area$"))
+features <- read_csv(args$features, show_col_types = FALSE,
+                     col_types = do.call(cols, c(list(.default = col_guess()), area_types)))
 
 # MZmine's "full feature table" CSV export (CSVExportModularModule) is wide
 # per METRIC per sample - "datafile:{sample}.mzML:area", ":height", ":rt",
@@ -84,6 +91,15 @@ qc_cv_of <- function(tbl, cols) {
 }
 
 # --- Step 1: intensity drift correction (QC-RLSC) ---------------------------
+# Fitted separately within each acquisition batch (manifest batch_id) and
+# scaled to that batch's own QC median: this removes drift WITHIN a batch but
+# deliberately leaves between-batch levels alone. Scaling every batch to the
+# all-batch QC median was tried and rejected: when the QC pools differ between
+# batches (set_41's QC_A pools are not a pool of these samples) it copies the
+# pools' differences onto the samples (set_41 batch PERMANOVA R2 0.31 -> 0.78).
+# A single curve across all batches (the original version) can't follow batch
+# boundaries and, where its fit approached zero, inflated values (set_41 MC-LR
+# feature QC CV 0.74 -> 3.50); per-batch fits with a floor avoid that.
 # Corrects systematic run-order drift (ESI source sensitivity, LC performance
 # decay, etc.) using the QC pool injections as a reference: fits a smooth
 # per-feature trend of QC pool intensity vs. injection order (from the
@@ -112,26 +128,39 @@ if (length(qc_cols) >= min_qc_for_drift) {
     area_matrix <- kept |> select(all_of(all_cols)) |> as.matrix()
     qc_matrix <- area_matrix[, qc_cols, drop = FALSE]
 
+    batch_of <- setNames(as.character(sample_map$batch_id), sample_map$area_col)
+    qc_batch <- batch_of[qc_cols]
+    all_batch <- batch_of[all_cols]
+
     n_corrected <- 0L
     for (i in seq_len(nrow(area_matrix))) {
         qc_vals <- qc_matrix[i, ]
         ok <- !is.na(qc_vals) & qc_vals > 0
         if (sum(ok) < min_qc_for_drift) next  # not enough QC signal for this feature - leave as-is
 
-        fit <- tryCatch(
-            loess(y ~ x, data.frame(x = qc_order[ok], y = qc_vals[ok]), span = 0.75, degree = 1),
-            error = function(e) NULL
-        )
-        if (is.null(fit)) next
+        trend_at_sample <- rep(NA_real_, length(all_cols))
+        factor_at_sample <- rep(1, length(all_cols))   # batches without enough QC stay unchanged
+        for (b in unique(all_batch)) {
+            in_b <- qc_batch == b & ok
+            targets <- which(all_batch == b)
+            if (sum(in_b) < min_qc_for_drift) next   # too few QC runs in this batch: leave it as-is
+            ref_level <- median(qc_vals[in_b])
+            fit <- tryCatch(
+                loess(y ~ x, data.frame(x = qc_order[in_b], y = qc_vals[in_b]),
+                      span = 0.75, degree = 1),
+                error = function(e) NULL
+            )
+            if (!is.null(fit)) {
+                trend_at_sample[targets] <- predict(fit, newdata = data.frame(x = all_order[targets]))
+            }
+            # Guard against NA (extrapolation beyond the batch's QC injections) and
+            # near-zero local fits blowing up the ratio: no correction there.
+            bad <- is.na(trend_at_sample[targets]) | trend_at_sample[targets] < 0.1 * ref_level
+            trend_at_sample[targets][bad] <- ref_level
+            factor_at_sample[targets] <- ref_level / trend_at_sample[targets]
+        }
 
-        ref_level <- median(qc_vals[ok])
-        trend_at_sample <- predict(fit, newdata = data.frame(x = all_order))
-        # Guard against non-positive/NA trend values (extrapolation beyond the
-        # QC injection range, or a near-zero local fit) blowing up the ratio.
-        bad <- is.na(trend_at_sample) | trend_at_sample <= 0
-        trend_at_sample[bad] <- ref_level
-
-        area_matrix[i, ] <- area_matrix[i, ] / trend_at_sample * ref_level
+        area_matrix[i, ] <- area_matrix[i, ] * factor_at_sample
         n_corrected <- n_corrected + 1L
     }
     kept[all_cols] <- as.data.frame(area_matrix)

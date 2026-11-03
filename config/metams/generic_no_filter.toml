@@ -1,6 +1,7 @@
-# Non-Thermo scan translator: metaMS's scan_filter matches against Thermo's
-# proprietary scan_text field (e.g. "hcd"), which does not exist in mzML
-# converted from other vendors. Use no filter and rely on MS level alone.
+# Non-Thermo scan translator. metaMS selects MS2 scans by matching scan_filter against Thermo's
+# proprietary filter string, which mzML from other vendors lacks, and an empty scan_filter crashes
+# metaMS 3.5.2 (it becomes None). code/metams_stage_mzml.sh adds a filter string of "ms1"/"ms2"
+# (from the ms level) to non-Thermo mzML before metaMS runs, so this matches all MS2 scans.
 [ms2]
-scan_filter = ""
+scan_filter = "ms2"
 resolution = "high"

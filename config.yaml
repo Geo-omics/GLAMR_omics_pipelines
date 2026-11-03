@@ -16,13 +16,44 @@ metabolomics:
       mzbatch_rtcorr: config/mzmine/orbitrap_rp_pos_rtcorr.mzbatch
       corems_params: config/metams/orbitrap_rp_pos.toml
       scan_translator: config/metams/thermo_hcd.toml
+    # Orbitrap Fusion Lumos, RP, positive, 30 min gradient (set_134). Batch files are the
+    # Q Exactive ones with wider peak/RT limits and a working rows filter (see their headers).
+    orbitrap_lumos_rp_pos:
+      mzbatch: config/mzmine/orbitrap_lumos_rp_pos.mzbatch
+      mzbatch_rtcorr: config/mzmine/orbitrap_lumos_rp_pos_rtcorr.mzbatch
+      corems_params: config/metams/orbitrap_rp_pos.toml
+      scan_translator: config/metams/thermo_hcd.toml
+    # Agilent 6545 Q-TOF, RP, positive, ~9 min gradient, centroided mzXML (set_136). Lower
+    # intensity thresholds, fewer scans per peak, and wider m/z tolerances (see the batch header).
+    qtof_rp:   # Agilent 6545 Q-TOF, RP; both polarities
+      mzbatch: config/mzmine/qtof_rp_pos.mzbatch
+      mzbatch_negative: config/mzmine/qtof_rp_neg.mzbatch
+      corems_params: config/metams/qtof_rp_pos.toml
+      scan_translator: config/metams/generic_no_filter.toml
+      rt_landmarks:
+        min_height: 2.0e+4   # landmark apex counts (Orbitrap default 2e6); MC-LR apexes here are ~1e3-1e5
+        ppm: 10.0
+      cpm:
+        ms1_intensity_min: 1000   # MS1 is thresholded at 500 counts; MC-LR apexes are ~1e3-1e5
+        tol: 0.02                 # Da, diagnostic product ions and XIC m/z window
+        rt_min: 0.5
+        rt_max: 9.0
   profile_assignment:
+    set_134: orbitrap_lumos_rp_pos  # WLE method development, Orbitrap Fusion Lumos, 30 min gradient
+    set_136: qtof_rp  # WLECC Microcystis isolates (Lauren Hart's runs; MassIVE MSV000094628 is the pos_A subset), Agilent 6545 Q-TOF
     set_41: orbitrap_rp_pos
     set_41_test2016: orbitrap_rp_pos  # dev-only scoped subset for pipeline testing
     set_41_smoke6: orbitrap_rp_pos    # dev-only 6-sample smoke test
   blank_fold_change: 5
   qc_max_cv: 0.3
   run_sirius: true
+  run_cpm: true   # CyanopeptideMatching targeted cyanopeptide screen (rules metab_cpm*)
+  cpm:
+    ms1_intensity_min: 1.0e+5   # MS1 points kept for CPM's XIC areas, see metab_cpm_ms1_points
+    tol: 0.01                   # Da, diagnostic product ions and XIC m/z window (CPM default)
+    tol_da: 0.05                # Da, CyanoMetDB [M+H]+ match (CPM default)
+    rt_min: 2.0
+    rt_max: 25.0
   sirius_bin: /home/kiledal/tools/sirius/bin/sirius
   rt_correction:
     # Real measurement on set_41 (mzmine 4.10.6): 1-2 acquisition batches
@@ -35,3 +66,16 @@ metabolomics:
     # folder/filename convention, so this generalizes to future projects.
     min_batches: 3
     min_qc_per_batch: 3
+    # Which runs mzmine uses as RT-correction references: "qc" (qc_pool runs)
+    # or "samples" (references_per_batch real samples per batch, spread over
+    # injection order). "qc" left set_41's RT-dependent between-batch shift
+    # largely uncorrected because its QC pools share few compounds with the
+    # samples - see pypelib/metabolomics/rt_correction.py.
+    reference: samples
+    references_per_batch: 4
+    # landmark: pypelib.metabolomics.rt_align corrects each run's RTs before
+    #   mzmine, using landmark ions from the reference runs above (default).
+    # mzmine: mzmine's own scan RT correction (the *_rtcorr batch file); on
+    #   set_41 it over-corrected early RTs, see rt_align.py.
+    # none: no RT correction.
+    method: landmark

@@ -33,6 +33,7 @@ import pypelib.metabolomics.groups
 import pypelib.metabolomics.harvest_metadata
 import pypelib.metabolomics.run_manifest
 import pypelib.metabolomics.rt_correction
+import pypelib.metabolomics.rt_align
 import shlex
 
 
@@ -84,6 +85,17 @@ def get_method_profile(dataset):
 def get_profile_param(dataset, key):
     profile = get_method_profile(dataset)
     return config['metabolomics']['method_profiles'][profile][key]
+
+
+def get_group_profile_param(dataset, group_id, key):
+    """
+    Like get_profile_param, but a profile can override a key per polarity
+    ('{key}_negative', e.g. mzbatch_negative) for datasets acquired in both
+    modes; group_id is '{profile}_{polarity}'.
+    """
+    params = config['metabolomics']['method_profiles'][get_method_profile(dataset)]
+    polarity = group_id.rsplit('_', 1)[-1]
+    return params.get(f'{key}_{polarity}', params[key])
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +187,7 @@ checkpoint metab_run_manifest:
 # Thermo (native, no Wine) vs. everything else (needs ProteoWizard/Wine)
 # genuinely require different execution environments.
 
-ruleorder: metab_convert_thermo > metab_convert_vendor > metab_mzml_passthrough
+ruleorder: metab_convert_thermo > metab_mzml_fixup
 
 rule metab_convert_thermo:
     """ Thermo .raw -> mzML via ThermoRawFileParser. No Wine, no container. """
@@ -201,15 +213,18 @@ def get_vendor_raw_file(wc):
     """
     Input function for metab_convert_vendor: glob for the vendor-tagged raw
     file/dir, excluding the vendors handled by the other two conversion
-    rules (thermo_raw -> metab_convert_thermo, mzml/mzxml -> passthrough).
+    rules (thermo_raw -> metab_convert_thermo, mzml -> metab_mzml_fixup directly).
+    mzXML is converted here too: the pipeline expects real mzML (rt_align
+    rewrites it, harvest_metadata parses its header), so it can't just be
+    linked under an .mzML name.
 
     NOTE: {vendor} is deliberately NOT a rule wildcard here (an earlier
     version tried that and failed at DAG-build time - a wildcard that only
     appears in an input function, never in any rule's output pattern,
     cannot be bound by Snakemake's wildcard matching, since matching only
     happens against output paths). Instead this function alone determines
-    the vendor via glob + exclusion, exactly like metab_mzml_passthrough's
-    input function does for its own case - {sample} is the only wildcard
+    the vendor via glob + exclusion, exactly like get_mzml_fixup_input does
+    for its own case - {sample} is the only wildcard
     either rule needs.
     """
     all_raw = list(Path(f"data/omics/metabolomes/{wc.sample}/spectra").glob("raw_spectra.*"))
@@ -217,7 +232,6 @@ def get_vendor_raw_file(wc):
         p for p in all_raw
         if not p.name.startswith("raw_spectra.thermo_raw.")
         and not p.name.startswith("raw_spectra.mzml.")
-        and not p.name.startswith("raw_spectra.mzxml.")
     ]
     if len(candidates) != 1:
         raise ValueError(
@@ -229,8 +243,8 @@ def get_vendor_raw_file(wc):
 
 rule metab_convert_vendor:
     """
-    Agilent .d / Bruker .d / Sciex .wiff(2) / Shimadzu .lcd / Waters .raw
-    -> mzML via ProteoWizard msconvert (Wine).
+    Agilent .d / Bruker .d / Sciex .wiff(2) / Shimadzu .lcd / Waters .raw /
+    mzXML -> mzML via ProteoWizard msconvert (Wine).
 
     NOTE: the chambm/pwiz-skyline-i-agree-to-the-vendor-licenses image name
     is itself a license acceptance notice - see the container line below.
@@ -243,7 +257,7 @@ rule metab_convert_vendor:
     input:
         raw = get_vendor_raw_file,
     output:
-        mzml = "data/omics/metabolomes/{sample}/spectra/{sample}.mzML",
+        mzml = temp("data/omics/metabolomes/{sample}/spectra/{sample}.msconvert.mzML"),
     params:
         outdir = lambda wc, output: str(Path(output.mzml).parent),
     threads: 2
@@ -254,27 +268,42 @@ rule metab_convert_vendor:
     shell:
         """
         . code/shell_prelude {log}
+        # no --filter: msconvert 3.0.26056 under Wine crashes mid-file with
+        # "defaultArrayLength" (the empty scans it was meant to drop are
+        # handled in metab_mzml_fixup instead)
         wine msconvert {input.raw:q} \
             --mzML --outdir {params.outdir:q} \
-            --outfile {wildcards.sample}.mzML
+            --outfile {wildcards.sample}.msconvert.mzML
         """
 
 
-rule metab_mzml_passthrough:
-    """ Source was already mzML/mzXML at import time - no conversion needed """
+def get_mzml_fixup_input(wc):
+    """ Imported mzML as is, otherwise the msconvert output """
+    imported = list(Path(f"data/omics/metabolomes/{wc.sample}/spectra").glob("raw_spectra.mzml.*"))
+    if imported:
+        return str(imported[0])
+    return f"data/omics/metabolomes/{wc.sample}/spectra/{wc.sample}.msconvert.mzML"
+
+
+rule metab_mzml_fixup:
+    """
+    msconvert output or imported mzML -> final mzML: adds the <run>
+    defaultInstrumentConfigurationRef that msconvert leaves out for some
+    inputs (seen with mzXML) and MZmine requires, and empty m/z / intensity
+    arrays to scans with no peaks (written with no arrays at all, which
+    MassQL/pyteomics can't read), rebuilding the index
+    (pypelib.metabolomics.mzml_rewrite). Imported mzML that needs neither is
+    copied unchanged.
+    """
     input:
-        mzml = lambda wc: str(next(
-            Path(f"data/omics/metabolomes/{wc.sample}/spectra").glob("raw_spectra.mz*.*")
-        )),
+        mzml = get_mzml_fixup_input,
     output:
         mzml = "data/omics/metabolomes/{sample}/spectra/{sample}.mzML",
-    resources: mem_mb=100, time_min=5
-    log: "logs/metab_mzml_passthrough/{sample}.log"
-    shell:
-        """
-        . code/shell_prelude {log}
-        ln -sr {input.mzml:q} {output.mzml:q}
-        """
+    resources: mem_mb=1000, time_min=15
+    log: "logs/metab_mzml_fixup/{sample}.log"
+    run:
+        from pypelib.metabolomics.mzml_rewrite import fixup_msconvert_mzml
+        fixup_msconvert_mzml(input.mzml, output.mzml)
 
 
 # ---------------------------------------------------------------------------
@@ -348,9 +377,43 @@ rule metab_mzmine_check_user:
             raise ValueError(f"mzuser file missing or empty: {p}")
 
 
+def get_rt_method():
+    """
+    config metabolomics.rt_correction.method:
+      "landmark" (default) - pypelib.metabolomics.rt_align rewrites each run's
+                 RTs before mzmine (rules metab_rt_landmarks / metab_rt_align),
+                 mzmine then runs the plain batch file
+      "mzmine"   - mzmine's own scan RT correction (the *_rtcorr batch file),
+                 when rt_correction.eligible() says so
+      "none"     - no RT correction
+    """
+    method = config.get('metabolomics', {}).get('rt_correction', {}).get('method', 'landmark')
+    if method not in ('landmark', 'mzmine', 'none'):
+        raise ValueError(f'unknown metabolomics.rt_correction.method {method!r}')
+    return method
+
+
+def get_rt_landmark_param(dataset, key, default):
+    """
+    Landmark detection settings (method profile `rt_landmarks:` block), for
+    instruments whose intensity scale or mass accuracy differs from the
+    Orbitrap defaults in pypelib.metabolomics.rt_align
+    """
+    profile = config['metabolomics']['method_profiles'][get_method_profile(dataset)]
+    return profile.get('rt_landmarks', {}).get(key, default)
+
+
+def use_mzmine_rtcorr(wc):
+    return get_rt_method() == 'mzmine' and get_rt_correction_decision(wc)[0]
+
+
 def get_group_mzml_files(wc):
+    """ mzML inputs for mzmine: RT-aligned copies in "landmark" mode, the originals otherwise """
     manifest = checkpoints.metab_run_manifest.get(dataset=wc.dataset).output.groups
     samples = metab_get_group_samples(manifest, wc.group_id)
+    if get_rt_method() == 'landmark':
+        return [f"data/projects/{wc.dataset}/metabolomics/{wc.group_id}/rt_align/mzml/{s}.mzML"
+                for s in samples]
     return [f"data/omics/metabolomes/{s}/spectra/{s}.mzML" for s in samples]
 
 
@@ -375,6 +438,16 @@ def get_group_manifest_rows(wc):
     return _read_group_manifest_rows(manifest_path, groups_path, wc.group_id)
 
 
+def get_rt_reference_config():
+    """ (reference_mode, references_per_batch) from config, see rt_correction.py """
+    rt_config = config.get('metabolomics', {}).get('rt_correction', {})
+    return (
+        rt_config.get('reference', pypelib.metabolomics.rt_correction.DEFAULT_REFERENCE_MODE),
+        rt_config.get('references_per_batch',
+                      pypelib.metabolomics.rt_correction.DEFAULT_REFERENCES_PER_BATCH),
+    )
+
+
 def get_rt_correction_decision(wc):
     """
     Returns (eligible: bool, reason: str) - see pypelib.metabolomics.
@@ -387,7 +460,84 @@ def get_rt_correction_decision(wc):
     min_qc_per_batch = rt_config.get(
         'min_qc_per_batch', pypelib.metabolomics.rt_correction.DEFAULT_MIN_QC_PER_BATCH)
     rows = get_group_manifest_rows(wc)
-    return pypelib.metabolomics.rt_correction.eligible(rows, min_batches, min_qc_per_batch)
+    return pypelib.metabolomics.rt_correction.eligible(
+        rows, min_batches, min_qc_per_batch, get_rt_reference_config()[0])
+
+
+def get_group_run_metadata(wc):
+    """ run_metadata.json for every sample in a processing group (RT-reference quality) """
+    groups = checkpoints.metab_run_manifest.get(dataset=wc.dataset).output.groups
+    return [f"data/omics/metabolomes/{s}/spectra/run_metadata.json"
+            for s in metab_get_group_samples(groups, wc.group_id)]
+
+
+def _group_run_quality(run_meta_files):
+    """ sample -> MS2 scan count from run_metadata.json (used to avoid failed injections) """
+    import json
+    quality = {}
+    for f in run_meta_files:
+        meta = json.load(open(f))
+        if meta.get('thermo_ms2_scans'):
+            quality[Path(f).parents[1].name] = int(meta['thermo_ms2_scans'])
+    return quality
+
+
+def get_rt_reference_mzmls(wc):
+    """ Original mzMLs of the runs used to build RT landmarks (see rt_correction.select_reference_samples) """
+    rows = get_group_manifest_rows(wc)
+    quality = _group_run_quality(get_group_run_metadata(wc))
+    refs = pypelib.metabolomics.rt_correction.select_reference_samples(
+        rows, get_rt_reference_config()[1], quality)
+    return [f"data/omics/metabolomes/{s}/spectra/{s}.mzML" for s in sorted(refs)]
+
+
+rule metab_rt_landmarks:
+    """
+    Landmark ions for RT alignment of one processing group: intense,
+    unambiguous ions found in >= 80% of the reference runs (a few real
+    samples per acquisition batch, spread over injection order), with their
+    median RT across those runs as the alignment target. See
+    pypelib.metabolomics.rt_align for why this replaces mzmine's own RT
+    correction by default.
+    """
+    input:
+        refs = get_rt_reference_mzmls,
+        run_meta = get_group_run_metadata,
+    output:
+        landmarks = "data/projects/{dataset}/metabolomics/{group_id}/rt_align/landmarks.tsv",
+    resources: mem_mb=16000, time_min=60
+    benchmark: "benchmarks/metab_rt_landmarks/{dataset}_{group_id}.txt"
+    log: "logs/metab_rt_landmarks/{dataset}_{group_id}.log"
+    params:
+        min_height = lambda wc: get_rt_landmark_param(wc.dataset, 'min_height', pypelib.metabolomics.rt_align.DEFAULT_MIN_HEIGHT),
+        ppm = lambda wc: get_rt_landmark_param(wc.dataset, 'ppm', pypelib.metabolomics.rt_align.DEFAULT_PPM),
+    run:
+        pypelib.metabolomics.rt_align.landmarks_main(
+            input.refs, output.landmarks, min_height=params.min_height, ppm=params.ppm, log=log)
+
+
+rule metab_rt_align:
+    """
+    Fit one run's RT offset vs RT against the group's landmarks (robust
+    LOESS) and write an RT-corrected copy of its mzML (index and checksum
+    rebuilt) plus the fit statistics / correction curve as JSON.
+    """
+    input:
+        mzml = get_sample_mzml_input,
+        landmarks = rules.metab_rt_landmarks.output.landmarks,
+    output:
+        mzml = "data/projects/{dataset}/metabolomics/{group_id}/rt_align/mzml/{sample}.mzML",
+        stats = "data/projects/{dataset}/metabolomics/{group_id}/rt_align/stats/{sample}.json",
+    resources: mem_mb=4000, time_min=20
+    benchmark: "benchmarks/metab_rt_align/{dataset}_{group_id}_{sample}.txt"
+    log: "logs/metab_rt_align/{dataset}_{group_id}_{sample}.log"
+    params:
+        min_height = lambda wc: get_rt_landmark_param(wc.dataset, 'min_height', pypelib.metabolomics.rt_align.DEFAULT_MIN_HEIGHT),
+        ppm = lambda wc: get_rt_landmark_param(wc.dataset, 'ppm', pypelib.metabolomics.rt_align.DEFAULT_PPM),
+    run:
+        pypelib.metabolomics.rt_align.align_main(
+            input.mzml, input.landmarks, output.mzml, output.stats,
+            min_height=params.min_height, ppm=params.ppm, log=log)
 
 
 rule metab_mzmine_metadata:
@@ -399,19 +549,32 @@ rule metab_mzmine_metadata:
     separate, real per-run decision (get_rt_correction_decision) made at
     that rule's params time so a group's eligibility can change (e.g. more
     samples/batches added later) without needing to touch this rule.
+
+    The sample type column also decides which runs mzmine uses as RT
+    references (config metabolomics.rt_correction.reference: "qc" or
+    "samples"; see rt_correction.py). In "samples" mode the MS2 scan count
+    from each run's run_metadata.json is used to avoid failed injections.
     """
     input:
         manifest = lambda wc: checkpoints.metab_run_manifest.get(dataset=wc.dataset).output.manifest,
         groups = lambda wc: checkpoints.metab_run_manifest.get(dataset=wc.dataset).output.groups,
+        run_meta = get_group_run_metadata,
     output:
         tsv = "data/projects/{dataset}/metabolomics/{group_id}/mzmine/metadata.tsv",
+    params:
+        reference_mode = lambda wc: get_rt_reference_config()[0],
+        references_per_batch = lambda wc: get_rt_reference_config()[1],
     resources: mem_mb=500, time_min=10
     log: "logs/metab_mzmine_metadata/{dataset}_{group_id}.log"
     run:
         rows = _read_group_manifest_rows(input.manifest, input.groups, wildcards.group_id)
+        quality = _group_run_quality(input.run_meta)
         with open(log[0], 'w') as logfile:
-            n = pypelib.metabolomics.rt_correction.write_mzmine_metadata(rows, output.tsv)
+            n, refs = pypelib.metabolomics.rt_correction.write_mzmine_metadata(
+                rows, output.tsv, params.reference_mode, params.references_per_batch, quality)
             print(f'wrote {n} rows to {output.tsv}', file=logfile)
+            print(f'RT reference mode {params.reference_mode!r}: {len(refs)} reference runs: '
+                  f'{", ".join(sorted(refs))}', file=logfile)
 
 
 rule metab_mzmine_batch:
@@ -455,7 +618,10 @@ rule metab_mzmine_batch:
     relying on new behavior, or every rule using this container - not just
     this one - will silently keep running the old image.
 
-    RT correction: whether this group's alignment includes mzmine's
+    RT correction: by default (metabolomics.rt_correction.method:
+    "landmark") the mzML inputs are already RT-aligned by rule
+    metab_rt_align and the plain batch file is used. The rest of this
+    paragraph applies to method "mzmine" only. There, whether this group's alignment includes mzmine's
     scan-based RT correction step is decided per-run by
     get_rt_correction_decision (pypelib.metabolomics.rt_correction), which
     counts distinct batch_id values (see run_manifest.py's
@@ -487,16 +653,16 @@ rule metab_mzmine_batch:
         csv = "data/projects/{dataset}/metabolomics/{group_id}/mzmine/features_full_feature_table.csv",
         mgf = "data/projects/{dataset}/metabolomics/{group_id}/mzmine/features_sirius.mgf",
     params:
-        mzbatch = lambda wc: get_profile_param(
-            wc.dataset,
-            'mzbatch_rtcorr' if get_rt_correction_decision(wc)[0] else 'mzbatch',
+        mzbatch = lambda wc: get_group_profile_param(
+            wc.dataset, wc.group_id,
+            'mzbatch_rtcorr' if use_mzmine_rtcorr(wc) else 'mzbatch',
         ),
         metadata_flag = lambda wc, input: (
             # NOTE: :q is a Snakemake shell-string-only quoting feature, not
             # valid in a plain f-string (confirmed by testing - raises
             # ValueError) - use shlex.quote() directly instead.
             f"--metadata {shlex.quote(input.metadata)}"
-            if get_rt_correction_decision(wc)[0] else ""
+            if use_mzmine_rtcorr(wc) else ""
         ),
         mzuser = lambda wc: config['metabolomics']['mzuser'],
         outbase = lambda wc, output: str(Path(output.csv).parent / "features"),
@@ -601,6 +767,9 @@ rule metab_sirius:
     shell:
         """
         . code/shell_prelude {log}
+        # SIRIUS appends to an existing project, so a rerun after a killed
+        # run would import every feature a second time
+        rm -rf {params.project_dir:q} {params.project_dir:q}.sirius
         {params.sirius_bin:q} \
             --input {input.mgf:q} --project {params.project_dir:q} \
             formulas fingerprints classes structures --database pubchem \
@@ -670,7 +839,7 @@ rule metab_metams_one:
         # the sample file, but every one of these would have broken the
         # same way. Path(...).resolve() runs at rule-parse time, while cwd
         # is still the repo root, so it's unaffected by the shell's cd.
-        corems_params = lambda wc: str(Path(get_profile_param(wc.dataset, 'corems_params')).resolve()),
+        corems_params = lambda wc: str(Path(get_group_profile_param(wc.dataset, wc.group_id, 'corems_params')).resolve()),
         scan_translator = lambda wc: str(Path(get_profile_param(wc.dataset, 'scan_translator')).resolve()),
         outdir = lambda wc, output: str(Path(output.csv).resolve().parents[1]),
         workdir = lambda wc: f"/tmp/metams_{wc.dataset}_{wc.group_id}_{wc.sample}",
@@ -682,6 +851,7 @@ rule metab_metams_one:
         # confirmed by real testing - copy instead (~54MB/file for this
         # dataset, well within scratch disk space).
         staged_file = lambda wc, input: f"/tmp/metams_{wc.dataset}_{wc.group_id}_{wc.sample}/{wc.sample}{Path(input.file).suffix}",
+        stage_script = str(Path("code/metams_stage_mzml.sh").resolve()),
     threads: 1
     resources: cpus=1, mem_mb=4000, time_min=60
     benchmark: "benchmarks/metab_metams/{dataset}_{group_id}_{sample}.txt"
@@ -692,7 +862,9 @@ rule metab_metams_one:
         . code/shell_prelude {log}
         mkdir -p {params.workdir:q} {params.outdir:q}
         cd {params.workdir:q}
-        cp {params.file_abs:q} {params.staged_file:q}
+        # copies Thermo input; gives other vendors' mzML the Thermo-style ids and
+        # filter strings CoreMS expects (see the script)
+        bash {params.stage_script:q} {params.file_abs:q} {params.staged_file:q}
 
         metaMS run-lcms-metabolomics-workflow \
             -i {params.staged_file:q} \
@@ -765,6 +937,140 @@ rule metab_feature_qc:
 
 
 # ---------------------------------------------------------------------------
+# Stage 5b: CyanopeptideMatching (CPM) - targeted cyanopeptide screen (opt-in)
+# ---------------------------------------------------------------------------
+# https://github.com/sheffera01/CyanopeptideMatchingPythonVersion: MassQL search
+# of MS2 spectra for class-specific diagnostic product ions, precursor merging,
+# MS1 XIC areas, and m/z matching to CyanoMetDB. Runs on the same (RT-aligned
+# when method "landmark") mzML files as mzmine. Enabled with
+# config metabolomics.run_cpm. Uses the glamr-fixes branch of CPM (see
+# config/conda_yaml/cpm.yaml), which fixes precursor merging, cross-file scan
+# joins, MS1 areas (every file, not only MS2-triggered ones) and charge-aware
+# ppm CyanoMetDB matching; see presentations/metabolomics_pipeline/cpm_evaluation.md.
+
+CPM_CLASSES = ['MC', 'MP', 'AB', 'AR', 'MG']
+
+
+def get_cpm_param(dataset, key, default):
+    """ metabolomics.cpm setting, overridden by the dataset's method profile `cpm:` block """
+    profile_cpm = config['metabolomics']['method_profiles'][get_method_profile(dataset)].get('cpm', {})
+    return profile_cpm.get(key, config.get('metabolomics', {}).get('cpm', {}).get(key, default))
+
+
+rule metab_cpm_metadata:
+    """ CPM metadata CSV (filename, sample_type, batch) from the run manifest """
+    input:
+        manifest = lambda wc: checkpoints.metab_run_manifest.get(dataset=wc.dataset).output.manifest,
+        groups = lambda wc: checkpoints.metab_run_manifest.get(dataset=wc.dataset).output.groups,
+    output:
+        csv = "data/projects/{dataset}/metabolomics/{group_id}/cpm/metadata.csv",
+    resources: mem_mb=500, time_min=10
+    log: "logs/metab_cpm_metadata/{dataset}_{group_id}.log"
+    run:
+        import csv
+        rows = _read_group_manifest_rows(input.manifest, input.groups, wildcards.group_id)
+        with open(output.csv, 'w', newline='') as ofile:
+            w = csv.writer(ofile)
+            w.writerow(['filename', 'sample_type', 'batch'])
+            for r in rows:
+                # CPM only treats sample_type == "blank" specially; keep other roles as-is
+                w.writerow([f"{r['sample']}.mzML", r['ms_role'], r['batch_id']])
+
+
+rule metab_cpm_ms1_points:
+    """
+    CPM's MS1 point table, built once with CPM's own extractor and shared by
+    all class jobs (the CLI would rebuild it per class). intensity_min keeps
+    it tractable: unfiltered it is ~170 MB of CSV per set_41 file (~100 GB
+    for the dataset, loaded whole into pandas); 1e5 keeps ~9 % of points and
+    only clips the low tails of the XICs CPM integrates.
+    """
+    input:
+        mzml = get_group_mzml_files,
+    output:
+        csv = temp("data/projects/{dataset}/metabolomics/{group_id}/cpm/ms1_points.csv"),
+    params:
+        outdir = lambda wc, output: str(Path(output.csv).parent / "ms1_points_tmp"),
+        intensity_min = lambda wc: get_cpm_param(wc.dataset, 'ms1_intensity_min', 1e5),
+        rt_min = lambda wc: get_cpm_param(wc.dataset, 'rt_min', 2.0),
+        rt_max = lambda wc: get_cpm_param(wc.dataset, 'rt_max', 25.0),
+    resources: mem_mb=60000, time_min=240
+    benchmark: "benchmarks/metab_cpm_ms1_points/{dataset}_{group_id}.txt"
+    log: "logs/metab_cpm_ms1_points/{dataset}_{group_id}.log"
+    conda: "../config/conda_yaml/cpm.yaml"
+    shell:
+        """
+        . code/shell_prelude {log}
+        rm -rf {params.outdir:q}
+        printf '%s\n' {input.mzml:q} > {params.outdir:q}.list
+        python - {params.outdir:q} {params.outdir:q}.list {params.intensity_min} {params.rt_min} {params.rt_max} <<'PY'
+import sys
+from pathlib import Path
+from cpm.cpm import build_ms1_points
+outdir, listfile, imin, rtmin, rtmax = sys.argv[1:]
+files = Path(listfile).read_text().split()
+out = build_ms1_points(files, Path(outdir), mz_round=None, intensity_min=float(imin),
+                       assume_time_unit="min", rt_window=(float(rtmin), float(rtmax)))
+print(out)
+PY
+        mv {params.outdir:q}/ms1_points_*.csv {output.csv:q}
+        rm -rf {params.outdir:q} {params.outdir:q}.list
+        """
+
+
+rule metab_cpm:
+    """
+    One CPM class per job (MC microcystins, MP cyanopeptolins, AB
+    anabaenopeptins, AR aeruginosins, MG microginins), with CPM's blank filter
+    and batch correction. CPM writes a timestamped run directory; it is moved
+    to a stable path. Each job gets its own TMPDIR, removed after (upstream
+    CPM leaves a temporary copy of every mzML there). CPM is run through code/cpm_run.py, which disables its figures: several
+    scale the canvas with the data and, at 624 files, failed with
+    std::bad_alloc or grew past 700 GB and were OOM-killed.
+    """
+    input:
+        mzml = get_group_mzml_files,
+        metadata = rules.metab_cpm_metadata.output.csv,
+        ms1_points = rules.metab_cpm_ms1_points.output.csv,
+    output:
+        outdir = directory("data/projects/{dataset}/metabolomics/{group_id}/cpm/{cpm_class}"),
+    wildcard_constraints:
+        cpm_class = "|".join(CPM_CLASSES),
+    params:
+        workdir = lambda wc, output: output.outdir + "_work",
+        tol = lambda wc: get_cpm_param(wc.dataset, 'tol', 0.01),
+        tol_da = lambda wc: get_cpm_param(wc.dataset, 'tol_da', 0.05),
+        tol_ppm = lambda wc: get_cpm_param(wc.dataset, 'tol_ppm', 5),
+        rt_min = lambda wc: get_cpm_param(wc.dataset, 'rt_min', 2.0),
+        rt_max = lambda wc: get_cpm_param(wc.dataset, 'rt_max', 25.0),
+    threads: 1
+    # set_41 (624 files, 12.8 GB MS1 table): ~2-2.3 h per class
+    resources: mem_mb=45000, time_min=720
+    benchmark: "benchmarks/metab_cpm/{dataset}_{group_id}_{cpm_class}.txt"
+    log: "logs/metab_cpm/{dataset}_{group_id}_{cpm_class}.log"
+    conda: "../config/conda_yaml/cpm.yaml"
+    shell:
+        """
+        . code/shell_prelude {log}
+        rm -rf {params.workdir:q}
+        mkdir -p {params.workdir:q}/tmp
+        export TMPDIR=$(realpath {params.workdir:q}/tmp)
+        python code/cpm_run.py --class-tag {wildcards.cpm_class} \
+            --files {input.mzml:q} \
+            --metadata {input.metadata:q} \
+            --ms1-points-file {input.ms1_points:q} \
+            --output-root {params.workdir:q} \
+            --tol {params.tol} --tol-da {params.tol_da} --tol-ppm {params.tol_ppm} \
+            --rt-min {params.rt_min} --rt-max {params.rt_max} \
+            --blank-filter --batch-correct
+        rm -rf {params.workdir:q}/tmp
+        mv {params.workdir:q}/{wildcards.cpm_class}_run_* {output.outdir:q}
+        mv {params.workdir:q}/pipeline_log {output.outdir:q}/ 2>/dev/null || true
+        rm -rf {params.workdir:q}
+        """
+
+
+# ---------------------------------------------------------------------------
 # Stage 6: top rule
 # ---------------------------------------------------------------------------
 
@@ -778,6 +1084,9 @@ def get_metabolomics_pipeline_output(wc):
         files.append(f"data/projects/{wc.dataset}/metabolomics/{g}/metams/done")
         if config.get('metabolomics', {}).get('run_sirius', False):
             files.append(f"data/projects/{wc.dataset}/metabolomics/{g}/sirius/summaries/structure_identifications.tsv")
+        # CPM matches [M+H]+ precursors, positive mode only
+        if config.get('metabolomics', {}).get('run_cpm', False) and g.endswith('_positive'):
+            files.extend(f"data/projects/{wc.dataset}/metabolomics/{g}/cpm/{c}" for c in CPM_CLASSES)
     return files
 
 

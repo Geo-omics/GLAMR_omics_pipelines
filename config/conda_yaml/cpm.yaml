@@ -1,0 +1,14 @@
+# CyanopeptideMatching (CPM): diagnostic-ion MassQL search for cyanopeptide classes
+# https://github.com/sheffera01/CyanopeptideMatchingPythonVersion, glamr-fixes branch
+# (upstream main 5e76752 + fixes, see presentations/metabolomics_pipeline/cpm_evaluation.md).
+# The branch is only in the local clone on Huron for now; repoint to a pushed
+# fork or upstream commit once the fixes are published.
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.13
+  - pip
+  - git
+  - pip:
+    - git+file:///home/kiledal/git/CyanopeptideMatchingPythonVersion@8f66c4981fb678070e8460b07a6be8403ffc4e5b

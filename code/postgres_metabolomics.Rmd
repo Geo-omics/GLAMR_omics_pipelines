@@ -89,9 +89,9 @@ dbExecute(pg, "CREATE INDEX IF NOT EXISTS idx_metabolite_feature_abund_feature
 
 ### `metabolite_annotations` - one row per feature per annotation source
 
-Unions MS2Query (`.../ms2query/results.csv`, columns confirmed from
-upstream: `ms2query_model_prediction`, precursor m/z difference, library
-metadata) and, when `run_sirius` is enabled, SIRIUS's
+Unions MS2Query (`.../ms2query/results.csv`: `feature_id`, added by
+`code/ms2query_annotate.py`, then upstream's `ms2query_model_prediction`,
+precursor m/z difference and library metadata, one row per MS2 spectrum) and, when `run_sirius` is enabled, SIRIUS's
 `structure_identifications.tsv`. Kept in one table with an
 `annotation_source` discriminator rather than two, since both ultimately
 answer the same question ("what compound might this feature be") and
