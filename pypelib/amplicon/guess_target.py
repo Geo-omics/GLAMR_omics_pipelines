@@ -5,8 +5,12 @@ Guess the amplicon target based on summaries of hmmscan
 Output is written to stdout.
 """
 import argparse
+from collections import Counter
+import gzip
+from itertools import islice
 import json
 from pathlib import Path
+import re
 
 from ..utils import load_stats, logme, UsageError
 from . import get_models, Err
@@ -48,7 +52,12 @@ def cli():
 
 
 @logme()
-def main(summaries, stats_file, outfile=None):
+def main(summaries, stats_file, outfile=None, fastqs=None):
+    """
+    fastqs:
+        Optional raw fastq files (fwd, rev), used for targets detected by
+        their primer sequences: ITS (no profile HMM) and 12S (MiFish).
+    """
     if isinstance(summaries, str):
         # e.g. invoked via snakemake, single file
         summaries = [summaries]
@@ -120,6 +129,23 @@ def main(summaries, stats_file, outfile=None):
                 out_data.update(check_paired(*data))
             except BadData as e:
                 errors.append(e.args)
+
+        hmm_failed = bool(errors or out_data.get('errors'))
+        primer_models = []
+        if hmm_failed or looks_like_its(*data):
+            # The rRNA HMMs only see the genes flanking ITS, check for ITS
+            # primers (both primers at the 5' ends of enough reads)
+            primer_models.append(ITS_MODEL)
+        # The MiFish primers also amplify bacterial 16S, which can outnumber the
+        # fish 12S reads so much that the HMMs see no 12S at all, but all reads
+        # start with the 12S primers
+        primer_models.append(MITO_12S_MODEL)
+        for model_name in primer_models if fastqs else []:
+            primer_info = check_primers(model_name, *fastqs, data[0]['length'], data[1]['length'])
+            if primer_info is not None:
+                out_data = {'layout': 'paired', **primer_info}
+                errors = []
+                break
     else:
         raise RuntimeError('bug')
 
@@ -423,6 +449,120 @@ def check_paired(fwd, rev):
         info['gap'] = overlap['start'] - overlap['end']
 
     info['errors'] = errors
+    return info
+
+
+ITS_MODEL = 'ITS_euk'
+MITO_12S_MODEL = '12S_rRNA_mito'
+IUPAC = {
+    'A': 'A', 'C': 'C', 'G': 'G', 'T': 'T', 'R': '[AG]', 'Y': '[CT]',
+    'S': '[CG]', 'W': '[AT]', 'K': '[GT]', 'M': '[AC]', 'B': '[CGT]',
+    'D': '[AGT]', 'H': '[ACT]', 'V': '[ACG]', 'N': '[ACGT]', 'I': '[ACGT]',
+}
+COMPLEMENT = str.maketrans('ACGTRYSWKMBDHVNI', 'TGCAYRSWMKVHDBNN')
+
+
+def looks_like_its(fwd, rev):
+    """
+    Do the HMM summaries look like ITS reads?
+
+    ITS reads align to the flanking rRNA genes (the ITS anchors), with the fwd
+    and rev reads usually on different genes.  Plain 18S or 28S amplicons have
+    both directions on the same gene.
+    """
+    anchors = get_models()[ITS_MODEL].anchors
+    models = [getattr(i.get('model'), 'name', None) for i in (fwd, rev)]
+    if not all(i in anchors for i in models):
+        return False
+    return not (models[0] == models[1] and models[0] in ('18S_rRNA_euk', '28S_rRNA_euk'))
+
+
+def primer_regex(sequence, max_offset):
+    """ regex for a primer at a read's 5' end, allowing for a few leading bases """
+    return re.compile(
+        f'^.{{0,{max_offset}}}' + ''.join(IUPAC[i] for i in sequence.upper())
+    )
+
+
+def read_seqs(fastq, num):
+    with gzip.open(fastq, 'rt') as ifile:
+        return [line.rstrip('\n') for line in islice(ifile, 1, 4 * num, 4)]
+
+
+def check_primers(model_name, fwd_fastq, rev_fastq, fwd_len, rev_len):
+    """
+    Detect a target by its primer sequences at the 5' ends of reads
+
+    Used for ITS, which has no profile HMM, and for 12S, where off-target reads
+    can outnumber the target in the HMM summaries.  Returns target info like
+    check_paired() does or None if no primer pair of the model is found in
+    enough reads.  Coordinates are on the model's frame (for ITS the nominal
+    ITS frame).
+    """
+    NUM_READS = 1000
+    MIN_COUNT = 100
+    MAX_OFFSET = 10  # leading bases before primer, e.g. heterogeneity spacers
+
+    model = get_models()[model_name]
+    reads = {'fwd': read_seqs(fwd_fastq, NUM_READS), 'rev': read_seqs(rev_fastq, NUM_READS)}
+
+    def count(primer, direc):
+        pat = primer_regex(primer.sequence, MAX_OFFSET)
+        return sum(1 for i in reads[direc] if pat.match(i))
+
+    # best primers and whether the reads are swapped
+    fwd_counts = {(p, d): count(p, d) for p in model.fwd_primers for d in reads}
+    (fwd_primer, fwd_direc), fwd_count = max(fwd_counts.items(), key=lambda x: x[1])
+    swapped = fwd_direc == 'rev'
+    rev_direc = 'fwd' if swapped else 'rev'
+    rev_counts = {p: count(p, rev_direc) for p in model.rev_primers}
+    rev_primer, rev_count = max(rev_counts.items(), key=lambda x: x[1])
+
+    if fwd_count < MIN_COUNT or rev_count < MIN_COUNT:
+        print(f'[{model.name}] no primer pair: {fwd_primer.name}: {fwd_count}, '
+              f'{rev_primer.name}: {rev_count} of {NUM_READS} reads')
+        return None
+    print(f'[{model.name}] {fwd_primer.name}: {fwd_count}, {rev_primer.name}: {rev_count} '
+          f'of {NUM_READS} reads{" (swapped)" if swapped else ""}')
+
+    # read-through into the other primer (short amplicons)
+    def readthrough(primer, direc):
+        rc = primer.sequence.upper().translate(COMPLEMENT)[::-1]
+        pat = re.compile(''.join(IUPAC[i] for i in rc))
+        return sum(1 for i in reads[direc] if pat.search(i))
+    fwd_rev_clean = readthrough(rev_primer, fwd_direc) == 0
+    rev_fwd_clean = readthrough(fwd_primer, rev_direc) == 0
+
+    if swapped:
+        fwd_len, rev_len = rev_len, fwd_len
+    fwd_start = fwd_primer.end + 1
+    fwd_end = min(fwd_start + fwd_len - len(fwd_primer.sequence) - 1, rev_primer.start - 1)
+    rev_end = rev_primer.start - 1
+    rev_start = max(rev_end - (rev_len - len(rev_primer.sequence)) + 1, fwd_primer.end + 1)
+
+    info = {
+        'model_name': model.name,
+        'swapped': swapped,
+        'fwd_primer': fwd_primer.name,
+        'rev_primer': rev_primer.name,
+        'fwd_clean': False,
+        'fwd_distance': format_distance({'avg': 0, 'plus': 0, 'minus': 0}),
+        'rev_clean': False,
+        'rev_distance': format_distance({'avg': 0, 'plus': 0, 'minus': 0}),
+        'fwd_rev_clean': fwd_rev_clean,
+        'rev_fwd_clean': rev_fwd_clean,
+        'fwd_hmmfrom': fwd_start,
+        'fwd_hmmto': fwd_end,
+        'rev_hmmfrom': rev_start,
+        'rev_hmmto': rev_end,
+        'overlap': {'start': max(fwd_start, rev_start), 'end': min(fwd_end, rev_end)},
+        'errors': [],
+    }
+    overlap_len = info['overlap']['end'] - info['overlap']['start'] + 1
+    if overlap_len >= 0:
+        info['overlap_pct'] = f'{overlap_len / (rev_end - fwd_start):.0%}'
+    else:
+        info['gap'] = info['overlap']['start'] - info['overlap']['end']
     return info
 
 

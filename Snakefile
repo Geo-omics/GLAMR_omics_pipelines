@@ -4571,6 +4571,7 @@ rule amplicon_vsearch_hits:
             --maxaccepts 100 \
             --maxrejects 500 \
             --top_hits_only \
+            --notrunclabels \
             --threads {threads} \
             --userfields query+id+target \
             --userout {output.hits}

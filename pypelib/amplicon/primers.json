@@ -647,5 +647,115 @@
         "start": 1408,
         "end": 1430,
         "region": "COI"
+    },
+    {
+        "name": "515F_18S",
+        "sequence": "GTGYCAGCMGCCGCGGTAA",
+        "direction": "forward",
+        "gene_target": "euk 18S rRNA",
+        "citation": "doi: 10.1128/mSystems.00009-15; 515F-Y binding site on 18S, for the 18S reads of 515F-Y/926R data (reads split by rule amplicon_split_16S_18S)",
+        "hmm_name": "18S_rRNA_euk",
+        "start": 566,
+        "end": 584,
+        "region": "V4-V5"
+    },
+    {
+        "name": "926R_18S",
+        "sequence": "CCGTCAATTCMTTTRAGT",
+        "direction": "reverse",
+        "gene_target": "euk 18S rRNA",
+        "citation": "None; 926R binding site on 18S, for the 18S reads of 515F-Y/926R data (reads split by rule amplicon_split_16S_18S)",
+        "hmm_name": "18S_rRNA_euk",
+        "start": 1153,
+        "end": 1170,
+        "region": "V4-V5"
+    },
+    {
+        "name": "ITS1",
+        "sequence": "TCCGTAGGTGAACCTGCGG",
+        "direction": "forward",
+        "gene_target": "euk ITS",
+        "citation": "White et al. (1990); coordinates on the nominal ITS_euk frame",
+        "hmm_name": "ITS_euk",
+        "start": 21,
+        "end": 39,
+        "region": "ITS"
+    },
+    {
+        "name": "ITS4",
+        "sequence": "TCCTCCGCTTATTGATATGC",
+        "direction": "reverse",
+        "gene_target": "euk ITS",
+        "citation": "White et al. (1990); coordinates on the nominal ITS_euk frame",
+        "hmm_name": "ITS_euk",
+        "start": 961,
+        "end": 980,
+        "region": "ITS"
+    },
+    {
+        "name": "MiFish-U-F",
+        "sequence": "GTCGGTAAAACTCGTGCCAGC",
+        "direction": "forward",
+        "gene_target": "mito 12S",
+        "citation": "Miya et al. (2015) doi:10.1098/rsos.150088",
+        "hmm_name": "12S_rRNA_mito",
+        "start": 224,
+        "end": 244,
+        "region": null
+    },
+    {
+        "name": "MiFish-U-F_T2C",
+        "sequence": "GCCGGTAAAACTCGTGCCAGC",
+        "direction": "forward",
+        "gene_target": "mito 12S",
+        "citation": "MiFish-U-F (Miya et al. 2015) with T2C, as found at the start of all set_129 reads",
+        "hmm_name": "12S_rRNA_mito",
+        "start": 224,
+        "end": 244,
+        "region": null
+    },
+    {
+        "name": "MiFish-U-R",
+        "sequence": "CATAGTGGGGTATCTAATCCCAGTTTG",
+        "direction": "reverse",
+        "gene_target": "mito 12S",
+        "citation": "Miya et al. (2015) doi:10.1098/rsos.150088",
+        "hmm_name": "12S_rRNA_mito",
+        "start": 425,
+        "end": 451,
+        "region": null
+    },
+    {
+        "name": "MiFish-U-R_20",
+        "sequence": "CATAGTGGGGTATCTAATCC",
+        "direction": "reverse",
+        "gene_target": "mito 12S",
+        "citation": "5' 20 nt of MiFish-U-R (Miya et al. 2015), the primer at the start of all set_129 rev reads",
+        "hmm_name": "12S_rRNA_mito",
+        "start": 432,
+        "end": 451,
+        "region": null
+    },
+    {
+        "name": "MiFish-E-F",
+        "sequence": "GTTGGTAAATCTCGTGCCAGC",
+        "direction": "forward",
+        "gene_target": "mito 12S",
+        "citation": "Miya et al. (2015) doi:10.1098/rsos.150088",
+        "hmm_name": "12S_rRNA_mito",
+        "start": 224,
+        "end": 244,
+        "region": null
+    },
+    {
+        "name": "MiFish-E-R",
+        "sequence": "CATAGTGGGGTATCTAATCCTAGTTTG",
+        "direction": "reverse",
+        "gene_target": "mito 12S",
+        "citation": "Miya et al. (2015) doi:10.1098/rsos.150088",
+        "hmm_name": "12S_rRNA_mito",
+        "start": 425,
+        "end": 451,
+        "region": null
     }
 ]
