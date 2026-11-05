@@ -11,6 +11,7 @@ import shutil
 from tempfile import NamedTemporaryFile
 
 from ..utils import UsageError
+from . import get_models
 from .hmm import HMM
 
 
@@ -21,11 +22,12 @@ thresholt, then all samples will be automatically assigned to this (mode)
 target. """
 
 DEFAULT_OUT_TARGETS = 'amplicon_target_assignments.tsv'
-DEFAULT_OUT_SAMPLES = 'sample_files.tsv'
+DEFAULT_OUT_DADA2_INPUT = 'dada2_input.tsv'
 
 UNKNOWN = 'UNKNOWN'
 SKIP = 'SKIP'
 AUTO_OVERRIDE_PREFIX = '__AUTO__'
+PRIMER_SEP = '<->'
 
 
 def cli():
@@ -59,12 +61,12 @@ def cli():
              f'"{DEFAULT_OUT_TARGETS}"',
     )
     makep.add_argument(
-        '--out-samples',
+        '--out-dada2-input',
         metavar='<path>',
-        default='./sample_files.tsv',
-        help=f'Path to output sample listing file.  This will be a '
+        default='./dada2_input.tsv',
+        help=f'Path to output dada2-input file.  This will be a '
              f'tab-separated table listing samples with their paths to raw '
-             f'reads.  Defaults to "{DEFAULT_OUT_SAMPLES}"',
+             f'reads and other bits.  Defaults to "{DEFAULT_OUT_DADA2_INPUT}"',
     )
     spec2targetsp = subp.add_parser(
         'spec2targets',
@@ -82,7 +84,7 @@ def cli():
                     args.target_tabular_input,
                     args.project_directory,
                     out_assignments=args.out_assignments,
-                    out_samples=args.out_samples,
+                    out_dada2_input=args.out_dada2_input,
                 )
             case 'spec2targets':
                 spec2targets(args.spec)
@@ -95,11 +97,10 @@ def cli():
 
 
 def make(
-    fastq_files,  # passed by Snakefile, but not used, as we'll get them again
     target_tab,
     project_dir,
     out_assignments=None,
-    out_samples=None,
+    out_dada2_input=None,
 ):
     project_dir = Path(project_dir).resolve()
     data = load_target_table(target_tab)
@@ -125,13 +126,16 @@ def make(
             if row['sample'] in overrides:
                 row['override'] = overrides[row['sample']]
 
-    write_assignments(data, out_assignments)
-    write_sample_info(get_sample_info(data, project_dir), out_samples)
+    groups = dispatch(data)
+    write_assignments(data, groups, out_assignments)
+    apply_overrides(data)
+    write_dada2_input(get_dada2_input(data, project_dir), out_dada2_input)
 
 
 def load_target_table(input_file):
     """ Read input from tabular target info input file """
-    all_data = []
+    hmms = get_models()
+    rows = []
     with open(input_file) as ifile:
         header = None
         for lnum, line in enumerate(ifile, start=1):
@@ -143,49 +147,68 @@ def load_target_table(input_file):
                 header = line.split('\t')
                 continue
 
-            data = dict(zip(header, line.split('\t')))
+            row = dict(zip(header, line.split('\t')))
 
-            # Convert data in certain boolean columns
+            # Convert row data in certain boolean columns
             for i in ['swapped', 'fwd_clean', 'rev_clean']:
-                if i in data:
-                    match data[i]:
-                        case 'True': data[i] = True
-                        case 'False': data[i] = False
-                        case _: data[i] = None
+                if i in row:
+                    match row[i]:
+                        case 'True': row[i] = True
+                        case 'False': row[i] = False
+                        case _: row[i] = None
 
-            all_data.append(data)
-    return all_data
+            if row.get('errors'):
+                row['target'] = UNKNOWN
+            else:
+                hmm = hmms[row['model_name']]
+                row['target'] = hmm.format_target_spec(
+                    hmm.fwd_primer[row['fwd_primer']],
+                    hmm.rev_primer[row['rev_primer']]
+                )
+            row.setdefault('override', '')
+            row.setdefault('is_auto_override', False)
+            rows.append(row)
+    return rows
 
 
-def write_assignments(data, output_file):
-    """ Partition the samples and write the target assignment output file """
-    output_file = Path(output_file)
-    stats = Counter()
+def dispatch(data):
+    """ Partition the samples and apply auto overrides """
+    groups = Counter()
     for row in data:
         if row.get('errors'):
-            row['target'] = UNKNOWN
+            groups[(UNKNOWN, None, None)] += 1
         else:
-            row['target'] = '.'.join([
-                row['model_name'], row['fwd_primer'], row['rev_primer']
-            ])
-        row.setdefault('override', '')
-        stats[row['target']] += 1
+            groups[(row['target'], row['fwd_primer'], row['rev_primer'])] += 1
 
     print('Dispatching...')
-    for target, count in stats.most_common():
-        print(f'  {count:>4} samples to target {target}')
+    for (target, fwd_p, rev_p), count in groups.most_common():
+        if target is UNKNOWN:
+            target_str = UNKNOWN
+        else:
+            target_str = f'{target}:  {fwd_p}{PRIMER_SEP}{rev_p}'
+        print(f'  {count:>4} samples to target {target_str}')
 
-    if len(stats) == 2:
-        (top_target, top_count), (minor_target, minor_count) = stats.items()
-        if minor_target == UNKNOWN:
+    if len(groups) == 2:
+        (top_target, top_count), (minor_target, minor_count) = groups.items()
+        if minor_target == (UNKNOWN, None, None):
             if (top_count / len(data)) >= SINGLE_MODE_THRESHOLT:
                 print(
                     f'Single-target-mode detected, overriding {minor_count} '
                     f'stray (unknown) target assignments to {top_target}'
                 )
+            top_target, top_fwd_p, top_rev_p = top_target
             for row in data:
-                if row['target'] == minor_target and not row['override']:
-                    row['override'] = AUTO_OVERRIDE_PREFIX + top_target
+                if row['target'] == UNKNOWN and not row['override']:
+                    row['override'] = f'{top_target}:{top_fwd_p}<>{top_rev_p}'
+                    row['is_auto_override'] = True
+    return groups
+
+
+def write_assignments(data, groups, output_file):
+    """ Write the target assignment file """
+    for row in data:
+        if row['is_auto_override']:
+            row['override'] = AUTO_OVERRIDE_PREFIX + row['override']
 
     data = sorted(
         data,
@@ -193,8 +216,13 @@ def write_assignments(data, output_file):
         key=lambda x: '' if x['target'] == UNKNOWN else x['target']
     )
 
+    output_file = Path(output_file)
     print(f'Writing {output_file} ... ', end='', flush=True)
     with NamedTemporaryFile(mode='w+') as tmpfile:
+        for (target, fwd_p, rev_p) in groups:
+            if target == UNKNOWN:
+                continue
+            tmpfile.write(f'# {target}:{fwd_p}{PRIMER_SEP}{rev_p}\n')
         header = ('sample', 'target', 'override')
         tmpfile.write('\t'.join(header))
         tmpfile.write('\n')
@@ -223,14 +251,35 @@ def write_assignments(data, output_file):
     print('[Done]')
 
 
-def get_sample_info(data, project_dir):
+def apply_overrides(data):
+    """ Helper to change bits according to overrides """
+    for row in data:
+        if not row['override']:
+            continue
+
+        target, _, primers = row['override'].partition(':')
+        fwd_p, _, rev_p = primers.partition(PRIMER_SEP)
+        row['target'] = target.strip()
+        row['fwd_clean'] = True if fwd_p.strip() == '' else False
+        row['rev_clean'] = True if rev_p.strip() == '' else False
+        row['fwd_rev_clean'] = True  # FIXME need more general solution for read-through
+        row['rev_fwd_clean'] = True  # FIXME need more general solution for read-through
+
+
+def get_dada2_input(data, project_dir):
     """
-    Compile the sample info from the data
+    Compile the dada input from the data
 
         project_dir: A resolved() pathlib.Path.
     """
     # For testing, set env variable to pass the raw reads to dada2
     USE_CLEAN = not bool(environ.get('NO_PRIMER_REMOVAL'))
+
+    EXTRA_KEYS_PAIRED = [
+        'fwd_hmmfrom', 'fwd_hmmto', 'rev_hmmfrom', 'rev_hmmto', 'overlap_start',
+        'overlap_end',
+    ]
+    """ bits to be copied, as needed by code/ampliconTrunc.R """
 
     # paths as written to output will be relative to the data root
     glamr_root = project_dir.parent.parent.parent
@@ -245,18 +294,33 @@ def get_sample_info(data, project_dir):
         }
 
         if row['layout'] == 'paired':
-            if None in (row['swapped'], row['fwd_clean'], row['rev_clean']):
-                info['fwd_fastq'] = None
-                info['rev_fastq'] = None
-            else:
+            # set default blank values
+            info['fwd_fastq'] = None
+            info['rev_fastq'] = None
+            for key in EXTRA_KEYS_PAIRED:
+                info[key] = None
+
+            if None not in (row['swapped'], row['fwd_clean'], row['rev_clean']):
                 if row['swapped']:
                     # "Fix" the swap
                     fwd_infix = 'rev'
                     rev_infix = 'fwd'
+                    if not row['override']:
+                        for key in EXTRA_KEYS_PAIRED:
+                            if 'fwd' in key:
+                                key2 = key.replace('fwd', 'rev')
+                            elif 'rev' in key:
+                                key2 = key.replace('rev', 'fwd')
+                            else:
+                                key2 = key
+                            info[key2] = row[key]
                 else:
                     # keep as-is
                     fwd_infix = 'fwd'
                     rev_infix = 'rev'
+                    if not row['override']:
+                        for key in EXTRA_KEYS_PAIRED:
+                            info[key] = row[key]
 
                 if USE_CLEAN and (row.get('fwd_clean') is False or row.get('fwd_rev_clean') is False):  # noqa:E501
                     fwd_fq = f'clean.{fwd_infix}_reads.fastq.gz'
@@ -288,13 +352,8 @@ def get_sample_info(data, project_dir):
     return all_info
 
 
-def write_sample_info(rows, output_file):
-    """
-    Write the sample info output file
-
-    This should raise exceptions if any of the paths of fastq files do not
-    exist.
-    """
+def write_dada2_input(rows, output_file):
+    """ Write the dada2-input file """
     print(f'Writing {output_file} ... ', end='', flush=True)
     with open(output_file, 'w') as ofile:
         cols = list(rows[0].keys())
@@ -306,21 +365,45 @@ def write_sample_info(rows, output_file):
     print('[Done]')
 
 
-def get_fastq_files(path_template, dataset=None):
+def get_fastq_files(dada2_input_tmpl, assignments_tmpl, **wildcards):
     """
-    Return list of all fastq files -- helper for some Snakemake input function
+    Return list of all fastq files for a dada2 run
 
-    The path_template must accept "dataset" formatting.
+    Helper for some Snakemake input function
+
+    The path templates must accept the wildcard formattings as needed.  Returns
+    a list of paths, as found in the fastq column(s).
     """
-    targets_tab = Path(path_template.format(dataset=dataset))
-    project_dir = targets_tab.parent.resolve()
-    data = load_target_table(targets_tab)
-    files = []
-    for row in get_sample_info(data, project_dir):
-        for key in ['fwd_fastq', 'rev_fastq', 'single_fastq']:
-            if file := row.get(key):
-                files.append(file)
-    return files
+    assignments = get_assignments(path=Path(assignments_tmpl.format(**wildcards)))
+    dada2_input = Path(dada2_input_tmpl.format(**wildcards))
+    with open(dada2_input) as ifile:
+        head = ifile.readline().strip().split('\t')
+        if head[0] != 'sample':
+            raise RuntimeError('first column must be "sample"')
+
+        # figure out where the fastq paths are stored
+        col_idxs = []
+        try:
+            col_idxs.append(head.index('fwd_fastq'))
+            col_idxs.append(head.index('rev_fastq'))
+        except ValueError as e1:
+            try:
+                col_idxs.append(head.index('single_fastq'))
+            except ValueError as e2:
+                raise RuntimeError(f'Unexpected file header: {e1} and {e2}') from e1
+
+        file_list = []
+        for line in ifile:
+            row = line.strip().split('\t')
+            if target_spec := wildcards.get('target_spec'):
+                sample = row[0]
+                if target_spec != assignments[sample].split(':', maxsplit=1)[0]:
+                    # target does not match
+                    continue
+            for i in col_idxs:
+                file_list.append(row[i])
+
+    return file_list
 
 
 def get_assignments(
@@ -353,9 +436,10 @@ def get_assignments(
 
             # require two fields, override is an optional third field,
             # ignore anything beyond that (could be used for a comment)
+            # Delimiter is any blank space
             sample_id, target, *override = line.split(maxsplit=3)
 
-            if lnum == 1 and sample_id == 'sample' and target == 'target':
+            if not data and sample_id == 'sample' and target == 'target':
                 # header line
                 continue
 
@@ -381,7 +465,7 @@ def get_assignments(
 
 def target2spec(target):
     """
-    Get formatted spec (HMM+range) from target identifier string
+    Get formatted spec (HMM+range) from target (HMM+primers) identifier string
 
     This is used in the Snakefile as well as the GLAMR DB loading code.
     """

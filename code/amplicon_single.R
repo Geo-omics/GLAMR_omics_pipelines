@@ -3,7 +3,7 @@
 'Using dada2 with single-ended amplicon sequencing data
 
 Usage:
-  amplicon_single.R [--glamr-root <PATH>] --quality <N> --outdir <PATH> [--cpus <N>] --assignments <PATH> --samples <PATH> --targets <PATH> <target_spec>
+  amplicon_single.R [--glamr-root <PATH>] --quality <N> --outdir <PATH> [--cpus <N>] --assignments <PATH> --input <PATH> <target_spec>
 
 Options:
   -h --help             Show this screen
@@ -12,9 +12,7 @@ Options:
                         tracking read numbers
   --assignments <PATH>  Path to amplicon target assignment listing as produced
                         by the amplicon-dispatch script.
-  --samples <PATH>      Path to the samples and files listing as produced by
-                        the amplicon-dispatch script.
-  --targets <PATH>      Path to the target_info table.
+  --input <PATH>        Input data for each sample, e.g. paths to the samples and files listings as produced by
                         the amplicon-dispatch script.
   --glamr-root <PATH>   GLAMR root directory, certain paths read from the other
                         input files will be interpreted as relative to this root directory
@@ -41,38 +39,27 @@ args <- docopt(doc)
 cpus = as.integer(args$cpus)
 
 
-valid_targets = system2(
-    'python3',
-    args=shQuote(c('-m', 'pypelib.amplicon.dispatch', 'spec2targets', args$target_spec)),
-    stdout=TRUE,
-)
-status = attr(valid_targets, 'status')
-if (!is.null(status)) {
-    stop(paste('called process failed with exit status ', status))
-}
-cat('Targets:', valid_targets, '\n')
-
 assignments <- read.delim(
     args$assignments,
     header=TRUE,
     fill=TRUE,
+    comment='#',
 ) |> tibble() |>
     mutate(override = sub('^__AUTO__', '', override)) |>
     mutate(assigned=if_else(override == "", target, override, missing=target)) |>
-    filter(assigned %in% valid_targets)
+    # remove primer info, if any
+    mutate(assigned=sub(':.*$', '', assigned)) |>
+    filter(assigned==args$target_spec)
 
 if (nrow(assignments) == 0) {
     stop('no samples where assigned to given target')
 }
 
-target_tab <- read.delim(args$targets, header=TRUE)
-
 samples <- read.delim(
-    args$samples,
+    args$input,
     header=TRUE,
 ) |> tibble() |>
     semi_join(assignments, by=join_by('sample')) %>%
-    left_join(target_tab, by=join_by('sample')) %>%
     mutate(filt_reads_single=str_glue('{args$outdir}/filtered/{sample}_single.fastq.gz')) %>%
     # below: paste glamr_root and paths, but respect absolute paths in data,
     # make some effort to avoid double slashes

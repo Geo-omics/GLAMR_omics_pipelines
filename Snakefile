@@ -4335,17 +4335,12 @@ rule remove_primers_se:
             conda_env=conda_env,
         )
 
-def get_dataset_fastq_files(wc):
-    target_tab = checkpoints.amplicon_collect_target_guesses.get(**wc).output.target_tab
-    return pypelib.amplicon.dispatch.get_fastq_files(target_tab, **wc)
-
 checkpoint amplicon_dispatch:
     input:
-        fastqs = get_dataset_fastq_files,
         target_tab = rules.amplicon_collect_target_guesses.output.target_tab
     output:
         assignments=update("data/projects/{dataset}/amplicon_target_assignments.tsv"),
-        samples="data/projects/{dataset}/amplicon_sample_info.tsv",
+        dada2_input="data/projects/{dataset}/amplicon_dada2_input.tsv",
     params:
         project_dir = subpath(output.assignments, parent=True)
     resources: mem_mb=100, time_min=2
@@ -4353,11 +4348,10 @@ checkpoint amplicon_dispatch:
     run:
         with logme(log):
             pypelib.amplicon.dispatch.make(
-                input.fastqs,
                 input.target_tab,
                 params.project_dir,
                 out_assignments=output.assignments,
-                out_samples=output.samples,
+                out_dada2_input=output.dada2_input,
             )
 
 
@@ -4520,17 +4514,21 @@ def concatenate_pairs(target_spec):
 
 
 def get_dada2_input(wc):
-    """ dispatch files for a dada2 job, those of the split 18S reads if applicable """
+    """ collect input files needed for a dada2 job, those of the split 18S reads if applicable """
+    dada2_input = checkpoints.amplicon_dispatch.get(**wc).output.dada2_input
+    assignments = checkpoints.amplicon_dispatch.get(**wc).output.assignments
+    fastq_files = pypelib.amplicon.dispatch.get_fastq_files(dada2_input, assignments, **wc)
+
     if wc.target_spec == SPLIT_18S_SPEC:
         split_out = rules.amplicon_split_18S_dispatch.output
         return {
             'assignments': split_out.assignments.format(dataset=wc.dataset),
-            'samples': split_out.samples.format(dataset=wc.dataset),
+            'dada2_input': split_out.samples.format(dataset=wc.dataset),
             'target_tab': split_out.target_tab.format(dataset=wc.dataset),
         }
     return {
         'assignments': rules.amplicon_dispatch.output.assignments.format(dataset=wc.dataset),
-        'samples': rules.amplicon_dispatch.output.samples.format(dataset=wc.dataset),
+        'dada2_input': rules.amplicon_dispatch.output.dada2_input.format(dataset=wc.dataset),
         'target_tab': rules.amplicon_collect_target_guesses.output.target_tab.format(dataset=wc.dataset),
     }
 
@@ -4556,8 +4554,7 @@ rule amplicon_dada2_target:
             --quality {params.quality_threshold} \
             --outdir {params.outdir} \
             --assignments {input.assignments} \
-            --samples {input.samples} \
-            --targets {input.target_tab} \
+            --input {input.dada2_input} \
             --cpus {threads} \
             {params.concatenate} \
             {wildcards.target_spec}
@@ -4913,24 +4910,21 @@ def get_dada2_output(wc):
     assignments = pypelib.amplicon.dispatch.get_assignments(path=assignment_file)
 
     wc_str = ' '.join(f'{k}={v}' for k, v in wc.items())
-    targets = Counter(assignments.values())
-    print(f'[INFO] target assignments {targets}')
-    if bad_count := targets.pop(pypelib.amplicon.dispatch.UNKNOWN, 0):
+    target_stats = Counter(assignments.values())
+    print(f'[INFO] target assignments {target_stats}')
+    if bad_count := target_stats.pop(pypelib.amplicon.dispatch.UNKNOWN, 0):
         print(
             f'[WARNING] ({wc_str}) There are {bad_count} samples that do not '
             f'have an amplicon target assigned.  Manual curation required for '
             f'{assignment_file}'
         )
-    if skip_count := targets.pop(pypelib.amplicon.dispatch.SKIP, 0):
+    if skip_count := target_stats.pop(pypelib.amplicon.dispatch.SKIP, 0):
         print(f'[INFO]: [{wc_str}] {skip_count} samples got excluded from analysis')
 
-    specs = sorted(set(
-        pypelib.amplicon.dispatch.target2spec(i)
-        for i in targets
-    ))
-    if SPLIT_18S and set(targets) & set(SPLIT_18S['targets']):
+    specs = sorted(set(target_stats))
+    if SPLIT_18S and set(specs) & set(SPLIT_18S['targets']):  # FIXME: targets is now in specs format
         # extra dada2 job for the 18S reads of 16S+18S primer pairs
-        specs.append(SPLIT_18S_SPEC)
+        specs.append(SPLIT_18S_SPEC)  # FIXME: convert into spec fmt first?
     if specs:
         print(f'{len(specs)} dada2 job(s) for wildcards: {wc_str}:')
         for i in specs:
