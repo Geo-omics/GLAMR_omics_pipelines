@@ -56,6 +56,19 @@ HMM_MODEL_DATA = {
         },
         'length': 1729,
     },
+    # ITS (18S end - ITS1 - 5.8S - ITS2 - 28S start) has no profile HMM, it is
+    # too variable.  Reads and ASVs align to the flanking rRNA genes (anchors).
+    # Coordinates are on a nominal frame, only to order regions and primers:
+    #       ITS1 primer at 21-39, ITS4 at 961-980
+    'ITS_euk': {
+        'regions': {
+            'ITS1': (40, 360),
+            '5.8S': (361, 520),
+            'ITS2': (521, 960),
+        },
+        'length': 1000,
+        'anchors': ('18S_rRNA_euk', '5_8S_rRNA_euk', '5_8S_rRNA_arc', '28S_rRNA_euk'),
+    },
     '23S_rRNA_bac': {'length': 2906},
     '23S_rRNA_arc': {'length': 2978},
     '28S_rRNA_euk': {'length': 3729},

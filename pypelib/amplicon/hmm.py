@@ -5,7 +5,14 @@ class HMM:
     """
     HMM model
     """
-    def __init__(self, name, regions=None, primers=None, length=None):
+    def __init__(self, name, regions=None, primers=None, length=None, anchors=None):
+        """
+        anchors:
+            For targets without a profile HMM of their own (e.g. ITS, which is
+            too variable): names of the HMMs that the reads/ASVs align to
+            instead (the conserved flanking genes).  Coordinates of such a
+            target's regions and primers are then on a nominal frame.
+        """
         if not name:
             raise ValueError('name must be supplied')
 
@@ -32,6 +39,7 @@ class HMM:
             last = end
         self.regions = regions
         self.length = length
+        self.anchors = tuple(anchors) if anchors else ()
 
         fwd_primers = []
         rev_primers = []

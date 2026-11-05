@@ -34,6 +34,8 @@ def cli():
 def main(hmm_db_path, fasta_path, target_spec, aln_output, fasta_output,
          hmmr_threads=1):
     hmm, _, _ = HMM.spec2targets(target_spec)
+    # Targets without a profile HMM (ITS) align to their anchor (flanking) genes
+    target_models = set(hmm.anchors) if hmm.anchors else {hmm.name}
     asvs = {i.id: i for i in SeqIO.parse(fasta_path, 'fasta')}
 
     print(f'Testing {len(asvs)} ASVs ...')
@@ -56,7 +58,7 @@ def main(hmm_db_path, fasta_path, target_spec, aln_output, fasta_output,
     for qname, grp in groupby(alns0, key=lambda x: x.qname):
         grp = list(grp)
         for aln in grp:
-            if aln.model == hmm:
+            if aln.model.name in target_models:
                 grp.remove(aln)
                 alns[qname] = aln
                 alns_out.append(aln)
@@ -66,9 +68,11 @@ def main(hmm_db_path, fasta_path, target_spec, aln_output, fasta_output,
             alns_out += grp
             continue
 
-        if others := [i for i in grp if i.model == hmm]:
+        if others := [i for i in grp if i.model.name in target_models]:
             alns_out += others
-            print(f'[WARNING] {qname}: multiple {hmm} alignments?! {others}')
+            if not hmm.anchors:
+                # several anchor alignments per ASV are expected
+                print(f'[WARNING] {qname}: multiple {hmm} alignments?! {others}')
 
     if all(i is None for i in alns.values()):
         raise RuntimeError(
@@ -106,17 +110,23 @@ def main(hmm_db_path, fasta_path, target_spec, aln_output, fasta_output,
         print(*row, sep=' ')
     print('total:', len(alns))
 
+    # A few ASVs on the other strand (chimeras, junk) are only flagged, more
+    # than MAX_OTHER_STRAND indicates a real problem
+    MAX_OTHER_STRAND = 0.01
     strands = Counter(i.strand for i in alns.values())
-    if len(strands) == 1:
-        match list(strands.keys())[0]:
-            case '+': pass
-            case '-':
-                print('[INFO] Sequences are on - strand, reverse-complementing ASVs!')
-                for i in asvs:
-                    asvs[i] = asvs[i].reverse_complement()
-            case _: raise ValueError('invalid strand')
-    else:
+    strand, count = strands.most_common(1)[0]
+    if strand not in ('+', '-'):
+        raise ValueError('invalid strand')
+    other_strand = {name for name, aln in alns.items() if aln.strand != strand}
+    if len(other_strand) > MAX_OTHER_STRAND * len(alns):
         raise RuntimeError(f'mixed strandedness: {strands}')
+    if other_strand:
+        print(f'[WARNING] {len(other_strand)} ASV(s) on the other strand, flagged in '
+              f'fasta header: {", ".join(sorted(other_strand))}')
+    if strand == '-':
+        print('[INFO] Sequences are on - strand, reverse-complementing ASVs!')
+        for i in asvs:
+            asvs[i] = asvs[i].reverse_complement()
 
     with open(fasta_output, 'w') as ofile:
         for i in asvs:
@@ -124,6 +134,8 @@ def main(hmm_db_path, fasta_path, target_spec, aln_output, fasta_output,
                 envmin, envmax = sorted([aln.envfrom, aln.envto])
                 seqid = (f'{i} {aln.model.name}:{aln.hmmfrom}..{aln.hmmto} '
                          f'env:{envmin}..{envmax}')
+                if i in other_strand:
+                    seqid += ' opposite_strand'
             else:
                 seqid = f'{i} hmm_check_failed'
 
