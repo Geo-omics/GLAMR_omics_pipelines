@@ -1,5 +1,6 @@
 from collections import Counter
 from contextlib import ExitStack
+import csv
 import json
 import os
 import re
@@ -16,6 +17,7 @@ import pypelib.amplicon.guess_target
 import pypelib.amplicon.hmm_check_asvs
 import pypelib.amplicon.hmm_summarize
 import pypelib.amplicon.remove_primers
+import pypelib.amplicon.split18S
 import pypelib.amplicon.tabulate_targets
 from pypelib.config import finish_config_setup
 from pypelib.post import post_production
@@ -4206,15 +4208,30 @@ def get_hmm_summaries(wc):
         case _:
             raise ValueError(f'unsupported library layout: {_}')
 
+def get_guess_target_reads(wc):
+    """
+    Input function: raw paired reads (fwd, rev) for detecting targets by their
+    primer sequences (ITS), nothing for single-ended data
+    """
+    runinfo = checkpoints.get_runinfo.get(**wc).output[0]
+    if parse_runinfo(runinfo, 'library_layout') == 'PAIRED':
+        return [
+            f"data/omics/{wc.sample_type}/{wc.sample}/reads/raw_{direc}_reads.fastq.gz"
+            for direc in ['fwd', 'rev']
+        ]
+    return []
+
+
 rule amplicon_guess_target:
     input:
         summaries=get_hmm_summaries,
-        stats = rules.raw_reads_stats.output.stats
+        stats = rules.raw_reads_stats.output.stats,
+        reads = get_guess_target_reads,
     output:
         target_info = "data/omics/{sample_type}/{sample}/detect_region/target_info.json"
-    resources: mem_mb=100, time_min=1
+    resources: mem_mb=500, time_min=5
     log: "logs/amplicon_guess_target/{sample_type}_{sample}.log"
-    run: pypelib.amplicon.guess_target.main(input.summaries, input.stats, output.target_info, log=log)
+    run: pypelib.amplicon.guess_target.main(input.summaries, input.stats, output.target_info, fastqs=input.reads, log=log)
 
 
 def get_target_info_files(wc):
@@ -4349,17 +4366,181 @@ rule hmm_summary_plots:
     run: pypelib.amplicon.hmm_summarize.multiplot(input[0], output=output.pdf)
 
 
-rule amplicon_dada2_target:
+# Splitting 16S and 18S reads of primer pairs that amplify both (515F-Y/926R),
+# see config['amplicon_split_18S'] and pypelib/amplicon/split18S.py.  The 16S
+# target is processed as usual, the split 18S reads as an extra dada2 target.
+SPLIT_18S = config.get('amplicon_split_18S') or {}
+SPLIT_18S_SPEC = (
+    pypelib.amplicon.dispatch.target2spec(SPLIT_18S['target_18S']) if SPLIT_18S else None
+)
+SPLIT_18S_DIR = "data/projects/{dataset}/split_18S"
+
+
+def get_split_18S_samples(wc):
+    """ Samples of a dataset with reads to split, empty if none """
+    if not SPLIT_18S:
+        return []
+    assignments = checkpoints.amplicon_dispatch.get(dataset=wc.dataset).output.assignments
+    return pypelib.amplicon.split18S.get_split_samples(assignments, SPLIT_18S['targets'])
+
+
+def get_split_18S_input(wc):
+    """ Primer-trimmed reads of a sample, as dispatched for its 16S target """
+    samples_file = checkpoints.amplicon_dispatch.get(dataset=wc.dataset).output.samples
+    with open(samples_file) as ifile:
+        for row in csv.DictReader(ifile, delimiter='\t'):
+            if row['sample'] == wc.sample:
+                return {'fwd': row['fwd_fastq'], 'rev': row['rev_fastq']}
+    raise ValueError(f'{wc.sample} not in {samples_file}')
+
+
+rule bbsplit_16S_18S_refs:
+    """ Small 16S and 18S reference sets (one per genus) for read splitting """
     input:
+        silva = config['amplicon_taxonomy_dbs']['16S_rRNA_bac'],
+        pr2 = config['amplicon_taxonomy_dbs']['18S_rRNA_euk'],
+    output:
+        ref_16S = "data/reference/bbsplit/16S_18S/16S.fasta.gz",
+        ref_18S = "data/reference/bbsplit/16S_18S/18S.fasta.gz",
+    log: "logs/bbsplit_16S_18S_refs/refs.log"
+    conda: "config/conda_yaml/hmmer.yaml"
+    resources: mem_mb=4000, time_min=30
+    shell:
+        """
+        logto {log}
+        $BASE/code/build_bbsplit_16S_18S_refs.sh {input.silva} {input.pr2} {output.ref_16S} {output.ref_18S}
+        """
+
+
+rule bbsplit_16S_18S_index:
+    input: rules.bbsplit_16S_18S_refs.output
+    output: "data/reference/bbsplit/16S_18S/ref/genome/1/summary.txt"
+    params: path = "data/reference/bbsplit/16S_18S"
+    log: "logs/bbsplit_16S_18S_refs/index.log"
+    conda: "config/conda_yaml/main.yaml"
+    threads: 4
+    resources: mem_mb=8000, time_min=30
+    shell:
+        """
+        logto {log}
+        bbsplit.sh -Xmx6g threads={threads} build=1 path={params.path} \
+            ref_16S={input[0]} ref_18S={input[1]}
+        """
+
+
+rule amplicon_split_16S_18S:
+    """
+    Split the primer-trimmed reads of a sample into 16S and 18S, keeping the
+    18S reads (the 16S target uses all reads as usual, 18S pairs don't merge)
+    """
+    input:
+        unpack(get_split_18S_input),
+        index = rules.bbsplit_16S_18S_index.output,
+    output:
+        fwd = SPLIT_18S_DIR + "/reads/{sample}_fwd.fastq.gz",
+        rev = SPLIT_18S_DIR + "/reads/{sample}_rev.fastq.gz",
+        refstats = SPLIT_18S_DIR + "/reads/{sample}_refstats.txt",
+    params:
+        path = rules.bbsplit_16S_18S_index.params.path,
+    log: "logs/amplicon_split_16S_18S/{dataset}_{sample}.log"
+    conda: "config/conda_yaml/main.yaml"
+    threads: 4
+    resources: mem_mb=4000, time_min=30
+    shell:
+        """
+        logto {log}
+        # local tmp dir, the split 16S reads are not kept (and NFS can't always rm -rf)
+        tmp_dir=$(mktemp -d)
+        trap 'rm -rf "$tmp_dir"' EXIT
+        bbsplit.sh -Xmx3g threads={threads} path={params.path} \
+            in={input.fwd} in2={input.rev} \
+            basename=$tmp_dir/%_#.fastq.gz \
+            ambiguous2=best refstats={output.refstats}
+        # bbsplit writes no file if no reads go to a reference
+        if [[ -f $tmp_dir/18S_1.fastq.gz ]]; then
+            mv $tmp_dir/18S_1.fastq.gz {output.fwd}
+            mv $tmp_dir/18S_2.fastq.gz {output.rev}
+        else
+            echo -n | gzip > {output.fwd}
+            echo -n | gzip > {output.rev}
+        fi
+        """
+
+
+def get_split_18S_reads(wc):
+    files = {}
+    for sample in get_split_18S_samples(wc):
+        for key in ['fwd', 'rev', 'refstats']:
+            path = getattr(rules.amplicon_split_16S_18S.output, key)
+            files[f'{sample}_{key}'] = path.format(dataset=wc.dataset, sample=sample)
+    return files
+
+
+rule amplicon_split_18S_dispatch:
+    """ Dispatch files (as by amplicon_dispatch) for the split 18S reads """
+    input:
+        unpack(get_split_18S_reads),
         assignments = rules.amplicon_dispatch.output.assignments,
-        samples = rules.amplicon_dispatch.output.samples,
-        target_tab = rules.amplicon_collect_target_guesses.output.target_tab
+        target_tab = rules.amplicon_collect_target_guesses.output.target_tab,
+    output:
+        assignments = SPLIT_18S_DIR + "/amplicon_target_assignments.tsv",
+        samples = SPLIT_18S_DIR + "/amplicon_sample_info.tsv",
+        target_tab = SPLIT_18S_DIR + "/target_info.tsv",
+    resources: mem_mb=1000, time_min=10
+    run:
+        samples = get_split_18S_samples(wildcards)
+        pypelib.amplicon.split18S.make(
+            input.assignments,
+            input.target_tab,
+            SPLIT_18S['targets'],
+            SPLIT_18S['target_18S'],
+            reads_files={i: (input[f'{i}_fwd'], input[f'{i}_rev']) for i in samples},
+            refstats_files={i: input[f'{i}_refstats'] for i in samples},
+            min_pairs=int(SPLIT_18S.get('min_pairs', 100)),
+            out_assignments=output.assignments,
+            out_samples=output.samples,
+            out_target_tab=output.target_tab,
+        )
+
+
+def concatenate_pairs(target_spec):
+    """
+    Should dada2 concatenate rather than merge read pairs for this target?
+
+    Yes for the split 18S reads of 515F-Y/926R and for models listed in
+    config['amplicon_concatenate_models'] (e.g. ITS, whose length varies and is
+    often too long for the read pairs to overlap).
+    """
+    if target_spec == SPLIT_18S_SPEC:
+        return True
+    return target_spec.split('.')[0] in (config.get('amplicon_concatenate_models') or [])
+
+
+def get_dada2_input(wc):
+    """ dispatch files for a dada2 job, those of the split 18S reads if applicable """
+    if wc.target_spec == SPLIT_18S_SPEC:
+        split_out = rules.amplicon_split_18S_dispatch.output
+        return {
+            'assignments': split_out.assignments.format(dataset=wc.dataset),
+            'samples': split_out.samples.format(dataset=wc.dataset),
+            'target_tab': split_out.target_tab.format(dataset=wc.dataset),
+        }
+    return {
+        'assignments': rules.amplicon_dispatch.output.assignments.format(dataset=wc.dataset),
+        'samples': rules.amplicon_dispatch.output.samples.format(dataset=wc.dataset),
+        'target_tab': rules.amplicon_collect_target_guesses.output.target_tab.format(dataset=wc.dataset),
+    }
+
+
+rule amplicon_dada2_target:
+    input: unpack(get_dada2_input)
     output:
         seqs = "data/projects/{dataset}/dada2.{target_spec}/rep_seqs.fasta",
         abund = "data/projects/{dataset}/dada2.{target_spec}/asv_table.tsv",
     params:
         outdir = subpath(output.abund, parent=True),
         quality_threshold=25,
+        concatenate = lambda wc: '--concatenate' if concatenate_pairs(wc.target_spec) else '',
     log: "logs/dada2/{dataset}_{target_spec}.log"
     benchmark: "benchmarks/amplicon_dada2_target/{dataset}_{target_spec}.txt"
     container: "docker://eandersk/r_microbiome"
@@ -4375,6 +4556,7 @@ rule amplicon_dada2_target:
             --samples {input.samples} \
             --targets {input.target_tab} \
             --cpus {threads} \
+            {params.concatenate} \
             {wildcards.target_spec}
         status=$?
         if [[ $status -ne 0 ]]; then
@@ -4743,6 +4925,9 @@ def get_dada2_output(wc):
         pypelib.amplicon.dispatch.target2spec(i)
         for i in targets
     ))
+    if SPLIT_18S and set(targets) & set(SPLIT_18S['targets']):
+        # extra dada2 job for the 18S reads of 16S+18S primer pairs
+        specs.append(SPLIT_18S_SPEC)
     if specs:
         print(f'{len(specs)} dada2 job(s) for wildcards: {wc_str}:')
         for i in specs:

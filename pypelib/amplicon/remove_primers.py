@@ -294,6 +294,7 @@ def main_paired(
             'cutadapt',
             *args,
             '--times', '2',  # remove both 5' primer and read-through 3' primer
+            '--minimum-length', '50',  # e.g. primer dimers, avoid dada2 qual plotting breaking
             '--output', fwd_out,
             '--paired-output', rev_out,
             '--info-file', Path(fwd_out).with_name('trim_info.txt'),
