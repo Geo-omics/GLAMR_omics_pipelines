@@ -5326,6 +5326,9 @@ rule contig_unirefLCA_mmseqs_generic:
 
         mkdir -p $TMPDIR
 
+        # easy-taxonomy skips writing _lca.tsv if it already exists, so remove one left from a previous assembly
+        rm -f {params.out_prefix}_lca.tsv
+
         # Log how much temp space is available, can cause job to fail
         printf "\nTemp directory storage available:\n" 2>&1 | tee {log}
         df -h $TMPDIR 2>&1 | tee -a {log}
