@@ -4987,6 +4987,103 @@ rule amplicon_pipeline_dataset:
                 ofile.write(f'  {target_spec}: {num_rows}\n')
 
 
+PICRUST2_TARGET_PREFIXES = ('16S_rRNA_bac', '16S_rRNA_arc')
+""" target specs eligible for PICRUSt2 functional prediction """
+
+
+rule amplicon_picrust2_prep:
+    """ Make PICRUSt2 inputs: ASV fasta w/o header descriptions and ASV x sample table """
+    input:
+        seqs = rules.amplicon_asv_check.output.asvs,
+        abund = rules.amplicon_dada2_target.output.abund,
+    output:
+        seqs = "data/projects/{dataset}/dada2.{target_spec}/picrust2/input/asvs.fasta",
+        abund = "data/projects/{dataset}/dada2.{target_spec}/picrust2/input/asv_table.tsv",
+    wildcard_constraints: target_spec = "16S_rRNA_(bac|arc)[^/]*"
+    log: "logs/amplicon_picrust2_prep/{dataset}_{target_spec}.log"
+    benchmark: "benchmarks/amplicon_picrust2_prep/{dataset}_{target_spec}.txt"
+    container: "docker://eandersk/r_microbiome"
+    resources: mem_mb=8000, time_min=30
+    shell:
+        """
+        logto {log}
+        $BASE/code/picrust2_prep.R \
+            --seqs {input.seqs} \
+            --abund {input.abund} \
+            --out-seqs {output.seqs} \
+            --out-abund {output.abund}
+        """
+
+rule amplicon_picrust2:
+    """ PICRUSt2 functional prediction (EC, KO, MetaCyc pathways) for 16S ASVs """
+    input:
+        seqs = rules.amplicon_picrust2_prep.output.seqs,
+        abund = rules.amplicon_picrust2_prep.output.abund,
+    output:
+        nsti = "data/projects/{dataset}/dada2.{target_spec}/picrust2/out/combined_marker_predicted_and_nsti.tsv.gz",
+        ec = "data/projects/{dataset}/dada2.{target_spec}/picrust2/out/EC_metagenome_out/pred_metagenome_unstrat.tsv.gz",
+        ec_contrib = "data/projects/{dataset}/dada2.{target_spec}/picrust2/out/EC_metagenome_out/pred_metagenome_contrib.tsv.gz",
+        ko = "data/projects/{dataset}/dada2.{target_spec}/picrust2/out/KO_metagenome_out/pred_metagenome_unstrat.tsv.gz",
+        ko_contrib = "data/projects/{dataset}/dada2.{target_spec}/picrust2/out/KO_metagenome_out/pred_metagenome_contrib.tsv.gz",
+        path = "data/projects/{dataset}/dada2.{target_spec}/picrust2/out/pathways_out/path_abun_unstrat.tsv.gz",
+        path_contrib = "data/projects/{dataset}/dada2.{target_spec}/picrust2/out/pathways_out/path_abun_contrib.tsv.gz",
+        path_per_seq = "data/projects/{dataset}/dada2.{target_spec}/picrust2/out/pathways_out/path_abun_unstrat_per_seq.tsv.gz",
+    params:
+        outdir = "data/projects/{dataset}/dada2.{target_spec}/picrust2/out",
+    wildcard_constraints: target_spec = "16S_rRNA_(bac|arc)[^/]*"
+    log: "logs/amplicon_picrust2/{dataset}_{target_spec}.log"
+    benchmark: "benchmarks/amplicon_picrust2/{dataset}_{target_spec}.txt"
+    conda: "config/conda_yaml/picrust2.yaml"
+    threads: 16
+    resources: mem_mb=64000, time_min=1440
+    shell:
+        """
+        logto {log}
+        # picrust2 refuses to write into an existing output directory
+        rm -rf {params.outdir}
+        status=0
+        picrust2_pipeline.py \
+            -s {input.seqs} \
+            -i {input.abund} \
+            -o {params.outdir} \
+            -p {threads} \
+            --stratified \
+            --per_sequence_contrib \
+            --verbose || status=$?
+        if [[ $status -ne 0 ]]; then
+            mv -v --backup=numbered -T -- {params.outdir} {params.outdir}_ERROR
+            exit $status
+        fi
+        """
+
+
+def get_picrust2_output(wc):
+    """
+    input function: get PICRUSt2 output files for the 16S targets of given dataset
+    """
+    specs = [
+        i for i in get_dada2_output(wc)
+        if i.startswith(PICRUST2_TARGET_PREFIXES)
+    ]
+    if not specs:
+        print(f'[WARNING] no 16S bacterial/archaeal targets for PICRUSt2 in {wc.dataset}')
+    return [
+        j.format(dataset=wc.dataset, target_spec=i)
+        for i in specs
+        for j in rules.amplicon_picrust2.output
+    ]
+
+rule amplicon_picrust2_dataset:
+    """ Target rule: PICRUSt2 for all 16S targets of a dataset """
+    input: get_picrust2_output
+    output: "data/projects/{dataset}/amplicon_picrust2_done"
+    resources: mem_mb=100, time_min=2
+    shell:
+        """
+        touch {output}  # datasets w/o 16S targets have no inputs
+        for i in {input:q}; do echo "$i" >> {output}; done
+        """
+
 rule deeparg_ls: #this rule is using LS mode and annotated genes  
     input:
         genes="data/omics/{sample_type}/{sample}/genes/{sample}_GENES.fna"  # For sets 35, 41, 42
