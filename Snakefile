@@ -1762,8 +1762,8 @@ rule contig_abund_metaT:
     input:
         contigs = "data/omics/metatranscriptomes/{sample}/assembly/RNAspades/contigs.renamed.fasta",
         f_seq = "data/omics/metatranscriptomes/{sample}/reads/noDedup_decon_fwd_reads_fastp.fastq.gz",
-        r_seq = "data/omics/metatranscriptomes/{sample}/reads/noDedup_decon_fwd_reads_fastp.fastq.gz"
-    output: 
+        r_seq = "data/omics/metatranscriptomes/{sample}/reads/noDedup_decon_rev_reads_fastp.fastq.gz"
+    output:
         coverage_full = "data/omics/metatranscriptomes/{sample}/assembly/RNAspades/{sample}_contig_abund.tsv"
     params:
         tmpdir = "tmp/coverm_contig_abund/{sample}"
