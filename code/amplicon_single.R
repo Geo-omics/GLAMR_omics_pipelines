@@ -142,7 +142,13 @@ single_quality <- singlePlot$data %>%
 
 threshold <- args$quality
 
-# TODO: automatic truncation length or equivalent or similar
+# Longest truncation that keeps most reads: filterAndTrim drops reads shorter than truncLen, so a
+# fixed length drops everything when the reads are shorter.
+# Trims to keep a certain fraction of the reads (90%); same rule as for paired reads in ampliconTrunc.R.
+MIN_READ_FRAC = 0.9
+read_counts <- singlePlot$data %>% group_by(Cycle) %>% summarize(n = sum(Count)) %>% arrange(Cycle)
+single_trunc <- max(read_counts$Cycle[read_counts$n >= MIN_READ_FRAC * max(read_counts$n)])
+cat('  read length reached by ', MIN_READ_FRAC * 100, '% of reads: ', single_trunc, '\n', sep='')
 
 # filter and trim
 cat("Filtering reads...\n")
@@ -151,7 +157,7 @@ filtAndTrimSingle <- samples$filt_reads_single
 names(filtAndTrimSingle) <- namesOfSamples
 filterstats <- filterAndTrim(
     singleReads, filtAndTrimSingle,
-    truncLen=380,  # TODO
+    truncLen=single_trunc,
     maxEE=2,
     maxN=0, truncQ=2, rm.phix=TRUE,
     compress=TRUE,
