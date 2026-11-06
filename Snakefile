@@ -3462,6 +3462,9 @@ rule GTDB_versioned:
             --mash_db $GTDBTK_DATA_PATH/mash_db
         """
 
+# GTDB_versioned's .done_GTDB_{database_version} also matches .done_GTDB_r232; use the dedicated r232 rule
+ruleorder: GTDB_r232 > GTDB_versioned
+
 rule GTDB_r232:
     input:
         linked = "data/projects/{project}/{sample_type}/{sample}/bins/bins_for_drep/.bins_linked",
