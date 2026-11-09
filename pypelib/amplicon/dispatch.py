@@ -219,10 +219,27 @@ def write_assignments(data, groups, output_file):
     output_file = Path(output_file)
     print(f'Writing {output_file} ... ', end='', flush=True)
     with NamedTemporaryFile(mode='w+') as tmpfile:
+        tmpfile.write(
+            '# This file assigns each samples to an amplicon target.\n'
+            '# How to manually override: write a target spec, with or without\n'
+            '# primers (which will be removed if specified) into the third column.\n'
+            '# The format is: HMM_NAME.START-END:FWD_PRIMER_NAME<->REV_PRIMER_NAME\n'
+            '# The colon and following primer spec is optional.  Each primer may be\n'
+            '# a single primer name or a comma-separated list of such primer names.\n'
+            '# You may add additional comment line as needed.  After editing this \n'
+            '# file, you must delete the dada2_input file and any dada2 output for\n'
+            '# dada2 runs that would be affected by your changes and then e-run the\n'
+            '# workflow.\n'
+        )
+        example_lines = []
         for (target, fwd_p, rev_p) in groups:
             if target == UNKNOWN:
                 continue
-            tmpfile.write(f'# {target}:{fwd_p}{PRIMER_SEP}{rev_p}\n')
+            example_lines.append(f'#    {target}:{fwd_p}{PRIMER_SEP}{rev_p}\n')
+        if example_lines:
+            tmpfile.write('# Detected targets:\n')
+            tmpfile.writelines(example_lines)
+
         header = ('sample', 'target', 'override')
         tmpfile.write('\t'.join(header))
         tmpfile.write('\n')

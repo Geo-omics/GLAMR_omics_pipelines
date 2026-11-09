@@ -4971,14 +4971,23 @@ rule amplicon_pipeline_dataset:
             for k, v in Counter(assignments.values()).items():
                 ofile.write(f'  {k}: {v}\n')
             ofile.write('dada2 out:\n')
-            for target_spec in input.keys():
-                if target_spec == 'assignments':
-                    continue
-                abund = rules.amplicon_dada2_target.output.abund.format(dataset=wildcards.dataset, target_spec=target_spec)
-                with open(abund) as ifile:
-                    # count rows (one per sample) w/o table header
-                    num_rows = sum(1 for _ in ifile) - 1
-                ofile.write(f'  {target_spec}: {num_rows}\n')
+            if target_specs := [i for i in input.keys() if i != 'assignments']:
+                for target_spec in target_specs:
+                    if target_spec == 'assignments':
+                        continue
+                    abund = rules.amplicon_dada2_target.output.abund.format(
+                        dataset=wildcards.dataset,
+                        target_spec=target_spec
+                    )
+                    with open(abund) as ifile:
+                        # count rows (one per sample) w/o table header
+                        num_rows = sum(1 for _ in ifile) - 1
+                    ofile.write(f'  {target_spec}: {num_rows}\n')
+            else:
+                raise RuntimeError(
+                    f'there is nothing to do; dispatch for {wildcards.dataset} '
+                    f'did not make any target assignments'
+                )
 
 
 PICRUST2_TARGET_PREFIXES = ('16S_rRNA_bac', '16S_rRNA_arc')
