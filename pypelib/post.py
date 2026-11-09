@@ -547,7 +547,7 @@ class VersionInfoFile:
     def __init__(self, data=None):
         if data is None:
             data = {}
-        if list(data.keys()) != sorted(data.keys()):
+        if list(data.keys()) != sorted(data.keys(), key=lambda x: x.sort_key()):
             raise RuntimeError('pipeline versions are not well-ordered')
         self.data = data
         self.changed = False
