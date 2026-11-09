@@ -4523,13 +4523,13 @@ def get_dada2_input(wc):
         split_out = rules.amplicon_split_18S_dispatch.output
         return {
             'assignments': split_out.assignments.format(dataset=wc.dataset),
-            'dada2_input': split_out.samples.format(dataset=wc.dataset),
-            'target_tab': split_out.target_tab.format(dataset=wc.dataset),
+            'dada2_input': split_out.samples.format(dataset=wc.dataset),  # FIXME: this won't have right format
+            'fastq_files': fastq_files,
         }
     return {
         'assignments': rules.amplicon_dispatch.output.assignments.format(dataset=wc.dataset),
         'dada2_input': rules.amplicon_dispatch.output.dada2_input.format(dataset=wc.dataset),
-        'target_tab': rules.amplicon_collect_target_guesses.output.target_tab.format(dataset=wc.dataset),
+        'fastq_files': fastq_files,
     }
 
 
