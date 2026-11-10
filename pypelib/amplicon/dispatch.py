@@ -199,7 +199,7 @@ def dispatch(data):
             top_target, top_fwd_p, top_rev_p = top_target
             for row in data:
                 if row['target'] == UNKNOWN and not row['override']:
-                    row['override'] = f'{top_target}:{top_fwd_p}<>{top_rev_p}'
+                    row['override'] = f'{top_target}:{top_fwd_p}{PRIMER_SEP}{top_rev_p}'
                     row['is_auto_override'] = True
     return groups
 
