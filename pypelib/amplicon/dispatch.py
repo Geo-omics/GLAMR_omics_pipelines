@@ -340,13 +340,15 @@ def get_dada2_input(data, project_dir):
                         for key in EXTRA_KEYS_PAIRED:
                             info[key] = row[key]
 
+                # remove_primers already un-swaps the clean reads, so only the
+                # raw reads get the swap fix
                 if USE_CLEAN and (row.get('fwd_clean') is False or row.get('fwd_rev_clean') is False):  # noqa:E501
-                    fwd_fq = f'clean.{fwd_infix}_reads.fastq.gz'
+                    fwd_fq = 'clean.fwd_reads.fastq.gz'
                 else:
                     fwd_fq = f'raw_{fwd_infix}_reads.fastq.gz'
 
                 if USE_CLEAN and (row.get('rev_clean') is False or row.get('rev_fwd_clean') is False):  # noqa:E501
-                    rev_fq = f'clean.{rev_infix}_reads.fastq.gz'
+                    rev_fq = 'clean.rev_reads.fastq.gz'
                 else:
                     rev_fq = f'raw_{rev_infix}_reads.fastq.gz'
 
