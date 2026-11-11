@@ -13,7 +13,7 @@ import csv
 from pathlib import Path
 from statistics import median
 
-from .dispatch import SKIP, get_assignments, load_target_table
+from .dispatch import Assignment, get_assignments, load_target_table
 from .hmm import HMM
 
 
@@ -83,7 +83,7 @@ def make(
     target_rows = []
     for sample in samples:
         num_pairs = read_pair_count(refstats_files[sample])
-        override = '' if num_pairs >= min_pairs else SKIP
+        override = '' if num_pairs >= min_pairs else Assignment.SKIP
         assignments.append({'sample': sample, 'target': target_18S, 'override': override})
         print(f'{sample}: {num_pairs} 18S read pairs{" -> SKIP" if override else ""}')
 
