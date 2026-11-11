@@ -4289,51 +4289,6 @@ checkpoint amplicon_collect_target_guesses:
     log: "logs/amplicon_collect_target_guesses/{dataset}.log"
     run: pypelib.amplicon.tabulate_targets.main(input, output=output.target_tab, log=log, **wildcards)
 
-rule remove_primers_pe:
-    input:
-        target_info=rules.amplicon_guess_target.output.target_info,
-        fwd=rules.get_reads_paired.output.fwd_reads,
-        rev=rules.get_reads_paired.output.rev_reads,
-    output:
-        fwd="data/omics/{sample_type}/{sample}/reads/clean.fwd_reads.fastq.gz",
-        rev="data/omics/{sample_type}/{sample}/reads/clean.rev_reads.fastq.gz",
-    params:
-        reads_dir = subpath(output.fwd, parent=True)
-    resources: mem_mb=6000, time_min=20
-    conda: "config/conda_yaml/cutadapt.yaml"
-    benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
-    log: "logs/remove_primers/{sample_type}-{sample}.log"
-    run:
-        pypelib.amplicon.remove_primers.main_paired(
-            input.target_info,
-            input.fwd,
-            input.rev,
-            output.fwd,
-            output.rev,
-            log=log,
-            conda_env=conda_env,
-        )
-
-rule remove_primers_se:
-    input:
-        target_info=rules.amplicon_guess_target.output.target_info,
-        single=rules.get_reads_single.output.single_reads,
-    output:
-        single="data/omics/{sample_type}/{sample}/reads/clean.single_reads.fastq.gz"
-    params:
-        reads_dir = subpath(output.single, parent=True)
-    resources: mem_mb=6000, time_min=20
-    conda: "config/conda_yaml/cutadapt.yaml"
-    benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
-    log: "logs/remove_primers/{sample_type}-{sample}.log"
-    run:
-        pypelib.amplicon.remove_primers.main_single(
-            input.target_info,
-            input.single,
-            output.single,
-            log=log,
-            conda_env=conda_env,
-        )
 
 checkpoint amplicon_dispatch:
     input:
@@ -4353,6 +4308,54 @@ checkpoint amplicon_dispatch:
                 out_assignments=output.assignments,
                 out_dada2_input=output.dada2_input,
             )
+
+
+rule remove_primers_pe:
+    input:
+        assignments=rules.amplicon_dispatch.output.assignments,
+        fwd=rules.get_reads_paired.output.fwd_reads,
+        rev=rules.get_reads_paired.output.rev_reads,
+    output:
+        fwd="data/omics/{sample_type}/{sample}/reads/clean_fwd_reads.fastq.gz",
+        rev="data/omics/{sample_type}/{sample}/reads/clean_rev_reads.fastq.gz",
+    params:
+        reads_dir = subpath(output.fwd, parent=True)
+    resources: mem_mb=6000, time_min=20
+    conda: "config/conda_yaml/cutadapt.yaml"
+    benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
+    log: "logs/remove_primers/{sample_type}-{sample}.log"
+    run:
+        pypelib.amplicon.remove_primers.main_paired(
+            pypelib.amplicon.dispatch.get_assignments(input.assignments)[wildcards.sample],
+            input.fwd,
+            input.rev,
+            output.fwd,
+            output.rev,
+            log=log,
+            conda_env=conda_env,
+        )
+
+
+rule remove_primers_se:
+    input:
+        assignments=rules.amplicon_dispatch.output.assignments,
+        single=rules.get_reads_single.output.single_reads,
+    output:
+        single="data/omics/{sample_type}/{sample}/reads/clean_single_reads.fastq.gz"
+    params:
+        reads_dir = subpath(output.single, parent=True)
+    resources: mem_mb=6000, time_min=20
+    conda: "config/conda_yaml/cutadapt.yaml"
+    benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
+    log: "logs/remove_primers/{sample_type}-{sample}.log"
+    run:
+        pypelib.amplicon.remove_primers.main_single(
+            pypelib.amplicon.dispatch.get_assignments(input.assignments)[wildcards.sample],
+            input.single,
+            output.single,
+            log=log,
+            conda_env=conda_env,
+        )
 
 
 rule hmm_summary_plots:

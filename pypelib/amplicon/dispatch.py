@@ -159,13 +159,21 @@ def load_target_table(input_file):
                         case _: row[i] = None
 
             if row.get('errors'):
-                row['target'] = UNKNOWN
+                row['assignment'] = UNKNOWN
             else:
                 hmm = hmms[row['model_name']]
-                row['target'] = hmm.format_target_spec(
-                    hmm.fwd_primer[row['fwd_primer']],
-                    hmm.rev_primer[row['rev_primer']]
+                start, end = \
+                    hmm.get_target_interval(row['fwd_primer'], row['rev_primer'])
+                row['assignment'] = Assignment(
+                    hmm.name, start, end,
+                    row['fwd_primer'],
+                    row['rev_primer'],
+                    fwd_clean=row['fwd_clean'],
+                    rev_clean=row['rev_clean'],
+                    swapped=row['swapped'],
+                    rc_mode=row['rc_mode'],
                 )
+
             row.setdefault('override', '')
             row.setdefault('is_auto_override', False)
             rows.append(row)
@@ -241,9 +249,8 @@ class Assignment:
 
         Raises ValueError for misformed input.
         """
-        match spec:
-            case SKIP: return SKIP
-            case UNKNOWN: return UNKNOWN
+        if spec in (SKIP, UNKNOWN):
+            return spec
 
         target, _, primers = spec.partition(':')
         hmm, _, coords = target.partition('.')
@@ -314,6 +321,8 @@ def dispatch(data):
 
 def write_assignments(data, groups, output_file):
     """ Write the target assignment file """
+    for k, v in sorted(data[0].items()):
+        print(f'{k}: {v}')
     data = sorted(
         data,
         # sort UNKNOWN first
@@ -337,7 +346,7 @@ def write_assignments(data, groups, output_file):
             '# the workflow.\n'
         )
         example_lines = []
-        for assignment, count in groups:
+        for assignment, count in groups.items():
             if assignment == UNKNOWN:
                 continue
             example_lines.append(f'# {count:>4}  x  {assignment}\n')
@@ -452,16 +461,12 @@ def get_dada2_input(data, project_dir):
                     for key in EXTRA_KEYS_PAIRED:
                         info[key] = row[key]
 
-            if USE_CLEAN and not assignment.fwd_clean or not assignmentt('fwd_rev_clean') is False):  # noqa:E501
-                fwd_fq = f'clean.{fwd_infix}_reads.fastq.gz'
-            else:
-                fwd_fq = f'raw_{fwd_infix}_reads.fastq.gz'
+            fwd_prefix = 'clean' if USE_CLEAN and not assignment['fwd_clean'] else 'raw'
+            rev_prefix = 'clean' if USE_CLEAN and not assignment['rev_clean'] else 'raw'
+            fwd_fq = f'{fwd_prefix}_{fwd_infix}_reads.fastq.gz'
+            rev_fq = f'{rev_prefix}_{rev_infix}_reads.fastq.gz'
 
-            if USE_CLEAN and (row.get('rev_clean') is False or row.get('rev_fwd_clean') is False):  # noqa:E501
-                rev_fq = f'clean.{rev_infix}_reads.fastq.gz'
-            else:
-                rev_fq = f'raw_{rev_infix}_reads.fastq.gz'
-
+            # these should work as Snakemake output files:
             info['fwd_fastq'] = samp_dir / 'reads' / fwd_fq
             info['rev_fastq'] = samp_dir / 'reads' / rev_fq
 
@@ -469,12 +474,13 @@ def get_dada2_input(data, project_dir):
             if None in (row['fwd_clean'], row['rev_clean']):
                 info['single_fastq'] = None
             else:
-                if USE_CLEAN and (row.get('fwd_clean') is False or row.get('rev_clean') is False):  # noqa:E501
-                    single_fq = 'clean.single_reads.fastq.gz'
+                if assignment['fwd_clean'] and assignment['rev_clean'] or not USE_CLEAN:
+                    prefix = 'raw'
                 else:
-                    single_fq = 'raw_single_reads.fastq.gz'
+                    prefix = 'clean'
 
-                info['single_fastq'] = samp_dir / 'reads' / single_fq
+                # will work as Snakemake output file
+                info['single_fastq'] = samp_dir / 'reads' / f'{prefix}_single.fastq.gz'
         else:
             raise ValueError('invalid layout')
 
