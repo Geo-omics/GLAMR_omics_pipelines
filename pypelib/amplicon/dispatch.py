@@ -2,11 +2,12 @@
 Dispatch dada2 jobs for a dataset
 """
 import argparse
-from collections import Counter
 from datetime import datetime
+from enum import StrEnum
 import filecmp
 from os import environ
 from pathlib import Path
+import re
 import shutil
 from tempfile import NamedTemporaryFile
 
@@ -24,10 +25,7 @@ target. """
 DEFAULT_OUT_TARGETS = 'amplicon_target_assignments.tsv'
 DEFAULT_OUT_DADA2_INPUT = 'dada2_input.tsv'
 
-UNKNOWN = 'UNKNOWN'
-SKIP = 'SKIP'
 AUTO_OVERRIDE_PREFIX = '__AUTO__'
-PRIMER_SEP = '<->'
 
 
 def cli():
@@ -80,7 +78,6 @@ def cli():
         match args.subcommand:
             case 'make':
                 make(
-                    None,
                     args.target_tabular_input,
                     args.project_directory,
                     out_assignments=args.out_assignments,
@@ -128,7 +125,6 @@ def make(
 
     groups = dispatch(data)
     write_assignments(data, groups, out_assignments)
-    apply_overrides(data)
     write_dada2_input(get_dada2_input(data, project_dir), out_dada2_input)
 
 
@@ -158,62 +154,262 @@ def load_target_table(input_file):
                         case _: row[i] = None
 
             if row.get('errors'):
-                row['target'] = UNKNOWN
+                row['assignment'] = Assignment.UNKNOWN
             else:
                 hmm = hmms[row['model_name']]
-                row['target'] = hmm.format_target_spec(
-                    hmm.fwd_primer[row['fwd_primer']],
-                    hmm.rev_primer[row['rev_primer']]
+                start, end = \
+                    hmm.get_target_interval(row['fwd_primer'], row['rev_primer'])
+                layout = Assignment.LAYOUT(row['layout'])
+                if layout is Assignment.LAYOUT.single:
+                    swapped = False
+                    rc_mode = row['model_rc']
+                elif layout is Assignment.LAYOUT.paired:
+                    swapped = row['swapped']
+                    rc_mode = False
+
+                row['assignment'] = Assignment(
+                    hmm.name, start, end,
+                    layout,
+                    row['fwd_primer'],
+                    row['rev_primer'],
+                    fwd_clean=row['fwd_clean'],
+                    rev_clean=row['rev_clean'],
+                    swapped=swapped,
+                    rc_mode=rc_mode,
                 )
+
             row.setdefault('override', '')
             row.setdefault('is_auto_override', False)
             rows.append(row)
     return rows
 
 
+class InvalidAssignment(Exception):
+    pass
+
+
+class SpecialAssignment:
+    """
+    Utility class for descriptors for accessing special Assignment instances
+    via class attribute
+    """
+    _objects = {}
+    """ container to hold the special instances """
+
+    @classmethod
+    def _get_object(cls, objtype, name):
+        if (objtype, name) not in cls._objects:
+            args = [None] * 4  # Assignment() expects four positional args
+            cls._objects[(objtype, name)] = objtype(*args, special=name)
+        return cls._objects[(objtype, name)]
+
+    def __set_name__(self, owner, name):
+        self.name = name
+
+    def __get__(self, obj, objtype):
+        if obj is not None:
+            raise RuntimeError('do not access special instances from another instance')
+        return self._get_object(objtype, self.name)
+
+
+class Assignment:
+    """ Representation of a sample's target assignment """
+    # Read-mode indicator codes for string representation:
+    single = r'(?P<single>-(-|(?P<rc_mode>x))-)'  # --- or -x-
+    paired = r'(?P<paired>=(=|(?P<swapped>s))=)'  # === or =s=
+    primer_name = r'[a-zA-Z0-9_-]+'  # a single primer name
+    primer_list = rf'{primer_name}(,{primer_name})*'
+    fwd = rf'((?P<fwd_clean>{primer_list})|\[(?P<fwd_dirty>{primer_list})\])'
+    rev = rf'((?P<rev_clean>{primer_list})|\[(?P<rev_dirty>{primer_list})\])'
+
+    read_mode_pat = re.compile(rf'^{fwd}({single}|{paired}){rev}$')
+
+    LAYOUT = StrEnum('Layout', 'paired single')
+
+    UNKNOWN = SpecialAssignment()
+    SKIP = SpecialAssignment()
+    INVALID = SpecialAssignment()
+
+    def __init__(
+        self,
+        hmm,
+        start,
+        end,
+        layout,
+        fwd_primer=None,
+        rev_primer=None,
+        fwd_clean=True,
+        rev_clean=True,
+        swapped=False,
+        rc_mode=False,
+        special=None,
+    ):
+        if special is not None:
+            self.special = str(special)
+            return
+
+        self.hmm = hmm
+        self.start = start
+        self.end = end
+        self.layout = self.LAYOUT(layout)
+        self.fwd_primer = fwd_primer
+        self.rev_primer = rev_primer
+        self.fwd_clean = fwd_clean
+        self.rev_clean = rev_clean
+        if swapped and self.layout is self.LAYOUT.single:
+            raise ValueError('can not be swapped w/single layout')
+        if rc_mode and self.layout is self.LAYOUT.paired:
+            raise ValueError('can not be in rc_mode w/paired layout')
+        self.swapped = swapped
+        self.rc_mode = rc_mode
+        self.special = None
+
+    def __str__(self):
+        if self.special:
+            return self.special
+        return self.target + (':' + self.format_mode() if self.fwd_primer else '')
+
+    def __repr__(self):
+        cls_name = type(self).__name__
+        if self.special:
+            return f'{cls_name}.{self.special}'
+        else:
+            return f'{type(self).__name__}("{self}")'
+
+    def __eq__(self, other):
+        return str(self) == str(other)
+
+    def format_mode(self):
+        if self.layout == self.LAYOUT.single:
+            infix = '-x-' if self.rc_mode else '---'
+        elif self.layout == self.LAYOUT.paired:
+            infix = '=s=' if self.swapped else '==='
+        else:
+            raise ValueError('invalid case')
+
+        fwd = '[' + self.fwd_primer + ']' if self.fwd_clean else self.fwd_primer
+        rev = '[' + self.rev_primer + ']' if self.rev_clean else self.rev_primer
+        return f'{fwd}{infix}{rev}'
+
+    @classmethod
+    def from_spec(cls, spec):
+        """
+        Create instance from string representation
+
+        Raises ValueError for misformed input.
+        """
+        for name, attr in vars(cls).items():
+            if name == spec and isinstance(attr, SpecialAssignment):
+                return getattr(cls, name)
+
+        target, _, read_mode = spec.partition(':')
+        hmm, _, coords = target.partition('.')
+        start, _, end = coords.partition('-')
+        try:
+            start = int(start)
+            end = int(end)
+        except ValueError as e:
+            raise InvalidAssignment(f'failed parsing start/end: {e}') from e
+
+        m = cls.read_mode_pat.search(read_mode)
+        if m is None:
+            raise InvalidAssignment(
+                f'Failed parsing read-mode indicator in "{read_mode}"'
+            )
+
+        read_mode = m.groupdict()
+
+        swapped = False if read_mode['swapped'] is None else True
+        rc_mode = False if read_mode['rc_mode'] is None else True
+        if read_mode['single'] is None and read_mode['paired'] is not None:
+            layout = cls.LAYOUT.paired
+        elif read_mode['single'] is not None and read_mode['paired'] is None:
+            layout = cls.LAYOUT.single
+        else:
+            raise RuntimeError('invalid case')
+
+        if fwd_primer := read_mode['fwd_clean']:
+            fwd_clean = True
+        elif fwd_primer := read_mode['fwd_dirty']:
+            fwd_clean = False
+        else:
+            raise RuntimeError('invalid case')
+
+        if rev_primer := read_mode['rev_clean']:
+            rev_clean = True
+        elif rev_primer := read_mode['rev_dirty']:
+            rev_clean = False
+        else:
+            raise RuntimeError('invalid case')
+
+        return cls(hmm, start, end, layout, fwd_primer, rev_primer,
+                   fwd_clean, rev_clean, swapped, rc_mode)
+
+    @property
+    def target(self):
+        return f'{self.hmm}.{self.start}-{self.end}'
+
+
 def dispatch(data):
     """ Partition the samples and apply auto overrides """
-    groups = Counter()
-    for row in data:
-        if row.get('errors'):
-            groups[(UNKNOWN, None, None)] += 1
-        else:
-            groups[(row['target'], row['fwd_primer'], row['rev_primer'])] += 1
-
     print('Dispatching...')
-    for (target, fwd_p, rev_p), count in groups.most_common():
-        if target is UNKNOWN:
-            target_str = UNKNOWN
+    groups = {}
+    for row in data:
+        assignment = row['assignment']
+        if assignment.special:
+            target = str(assignment)  # e.g. "UNKNOWN"
+            mode = None
         else:
-            target_str = f'{target}:  {fwd_p}{PRIMER_SEP}{rev_p}'
-        print(f'  {count:>4} samples to target {target_str}')
+            target, _, mode = str(assignment).partition(':')
+        if target not in groups:
+            groups[target] = {'count': 0, 'modes': set()}
+        groups[target]['count'] += 1
+        groups[target]['modes'].add(mode)
+
+    groups = dict(sorted(groups.items(), key=lambda x: x[1]['count']))
+
+    for target, grp_info in groups.items():
+        count = grp_info['count']
+        modes = grp_info['modes']
+        if len(modes) == 1:
+            mode = modes.pop()
+            if mode is None:
+                # UNKNOWN
+                mode_info = ''
+            else:
+                mode_info = ':' + mode
+        else:
+            mode_info = ' +++ '.join(sorted(modes))
+        print(f'  {count:>4} samples assigned to {target}{mode_info}')
 
     if len(groups) == 2:
-        (top_target, top_count), (minor_target, minor_count) = groups.items()
-        if minor_target == (UNKNOWN, None, None):
+        (top_target, top_grp_info), (minor_target, minor_grp_info) = groups.items()
+        top_count = top_grp_info['count']
+        top_modes = top_grp_info['modes']
+        minor_count = minor_grp_info['count']
+        if minor_target is Assignment.UNKNOWN and len(top_modes) == 1:
+            top_spec = top_target + ':' + top_modes.pop()
+            del top_modes
+            # Have a single distinct assignment plus some UNKNOWNs
             if (top_count / len(data)) >= SINGLE_MODE_THRESHOLT:
                 print(
                     f'Single-target-mode detected, overriding {minor_count} '
-                    f'stray (unknown) target assignments to {top_target}'
+                    f'stray (unknown) target assignments to {top_spec}'
                 )
-            top_target, top_fwd_p, top_rev_p = top_target
-            for row in data:
-                if row['target'] == UNKNOWN and not row['override']:
-                    row['override'] = f'{top_target}:{top_fwd_p}{PRIMER_SEP}{top_rev_p}'
-                    row['is_auto_override'] = True
+                top_assignment = Assignment.from_spec(top_spec)
+                for row in data:
+                    if row['assignment'] is Assignment.UNKNOWN and not row['override']:
+                        row['override'] = top_assignment
+                        row['is_auto_override'] = True
     return groups
 
 
 def write_assignments(data, groups, output_file):
     """ Write the target assignment file """
-    for row in data:
-        if row['is_auto_override']:
-            row['override'] = AUTO_OVERRIDE_PREFIX + row['override']
-
     data = sorted(
         data,
         # sort UNKNOWN first
-        key=lambda x: '' if x['target'] == UNKNOWN else x['target']
+        key=lambda x: '' if x['assignment'] is Assignment.UNKNOWN else 'zzz'
     )
 
     output_file = Path(output_file)
@@ -233,20 +429,29 @@ def write_assignments(data, groups, output_file):
             '# the workflow.\n'
         )
         example_lines = []
-        for (target, fwd_p, rev_p) in groups:
-            if target == UNKNOWN:
+        for assignment, grp_info in groups.items():
+            if assignment is Assignment.UNKNOWN:
                 continue
-            example_lines.append(f'#    {target}:{fwd_p}{PRIMER_SEP}{rev_p}\n')
+            count = grp_info['count']
+            example_lines.append(f'# {count:>4}  x  {assignment}\n')
         if example_lines:
             tmpfile.write('# Detected targets:\n')
             tmpfile.writelines(example_lines)
 
-        header = ('sample', 'target', 'override')
+        header = ('sample', 'assignment', 'override')
         tmpfile.write('\t'.join(header))
         tmpfile.write('\n')
+
         for row in data:
-            tmpfile.write('\t'.join((row[i] for i in header)))
+            outrow = []
+            for col in header:
+                value = str(row[col])
+                if col == 'override' and row['is_auto_override']:
+                    value = AUTO_OVERRIDE_PREFIX + value
+                outrow.append(value)
+            tmpfile.write('\t'.join(outrow))
             tmpfile.write('\n')
+
         tmpfile.seek(0)
         if output_file.exists():
             if filecmp.cmp(output_file, tmpfile.name, shallow=False):
@@ -269,21 +474,6 @@ def write_assignments(data, groups, output_file):
     print('[Done]')
 
 
-def apply_overrides(data):
-    """ Helper to change bits according to overrides """
-    for row in data:
-        if not row['override']:
-            continue
-
-        target, _, primers = row['override'].partition(':')
-        fwd_p, _, rev_p = primers.partition(PRIMER_SEP)
-        row['target'] = target.strip()
-        row['fwd_clean'] = True if fwd_p.strip() == '' else False
-        row['rev_clean'] = True if rev_p.strip() == '' else False
-        row['fwd_rev_clean'] = True  # FIXME need more general solution for read-through
-        row['rev_fwd_clean'] = True  # FIXME need more general solution for read-through
-
-
 def get_dada2_input(data, project_dir):
     """
     Compile the dada input from the data
@@ -297,12 +487,17 @@ def get_dada2_input(data, project_dir):
         'fwd_hmmfrom', 'fwd_hmmto', 'rev_hmmfrom', 'rev_hmmto', 'overlap_start',
         'overlap_end',
     ]
-    """ bits to be copied, as needed by code/ampliconTrunc.R """
+    """ bits to be copied, as needed by code/ampliconTrunc.R or amplicon_single.R
+    Will be omitted for samples with assignment override. """
 
     # paths as written to output will be relative to the data root
     glamr_root = project_dir.parent.parent.parent
     all_info = []
     for row in data:
+        assignment = row['override'] or row['assignment']
+        if assignment.special:
+            continue
+
         samp_dir = project_dir / 'amplicons' / row['sample']
         samp_dir = samp_dir.resolve().relative_to(glamr_root)
 
@@ -318,57 +513,62 @@ def get_dada2_input(data, project_dir):
             for key in EXTRA_KEYS_PAIRED:
                 info[key] = None
 
-            if None not in (row['swapped'], row['fwd_clean'], row['rev_clean']):
-                if row['swapped']:
-                    # "Fix" the swap
-                    fwd_infix = 'rev'
-                    rev_infix = 'fwd'
-                    if not row['override']:
-                        for key in EXTRA_KEYS_PAIRED:
-                            if 'fwd' in key:
-                                key2 = key.replace('fwd', 'rev')
-                            elif 'rev' in key:
-                                key2 = key.replace('rev', 'fwd')
-                            else:
-                                key2 = key
-                            info[key2] = row[key]
-                else:
-                    # keep as-is
-                    fwd_infix = 'fwd'
-                    rev_infix = 'rev'
-                    if not row['override']:
-                        for key in EXTRA_KEYS_PAIRED:
-                            info[key] = row[key]
+            if assignment.swapped:
+                # "Fix" the swap
+                fwd_infix = 'rev'
+                rev_infix = 'fwd'
+                if not row['override']:
+                    for key in EXTRA_KEYS_PAIRED:
+                        if 'fwd' in key:
+                            key2 = key.replace('fwd', 'rev')
+                        elif 'rev' in key:
+                            key2 = key.replace('rev', 'fwd')
+                        else:
+                            key2 = key
+                        info[key2] = row[key]
+            else:
+                # keep as-is
+                fwd_infix = 'fwd'
+                rev_infix = 'rev'
+                if not row['override']:
+                    for key in EXTRA_KEYS_PAIRED:
+                        info[key] = row[key]
 
-                # remove_primers already un-swaps the clean reads, so only the
-                # raw reads get the swap fix
-                if USE_CLEAN and (row.get('fwd_clean') is False or row.get('fwd_rev_clean') is False):  # noqa:E501
-                    fwd_fq = 'clean.fwd_reads.fastq.gz'
-                else:
-                    fwd_fq = f'raw_{fwd_infix}_reads.fastq.gz'
+            # remove_primers already un-swaps the clean reads, so only the
+            # raw reads get the swap fix
+            if USE_CLEAN and not assignment.fwd_clean:
+                fwd_infix = 'fwd'
 
-                if USE_CLEAN and (row.get('rev_clean') is False or row.get('rev_fwd_clean') is False):  # noqa:E501
-                    rev_fq = 'clean.rev_reads.fastq.gz'
-                else:
-                    rev_fq = f'raw_{rev_infix}_reads.fastq.gz'
+            if USE_CLEAN and not assignment.rev_clean:
+                rev_infix = 'rev'
 
-                info['fwd_fastq'] = samp_dir / 'reads' / fwd_fq
-                info['rev_fastq'] = samp_dir / 'reads' / rev_fq
+            # FIXME: what about read-through?
+            fwd_prefix = 'clean' if USE_CLEAN and not assignment.fwd_clean else 'raw'
+            rev_prefix = 'clean' if USE_CLEAN and not assignment.rev_clean else 'raw'
+            fwd_fq = f'{fwd_prefix}_{fwd_infix}_reads.fastq.gz'
+            rev_fq = f'{rev_prefix}_{rev_infix}_reads.fastq.gz'
+
+            # these should work as Snakemake output files:
+            info['fwd_fastq'] = samp_dir / 'reads' / fwd_fq
+            info['rev_fastq'] = samp_dir / 'reads' / rev_fq
 
         elif row['layout'] == 'single':
             if None in (row['fwd_clean'], row['rev_clean']):
                 info['single_fastq'] = None
             else:
-                if USE_CLEAN and (row.get('fwd_clean') is False or row.get('rev_clean') is False):  # noqa:E501
-                    single_fq = 'clean.single_reads.fastq.gz'
+                if assignment.fwd_clean and assignment.rev_clean or not USE_CLEAN:
+                    prefix = 'raw'
                 else:
-                    single_fq = 'raw_single_reads.fastq.gz'
+                    prefix = 'clean'
 
-                info['single_fastq'] = samp_dir / 'reads' / single_fq
+                # will work as Snakemake output file
+                info['single_fastq'] = \
+                    samp_dir / 'reads' / f'{prefix}_single_reads.fastq.gz'
         else:
             raise ValueError('invalid layout')
 
         all_info.append(info)
+
     return all_info
 
 
@@ -376,12 +576,17 @@ def write_dada2_input(rows, output_file):
     """ Write the dada2-input file """
     print(f'Writing {output_file} ... ', end='', flush=True)
     with open(output_file, 'w') as ofile:
-        cols = list(rows[0].keys())
-        header = '\t'.join(cols) + '\n'
-        ofile.write(header)
-        for row in rows:
-            ofile.write('\t'.join(str(row[i] or '') for i in cols))
-            ofile.write('\n')
+        if rows:
+            cols = list(rows[0].keys())
+            header = '\t'.join(cols) + '\n'
+            ofile.write(header)
+            for row in rows:
+                ofile.write('\t'.join(str(row[i] or '') for i in cols))
+                ofile.write('\n')
+        else:
+            ofile.write(
+                '# this file is empty because no samples were assigned a dada2 run'
+            )
     print('[Done]')
 
 
@@ -417,7 +622,7 @@ def get_fastq_files(dada2_input_tmpl, assignments_tmpl, **wildcards):
             row = line.strip().split('\t')
             if target_spec := wildcards.get('target_spec'):
                 sample = row[0]
-                if target_spec != assignments[sample].split(':', maxsplit=1)[0]:
+                if target_spec != assignments[sample].target:
                     # target does not match
                     continue
             for i in col_idxs:
@@ -457,29 +662,36 @@ def get_assignments(
             # require two fields, override is an optional third field,
             # ignore anything beyond that (could be used for a comment)
             # Delimiter is any blank space
-            sample_id, target, *override = line.split(maxsplit=3)
+            sample_id, assignment, *override = line.split(maxsplit=3)
 
-            if not data and sample_id == 'sample' and target == 'target':
+            if not data and sample_id == 'sample' and assignment == 'assignment':
                 # header line
                 continue
 
+            override = ' '.join(override)
+            override, _, _ = override.partition('#')  # remove any comment
+            override = override.strip()
+
             if manual_overrides_only:
-                if override:
-                    if not override[0].startswith(AUTO_OVERRIDE_PREFIX):
-                        data[sample_id] = ' '.join(override)  # incl. comments
-                continue
+                if override.startswith(AUTO_OVERRIDE_PREFIX) or not override:
+                    continue
 
-            override = override[0] if override else ''
+            assignment = override.removeprefix(AUTO_OVERRIDE_PREFIX) or assignment
 
-            target = override.removeprefix(AUTO_OVERRIDE_PREFIX) or target
-
-            if not target:
-                raise RuntimeError(f'empty target at line {lnum} in {path}')
+            if not assignment:
+                raise RuntimeError(f'empty assignment at line {lnum} in {path}')
 
             if sample_id in data:
-                raise RuntimeError('duplicate sample at line {lnum} in {path}')
+                raise RuntimeError(f'duplicate sample at line {lnum} in {path}')
 
-            data[sample_id] = target
+            try:
+                data[sample_id] = Assignment.from_spec(assignment)
+            except InvalidAssignment as e:
+                print(f'[ERROR] Failed parsing the assignment ({sample_id=}) '
+                      f'on line {lnum}: {e}')
+                if manual_overrides_only:
+                    continue
+                data[sample_id] = Assignment.INVALID
     return data
 
 

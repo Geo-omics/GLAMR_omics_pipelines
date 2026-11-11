@@ -4288,9 +4288,9 @@ def get_target_info_files(wc):
     if assignments.exists():
         # check for manual overrides
         skips = [
-            sample for sample, group
+            sample for sample, assignment
             in pypelib.amplicon.dispatch.get_assignments(path=assignments).items()
-            if group == pypelib.amplicon.dispatch.SKIP
+            if assignment is pypelib.amplicon.dispatch.Assignment.SKIP
         ]
     else:
         skips = []
@@ -4330,51 +4330,6 @@ checkpoint amplicon_collect_target_guesses:
     log: "logs/amplicon_collect_target_guesses/{dataset}.log"
     run: pypelib.amplicon.tabulate_targets.main(input, output=output.target_tab, log=log, **wildcards)
 
-rule remove_primers_pe:
-    input:
-        target_info=rules.amplicon_guess_target.output.target_info,
-        fwd=rules.get_reads_paired.output.fwd_reads,
-        rev=rules.get_reads_paired.output.rev_reads,
-    output:
-        fwd="data/omics/{sample_type}/{sample}/reads/clean.fwd_reads.fastq.gz",
-        rev="data/omics/{sample_type}/{sample}/reads/clean.rev_reads.fastq.gz",
-    params:
-        reads_dir = subpath(output.fwd, parent=True)
-    resources: mem_mb=6000, time_min=20
-    conda: "config/conda_yaml/cutadapt.yaml"
-    benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
-    log: "logs/remove_primers/{sample_type}-{sample}.log"
-    run:
-        pypelib.amplicon.remove_primers.main_paired(
-            input.target_info,
-            input.fwd,
-            input.rev,
-            output.fwd,
-            output.rev,
-            log=log,
-            conda_env=conda_env,
-        )
-
-rule remove_primers_se:
-    input:
-        target_info=rules.amplicon_guess_target.output.target_info,
-        single=rules.get_reads_single.output.single_reads,
-    output:
-        single="data/omics/{sample_type}/{sample}/reads/clean.single_reads.fastq.gz"
-    params:
-        reads_dir = subpath(output.single, parent=True)
-    resources: mem_mb=6000, time_min=20
-    conda: "config/conda_yaml/cutadapt.yaml"
-    benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
-    log: "logs/remove_primers/{sample_type}-{sample}.log"
-    run:
-        pypelib.amplicon.remove_primers.main_single(
-            input.target_info,
-            input.single,
-            output.single,
-            log=log,
-            conda_env=conda_env,
-        )
 
 checkpoint amplicon_dispatch:
     input:
@@ -4394,6 +4349,54 @@ checkpoint amplicon_dispatch:
                 out_assignments=output.assignments,
                 out_dada2_input=output.dada2_input,
             )
+
+
+rule remove_primers_pe:
+    input:
+        target_info=rules.amplicon_guess_target.output.target_info,
+        fwd=rules.get_reads_paired.output.fwd_reads,
+        rev=rules.get_reads_paired.output.rev_reads,
+    output:
+        fwd="data/omics/{sample_type}/{sample}/reads/clean_fwd_reads.fastq.gz",
+        rev="data/omics/{sample_type}/{sample}/reads/clean_rev_reads.fastq.gz",
+    params:
+        reads_dir = subpath(output.fwd, parent=True)
+    resources: mem_mb=6000, time_min=20
+    conda: "config/conda_yaml/cutadapt.yaml"
+    benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
+    log: "logs/remove_primers/{sample_type}-{sample}.log"
+    run:
+        pypelib.amplicon.remove_primers.main_paired(
+            input.target_info,
+            input.fwd,
+            input.rev,
+            output.fwd,
+            output.rev,
+            log=log,
+            conda_env=conda_env,
+        )
+
+
+rule remove_primers_se:
+    input:
+        target_info=rules.amplicon_guess_target.output.target_info,
+        single=rules.get_reads_single.output.single_reads,
+    output:
+        single="data/omics/{sample_type}/{sample}/reads/clean_single_reads.fastq.gz"
+    params:
+        reads_dir = subpath(output.single, parent=True)
+    resources: mem_mb=6000, time_min=20
+    conda: "config/conda_yaml/cutadapt.yaml"
+    benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
+    log: "logs/remove_primers/{sample_type}-{sample}.log"
+    run:
+        pypelib.amplicon.remove_primers.main_single(
+            input.target_info,
+            input.single,
+            output.single,
+            log=log,
+            conda_env=conda_env,
+        )
 
 
 rule hmm_summary_plots:
@@ -4951,16 +4954,19 @@ def get_dada2_output(wc):
     assignments = pypelib.amplicon.dispatch.get_assignments(path=assignment_file)
 
     wc_str = ' '.join(f'{k}={v}' for k, v in wc.items())
-    target_stats = Counter(assignments.values())
+    target_stats = Counter(str(assignments.values()))
     print(f'[INFO] target assignments {target_stats}')
-    if bad_count := target_stats.pop(pypelib.amplicon.dispatch.UNKNOWN, 0):
+    if bad_count := target_stats.pop(str(pypelib.amplicon.dispatch.Assignment.UNKNOWN), 0):
         print(
             f'[WARNING] ({wc_str}) There are {bad_count} samples that do not '
             f'have an amplicon target assigned.  Manual curation required for '
             f'{assignment_file}'
         )
-    if skip_count := target_stats.pop(pypelib.amplicon.dispatch.SKIP, 0):
-        print(f'[INFO]: [{wc_str}] {skip_count} samples got excluded from analysis')
+    if skip_count := target_stats.pop(str(pypelib.amplicon.dispatch.Assignment.SKIP), 0):
+        print(f'[info]: [{wc_str}] {skip_count} samples got excluded from analysis')
+    if invalid_count := target_stats.pop(str(pypelib.amplicon.dispatch.Assignment.INVALID), 0):
+        print(f'[WARNING]: [{wc_str}] {invalid_count} samples with invalid assignments, '
+              f'delete the assignment file and re-run the workflow.')
 
     specs = sorted(set(target_stats))
     if SPLIT_18S and set(specs) & set(SPLIT_18S['targets']):  # FIXME: targets is now in specs format
