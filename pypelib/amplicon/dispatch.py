@@ -4,6 +4,7 @@ Dispatch dada2 jobs for a dataset
 import argparse
 from collections import Counter
 from datetime import datetime
+from enum import StrEnum
 import filecmp
 from os import environ
 from pathlib import Path
@@ -81,7 +82,6 @@ def cli():
         match args.subcommand:
             case 'make':
                 make(
-                    None,
                     args.target_tabular_input,
                     args.project_directory,
                     out_assignments=args.out_assignments,
@@ -129,7 +129,6 @@ def make(
 
     groups = dispatch(data)
     write_assignments(data, groups, out_assignments)
-    # apply_overrides(data)
     write_dada2_input(get_dada2_input(data, project_dir), out_dada2_input)
 
 
@@ -164,14 +163,23 @@ def load_target_table(input_file):
                 hmm = hmms[row['model_name']]
                 start, end = \
                     hmm.get_target_interval(row['fwd_primer'], row['rev_primer'])
+                layout = Assignment.LAYOUT(row['layout'])
+                if layout is Assignment.LAYOUT.single:
+                    swapped = False
+                    rc_mode = row['model_rc']
+                elif layout is Assignment.LAYOUT.paired:
+                    swapped = row['swapped']
+                    rc_mode = False
+
                 row['assignment'] = Assignment(
                     hmm.name, start, end,
+                    layout,
                     row['fwd_primer'],
                     row['rev_primer'],
                     fwd_clean=row['fwd_clean'],
                     rev_clean=row['rev_clean'],
-                    swapped=row['swapped'],
-                    rc_mode=row['rc_mode'],
+                    swapped=swapped,
+                    rc_mode=rc_mode,
                 )
 
             row.setdefault('override', '')
@@ -185,21 +193,25 @@ class Assignment:
     # Read-mode indicator codes for string representation:
     SWAPPED = 's'
     RC_MODE = 'x'
-    CLEAN = '-'
+    SINGLE_CLEAN = '-'
+    PAIRED_CLEAN = '='
     FWD_DIRTY = '>'
     REV_DIRTY = '<'
 
-    dir_pat = re.compile(
-        rf'[{CLEAN}{REV_DIRTY}]'
-        rf'[{CLEAN}{SWAPPED}{RC_MODE}]'
-        rf'[{CLEAN}{FWD_DIRTY}]'
+    read_mode_pat = re.compile(
+        rf'[{SINGLE_CLEAN}{PAIRED_CLEAN}{FWD_DIRTY}]'
+        rf'[{SINGLE_CLEAN}{PAIRED_CLEAN}{SWAPPED}{RC_MODE}]'
+        rf'[{SINGLE_CLEAN}{PAIRED_CLEAN}{REV_DIRTY}]'
     )
+
+    LAYOUT = StrEnum('Layout', 'paired single')
 
     def __init__(
         self,
         hmm,
         start,
         end,
+        layout,
         fwd_primer=None,
         rev_primer=None,
         fwd_clean=True,
@@ -210,6 +222,7 @@ class Assignment:
         self.hmm = hmm
         self.start = start
         self.end = end
+        self.layout = self.LAYOUT(layout)
         if fwd_primer is None and rev_primer is None:
             if not fwd_clean or not rev_clean:
                 raise ValueError('if primers are not provided both must be clean')
@@ -229,18 +242,26 @@ class Assignment:
 
     def __str__(self):
         if self.fwd_primer:
-            fwd = self.CLEAN if self.fwd_clean else self.FWD_DIRTY
-            rev = self.CLEAN if self.rev_clean else self.REV_DIRTY
-            if self.swapped:
-                mode = self.SWAPPED
-            elif self.rc_mode:
-                mode = self.RC_MODE
-            else:
-                mode = self.CLEAN
-            primers = f':{self.fwd_primer}{rev}{mode}{fwd}{self.rev_primer}'
+            primers = f':{self.fwd_primer}{self.encode_mode()}{self.rev_primer}'
         else:
             primers = ''
         return self.target + primers
+
+    def __eq__(self, other):
+        return str(self) == str(other)
+
+    def encode_mode(self):
+        match self.layout:
+            case self.LAYOUT.single:
+                fwd = self.SINGLE_CLEAN if self.fwd_clean else self.FWD_DIRTY
+                rev = self.SINGLE_CLEAN if self.rev_clean else self.REV_DIRTY
+                mode = self.RC_MODE if self.rc_mode else self.SINGLE_CLEAN
+            case self.LAYOUT.paired:
+                fwd = self.PAIRED_CLEAN if self.fwd_clean else self.FWD_DIRTY
+                rev = self.PAIRED_CLEAN if self.rev_clean else self.REV_DIRTY
+                mode = self.SWAPPED if self.swapped else self.PAIRED_CLEAN
+            case _: raise ValueError('invalid layout')
+        return f'{fwd}{mode}{rev}'
 
     @classmethod
     def from_spec(self, spec):
@@ -263,27 +284,73 @@ class Assignment:
 
         swapped = False
         rc_mode = False
-        if primers:
-            m = self.dir_pat.search(primers)
-            if m is None:
-                raise ValueError(f'Failed parsing primer separator {primers=}')
-            rev, mode, fwd = m.group(0)
-            fwd_clean = (fwd == '-')  # > instructs to remove primer
-            rev_clean = (rev == '-')  # < instructs to remove primer
-            match mode:
-                case 's':
-                    swapped = True
-                case 'x':
-                    rc_mode = True
-            fwd_primer, _, rev_primer = primers.partition(m.group(0))
+        layout = None
 
-        else:
-            fwd_primer = None
-            rev_primer = None
-            fwd_clean = True
-            rev_clean = True
+        m = self.read_mode_pat.search(primers)
+        if m is None:
+            raise ValueError(f'Failed parsing read-mode indicator in "{primers}"')
 
-        return self(hmm, start, end, fwd_primer, rev_primer, fwd_clean,
+        fwd, mode, rev = m.group(0)  # split the three characters
+
+        match mode:
+            case self.SINGLE_CLEAN:
+                layout = self.LAYOUT.single
+            case self.PAIRED_CLEAN:
+                layout = self.LAYOUT.paired
+            case self.SWAPPED:
+                swapped = True
+                layout = self.LAYOUT.paired
+            case self.RC_MODE:
+                rc_mode = True
+                layout = self.LAYOUT.single
+            case _: raise ValueError('invalid mode bit')
+
+        # layout is set by mode, but keep checking consistency
+        match fwd:
+            case self.SINGLE_CLEAN:
+                fwd_clean = True
+                match layout:
+                    case self.LAYOUT.single:
+                        pass
+                    case self.LAYOUT.paired:
+                        raise ValueError('layout mismatch')
+                    case _: raise ValueError('invalid layout')
+            case self.PAIRED_CLEAN:
+                fwd_clean = True
+                match layout:
+                    case self.LAYOUT.single:
+                        raise ValueError('layout mismatch')
+                    case self.LAYOUT.paired:
+                        pass
+                    case _: raise ValueError('invalid layout')
+            case self.FWD_DIRTY:
+                fwd_clean = False
+            case _: raise ValueError('invalid mode')
+
+        match rev:
+            case self.SINGLE_CLEAN:
+                rev_clean = True
+                match layout:
+                    case self.LAYOUT.single:
+                        pass
+                    case self.LAYOUT.paired:
+                        raise ValueError('layout mismatch')
+                    case _: raise ValueError('invalid layout')
+            case self.PAIRED_CLEAN:
+                rev_clean = True
+                match layout:
+                    case self.LAYOUT.single:
+                        raise ValueError('layout mismatch')
+                    case self.LAYOUT.paired:
+                        pass
+                    case _: raise ValueError('invalid layout')
+            case self.REV_DIRTY:
+                rev_clean = False
+            case _: raise ValueError('invalid mode')
+
+        fwd_primer, _, rev_primer = primers.partition(m.group(0))
+
+        return self(hmm, start, end, layout, fwd_primer, rev_primer, fwd_clean,
                     rev_clean, swapped, rc_mode)
 
     @property
@@ -294,35 +361,57 @@ class Assignment:
 def dispatch(data):
     """ Partition the samples and apply auto overrides """
     print('Dispatching...')
-    groups = Counter()
+    groups = {}
     for row in data:
-        if row.get('errors'):
-            groups[UNKNOWN] += 1
+        assignment = row['assignment']
+        if isinstance(assignment, Assignment):
+            target = assignment.target
+            mode = str(assignment).partition(':')[2]
         else:
-            groups[row['assignment']] += 1
+            target = assignment  # "UNKNOWN"
+            mode = None
+        if target not in groups:
+            groups[target] = {'count': 0, 'modes': set()}
+        groups[target]['count'] += 1
+        groups[target]['modes'].add(mode)
 
-    for assignment, count in groups.most_common():
-        print(f'  {count:>4} samples assigned to {assignment}')
+    groups = dict(sorted(groups.items(), key=lambda x: x[1]['count']))
+
+    for target, grp_info in groups.items():
+        count = grp_info['count']
+        modes = grp_info['modes']
+        if len(modes) == 1:
+            mode = modes.pop()
+            if mode is None:
+                # UNKNOWN
+                mode_info = ''
+            else:
+                mode_info = ':' + mode
+        else:
+            mode_info = ' +++ '.join(sorted(modes))
+        print(f'  {count:>4} samples assigned to {target}{mode_info}')
 
     if len(groups) == 2:
-        (top_assignment, top_count), (minor_assignment, minor_count) = groups.items()
-        if minor_assignment == UNKNOWN:
+        (top_target, top_grp_info), (minor_target, minor_grp_info) = groups.items()
+        top_count = top_grp_info['count']
+        top_modes = top_grp_info['modes']
+        if minor_target == UNKNOWN and len(top_modes) == 1:
+            # Have a single distinct assignment and some UNKNOWNs
             if (top_count / len(data)) >= SINGLE_MODE_THRESHOLT:
                 print(
                     f'Single-target-mode detected, overriding {minor_count} '
                     f'stray (unknown) target assignments to {top_assignment}'
                 )
-            for row in data:
-                if row['assignment'] == UNKNOWN and not row['override']:
-                    row['override'] = top_assignment
-                    row['is_auto_override'] = True
+                top_mode = top_modes.pop()
+                for row in data:
+                    if row['assignment'] == UNKNOWN and not row['override']:
+                        row['override'] = top_assignment
+                        row['is_auto_override'] = True
     return groups
 
 
 def write_assignments(data, groups, output_file):
     """ Write the target assignment file """
-    for k, v in sorted(data[0].items()):
-        print(f'{k}: {v}')
     data = sorted(
         data,
         # sort UNKNOWN first
@@ -357,15 +446,17 @@ def write_assignments(data, groups, output_file):
         header = ('sample', 'assignment', 'override')
         tmpfile.write('\t'.join(header))
         tmpfile.write('\n')
+
         for row in data:
+            outrow = []
             for col in header:
-                values = []
-                val = str(row[col])
+                value = str(row[col])
                 if col == 'override' and row['is_auto_override']:
-                    val = AUTO_OVERRIDE_PREFIX + val
-                values.append(val)
-            tmpfile.write('\t'.join(values))
+                    value = AUTO_OVERRIDE_PREFIX + value
+                outrow.append(value)
+            tmpfile.write('\t'.join(outrow))
             tmpfile.write('\n')
+
         tmpfile.seek(0)
         if output_file.exists():
             if filecmp.cmp(output_file, tmpfile.name, shallow=False):
@@ -386,21 +477,6 @@ def write_assignments(data, groups, output_file):
             shutil.copyfileobj(tmpfile, ofile)
 
     print('[Done]')
-
-
-def apply_overrides(data):
-    """ Helper to change bits according to overrides """
-    for row in data:
-        if not row['override']:
-            continue
-
-        target, _, primers = row['override'].partition(':')
-        fwd_p, _, rev_p = primers.partition(PRIMER_SEP)
-        row['target'] = target.strip()
-        row['fwd_clean'] = True if fwd_p.strip() == '' else False
-        row['rev_clean'] = True if rev_p.strip() == '' else False
-        row['fwd_rev_clean'] = True  # FIXME need more general solution for read-through
-        row['rev_fwd_clean'] = True  # FIXME need more general solution for read-through
 
 
 def get_dada2_input(data, project_dir):
@@ -424,6 +500,8 @@ def get_dada2_input(data, project_dir):
     all_info = []
     for row in data:
         assignment = row['override'] or row['assignment']
+        if assignment in (SKIP, UNKNOWN):
+            continue
 
         samp_dir = project_dir / 'amplicons' / row['sample']
         samp_dir = samp_dir.resolve().relative_to(glamr_root)
@@ -461,8 +539,9 @@ def get_dada2_input(data, project_dir):
                     for key in EXTRA_KEYS_PAIRED:
                         info[key] = row[key]
 
-            fwd_prefix = 'clean' if USE_CLEAN and not assignment['fwd_clean'] else 'raw'
-            rev_prefix = 'clean' if USE_CLEAN and not assignment['rev_clean'] else 'raw'
+            # FIXME: what about read-through?
+            fwd_prefix = 'clean' if USE_CLEAN and not assignment.fwd_clean else 'raw'
+            rev_prefix = 'clean' if USE_CLEAN and not assignment.rev_clean else 'raw'
             fwd_fq = f'{fwd_prefix}_{fwd_infix}_reads.fastq.gz'
             rev_fq = f'{rev_prefix}_{rev_infix}_reads.fastq.gz'
 
@@ -474,7 +553,7 @@ def get_dada2_input(data, project_dir):
             if None in (row['fwd_clean'], row['rev_clean']):
                 info['single_fastq'] = None
             else:
-                if assignment['fwd_clean'] and assignment['rev_clean'] or not USE_CLEAN:
+                if assignment.fwd_clean and assignment.rev_clean or not USE_CLEAN:
                     prefix = 'raw'
                 else:
                     prefix = 'clean'
@@ -485,6 +564,7 @@ def get_dada2_input(data, project_dir):
             raise ValueError('invalid layout')
 
         all_info.append(info)
+
     return all_info
 
 
@@ -492,12 +572,17 @@ def write_dada2_input(rows, output_file):
     """ Write the dada2-input file """
     print(f'Writing {output_file} ... ', end='', flush=True)
     with open(output_file, 'w') as ofile:
-        cols = list(rows[0].keys())
-        header = '\t'.join(cols) + '\n'
-        ofile.write(header)
-        for row in rows:
-            ofile.write('\t'.join(str(row[i] or '') for i in cols))
-            ofile.write('\n')
+        if rows:
+            cols = list(rows[0].keys())
+            header = '\t'.join(cols) + '\n'
+            ofile.write(header)
+            for row in rows:
+                ofile.write('\t'.join(str(row[i] or '') for i in cols))
+                ofile.write('\n')
+        else:
+            ofile.write(
+                '# this file is empty because no samples were assigned a dada2 run'
+            )
     print('[Done]')
 
 
@@ -575,8 +660,7 @@ def get_assignments(
             # Delimiter is any blank space
             sample_id, assignment, *override = line.split(maxsplit=3)
 
-            # FIXME: change column header target -> assignment
-            if not data and sample_id == 'sample' and assignment == 'target':
+            if not data and sample_id == 'sample' and assignment == 'assignment':
                 # header line
                 continue
 
@@ -600,7 +684,7 @@ def get_assignments(
                 data[sample_id] = Assignment.from_spec(assignment)
             except ValueError as e:
                 raise ValueError(
-                    f'Failed parsing the assignment on line {lnum}: {e}'
+                    f'Failed parsing the assignment ({sample_id=}) on line {lnum}: {e}'
                 ) from e
     return data
 
