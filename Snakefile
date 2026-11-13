@@ -3063,38 +3063,77 @@ rule semibin:
         find {output.out_dir} -type f -exec chmod g+r,o+r {{}} \; -o -type d -exec chmod g+rx,o+rx {{}} \;
         """
 
-rule semibin2:
+# SemiBin2 is split into two rules (equivalent to `SemiBin2 single_easy_bin`, self-supervised):
+#   semibin2_features: per-sample coverage features from the BAMs (CPU); run where the BAMs are.
+#   semibin2: model training (GPU; ~1-2 h vs. 10-22 h on CPU) plus binning (1-3 min); needs only the
+#             feature tables, contigs, and model, so it can run on local GPU or HPC GPU node.
+rule semibin2_features:
     input:
-        #"data/reference/semibin/.gtdb_downloaded",
-        ref_db = "data/reference/semibin/gtdb",
         contigs = rules.rename_contigs.output.contigs,
-        #bam_dir = "data/projects/{project}/{sample_type}/{sample}/bins/bam"
         bam_dir = config["binning_bam_dir"]
     output:
-        out_dir = directory("data/projects/{project}/{sample_type}/{sample}/bins/semibin2"),
+        data = "data/projects/{project}/{sample_type}/{sample}/bins/semibin2/data.csv",
+        data_split = "data/projects/{project}/{sample_type}/{sample}/bins/semibin2/data_split.csv"
+    params:
+        out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/semibin2"
+    conda: "config/conda_yaml/semibin2.yaml"
+    benchmark: "benchmarks/semibin2_features/{sample_type}-{project}__{sample}.txt"
+    log: "logs/semibin2_features/{sample_type}-{project}__{sample}.log"
+    threads: 36
+    resources: mem_mb=100000, time_min=480
+    priority: 3
+    shell:
+        """
+        SemiBin2 generate_sequence_features_single \
+            --threads {threads} \
+            -i {input.contigs} \
+            -b {input.bam_dir}/*.bam \
+            -o {params.out_dir} 2>&1 | tee {log}
+
+        # Fix permissions on outputs (by default only readable by owner)
+        find {params.out_dir} -type f -exec chmod g+r,o+r {{}} \\; -o -type d -exec chmod g+rx,o+rx {{}} \\;
+        """
+
+rule semibin2:
+    input:
+        contigs = rules.rename_contigs.output.contigs,
+        data = rules.semibin2_features.output.data,
+        data_split = rules.semibin2_features.output.data_split
+    output:
+        model = "data/projects/{project}/{sample_type}/{sample}/bins/semibin2/model.pt",
+        contig_bins = "data/projects/{project}/{sample_type}/{sample}/bins/semibin2/contig_bins.tsv",
         done = touch("data/projects/{project}/{sample_type}/{sample}/bins/semibin2/.done")
     params:
+        out_dir = "data/projects/{project}/{sample_type}/{sample}/bins/semibin2"
     conda: "config/conda_yaml/semibin2.yaml"
     benchmark: "benchmarks/semibin2/{sample_type}-{project}__{sample}.txt"
     log: "logs/semibin2/{sample_type}-{project}__{sample}.log"
-    threads: 36  # 36/32/32
-    resources: mem_mb=170000, time_min=2880 # standard samples
+    threads: 16
+    resources: mem_mb=80000, time_min=1440, gpu=1, partition="spgpu" # Great Lakes A40 nodes; on Huron use --resources gpu=1
     #resources: mem_mb=1250000, time_min=2880, partition = "largemem" # coassembly
     #resources: mem_mb=700000, time_min=2880, partition = "largemem" # coassembly on our servers
     priority: 3
     shell:
         """
-        WORK_DIR=$PWD
+        # Training is far faster on a GPU; --engine auto falls back to CPU (with a warning in the log) if none is usable
+        SemiBin2 train_self \
+            --engine auto \
+            --threads {threads} \
+            --data {input.data} \
+            --data-split {input.data_split} \
+            -o {params.out_dir} 2>&1 | tee {log}
 
-        SemiBin2 single_easy_bin \
+        SemiBin2 bin_short \
+            --engine auto \
             --threads {threads} \
             --compression none \
             -i {input.contigs} \
-            -b {input.bam_dir}/*.bam \
-            -o {output.out_dir} | tee {log}
+            --model {output.model} \
+            --data {input.data} \
+            -o {params.out_dir} 2>&1 | tee -a {log}
 
         # Fix permissions on outputs (by default only readable by owner)
-        find {output.out_dir} -type f -exec chmod g+r,o+r {{}} \\; -o -type d -exec chmod g+rx,o+rx {{}} \\;
+        find {params.out_dir} -type f -exec chmod g+r,o+r {{}} \\; -o -type d -exec chmod g+rx,o+rx {{}} \\;
         """
 
 rule VAMB:
