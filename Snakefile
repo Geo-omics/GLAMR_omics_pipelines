@@ -3154,7 +3154,7 @@ rule metadecoder:
     params:
         out_prefix = "data/projects/{project}/{sample_type}/{sample}/bins/metadecoder/bins/{sample}"
     #conda: "config/conda_yaml/VAMB.yaml"
-    conda: "metadecoder"
+    conda: "config/conda_yaml/metadecoder.yaml"
     shadow: "minimal"
     benchmark: "benchmarks/metadecoder/{sample_type}-{project}__{sample}.txt"
     log: "logs/metadecoder/{sample_type}-{project}__{sample}.log"
