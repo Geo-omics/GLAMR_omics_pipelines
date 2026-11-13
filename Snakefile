@@ -4247,9 +4247,9 @@ def get_target_info_files(wc):
     if assignments.exists():
         # check for manual overrides
         skips = [
-            sample for sample, group
+            sample for sample, assignment
             in pypelib.amplicon.dispatch.get_assignments(path=assignments).items()
-            if group == pypelib.amplicon.dispatch.SKIP
+            if assignment is pypelib.amplicon.dispatch.Assignment.SKIP
         ]
     else:
         skips = []

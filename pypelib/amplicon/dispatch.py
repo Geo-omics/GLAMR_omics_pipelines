@@ -2,7 +2,6 @@
 Dispatch dada2 jobs for a dataset
 """
 import argparse
-from collections import Counter
 from datetime import datetime
 from enum import StrEnum
 import filecmp
@@ -158,7 +157,7 @@ def load_target_table(input_file):
                         case _: row[i] = None
 
             if row.get('errors'):
-                row['assignment'] = UNKNOWN
+                row['assignment'] = Assignment.UNKNOWN
             else:
                 hmm = hmms[row['model_name']]
                 start, end = \
@@ -188,23 +187,51 @@ def load_target_table(input_file):
     return rows
 
 
+class InvalidAssignment(Exception):
+    pass
+
+
+class SpecialAssignment:
+    """
+    Utility class for descriptors for accessing special Assignment instances
+    via class attribute
+    """
+    _objects = {}
+    """ container to hold the special instances """
+
+    @classmethod
+    def _get_object(cls, objtype, name):
+        if (objtype, name) not in cls._objects:
+            args = [None] * 4  # Assignment() expects four positional args
+            cls._objects[(objtype, name)] = objtype(*args, special=name)
+        return cls._objects[(objtype, name)]
+
+    def __set_name__(self, owner, name):
+        self.name = name
+
+    def __get__(self, obj, objtype):
+        if obj is not None:
+            raise RuntimeError('do not access special instances from another instance')
+        return self._get_object(objtype, self.name)
+
+
 class Assignment:
     """ Representation of a sample's target assignment """
     # Read-mode indicator codes for string representation:
-    SWAPPED = 's'
-    RC_MODE = 'x'
-    SINGLE_CLEAN = '-'
-    PAIRED_CLEAN = '='
-    FWD_DIRTY = '>'
-    REV_DIRTY = '<'
+    single = r'(?P<single>-(-|(?P<rc_mode>x))-)'  # --- or -x-
+    paired = r'(?P<paired>=(=|(?P<swapped>s))=)'  # === or =s=
+    primer_name = r'[a-zA-Z0-9_-]+'  # a single primer name
+    primer_list = rf'{primer_name}(,{primer_name})*'
+    fwd = rf'((?P<fwd_clean>{primer_list})|\[(?P<fwd_dirty>{primer_list})\])'
+    rev = rf'((?P<rev_clean>{primer_list})|\[(?P<rev_dirty>{primer_list})\])'
 
-    read_mode_pat = re.compile(
-        rf'[{SINGLE_CLEAN}{PAIRED_CLEAN}{FWD_DIRTY}]'
-        rf'[{SINGLE_CLEAN}{PAIRED_CLEAN}{SWAPPED}{RC_MODE}]'
-        rf'[{SINGLE_CLEAN}{PAIRED_CLEAN}{REV_DIRTY}]'
-    )
+    read_mode_pat = re.compile(rf'^{fwd}({single}|{paired}){rev}$')
 
     LAYOUT = StrEnum('Layout', 'paired single')
+
+    UNKNOWN = SpecialAssignment()
+    SKIP = SpecialAssignment()
+    INVALID = SpecialAssignment()
 
     def __init__(
         self,
@@ -218,140 +245,101 @@ class Assignment:
         rev_clean=True,
         swapped=False,
         rc_mode=False,
+        special=None,
     ):
+        if special is not None:
+            self.special = str(special)
+            return
+
         self.hmm = hmm
         self.start = start
         self.end = end
         self.layout = self.LAYOUT(layout)
-        if fwd_primer is None and rev_primer is None:
-            if not fwd_clean or not rev_clean:
-                raise ValueError('if primers are not provided both must be clean')
-        elif fwd_primer is None or rev_primer is None:
-            raise ValueError('can not have one primer be None but not the other')
-        else:
-            if fwd_clean and rev_clean:
-                raise ValueError('if both clean then do not provide primers')
         self.fwd_primer = fwd_primer
         self.rev_primer = rev_primer
         self.fwd_clean = fwd_clean
         self.rev_clean = rev_clean
-        if swapped and rc_mode:
-            raise ValueError('can not be both swapped and rc')
+        if swapped and self.layout is self.LAYOUT.single:
+            raise ValueError('can not be swapped w/single layout')
+        if rc_mode and self.layout is self.LAYOUT.paired:
+            raise ValueError('can not be in rc_mode w/paired layout')
         self.swapped = swapped
         self.rc_mode = rc_mode
+        self.special = None
 
     def __str__(self):
-        if self.fwd_primer:
-            primers = f':{self.fwd_primer}{self.encode_mode()}{self.rev_primer}'
-        else:
-            primers = ''
-        return self.target + primers
+        if self.special:
+            return self.special
+        return self.target + (':' + self.format_mode() if self.fwd_primer else '')
 
     def __eq__(self, other):
         return str(self) == str(other)
 
-    def encode_mode(self):
-        match self.layout:
-            case self.LAYOUT.single:
-                fwd = self.SINGLE_CLEAN if self.fwd_clean else self.FWD_DIRTY
-                rev = self.SINGLE_CLEAN if self.rev_clean else self.REV_DIRTY
-                mode = self.RC_MODE if self.rc_mode else self.SINGLE_CLEAN
-            case self.LAYOUT.paired:
-                fwd = self.PAIRED_CLEAN if self.fwd_clean else self.FWD_DIRTY
-                rev = self.PAIRED_CLEAN if self.rev_clean else self.REV_DIRTY
-                mode = self.SWAPPED if self.swapped else self.PAIRED_CLEAN
-            case _: raise ValueError('invalid layout')
-        return f'{fwd}{mode}{rev}'
+    def format_mode(self):
+        if self.layout == self.LAYOUT.single:
+            infix = '-x-' if self.rc_mode else '---'
+        elif self.layout == self.LAYOUT.paired:
+            infix = '=s=' if self.swapped else '==='
+        else:
+            raise ValueError('invalid case')
+
+        fwd = '[' + self.fwd_primer + ']' if self.fwd_clean else self.fwd_primer
+        rev = '[' + self.rev_primer + ']' if self.rev_clean else self.rev_primer
+        return f'{fwd}{infix}{rev}'
 
     @classmethod
-    def from_spec(self, spec):
+    def from_spec(cls, spec):
         """
         Create instance from string representation
 
         Raises ValueError for misformed input.
         """
-        if spec in (SKIP, UNKNOWN):
-            return spec
+        for name, attr in vars(cls).items():
+            if name == spec and isinstance(attr, SpecialAssignment):
+                return getattr(cls, name)
 
-        target, _, primers = spec.partition(':')
+        target, _, read_mode = spec.partition(':')
         hmm, _, coords = target.partition('.')
         start, _, end = coords.partition('-')
         try:
             start = int(start)
             end = int(end)
         except ValueError as e:
-            raise ValueError(f'failed parsing start/end: {e}') from e
+            raise InvalidAssignment(f'failed parsing start/end: {e}') from e
 
-        swapped = False
-        rc_mode = False
-        layout = None
-
-        m = self.read_mode_pat.search(primers)
+        m = cls.read_mode_pat.search(read_mode)
         if m is None:
-            raise ValueError(f'Failed parsing read-mode indicator in "{primers}"')
+            raise InvalidAssignment(
+                f'Failed parsing read-mode indicator in "{read_mode}"'
+            )
 
-        fwd, mode, rev = m.group(0)  # split the three characters
+        read_mode = m.groupdict()
 
-        match mode:
-            case self.SINGLE_CLEAN:
-                layout = self.LAYOUT.single
-            case self.PAIRED_CLEAN:
-                layout = self.LAYOUT.paired
-            case self.SWAPPED:
-                swapped = True
-                layout = self.LAYOUT.paired
-            case self.RC_MODE:
-                rc_mode = True
-                layout = self.LAYOUT.single
-            case _: raise ValueError('invalid mode bit')
+        swapped = False if read_mode['swapped'] is None else True
+        rc_mode = False if read_mode['rc_mode'] is None else True
+        if read_mode['single'] is None and read_mode['paired'] is not None:
+            layout = cls.LAYOUT.paired
+        elif read_mode['single'] is not None and read_mode['paired'] is None:
+            layout = cls.LAYOUT.single
+        else:
+            raise RuntimeError('invalid case')
 
-        # layout is set by mode, but keep checking consistency
-        match fwd:
-            case self.SINGLE_CLEAN:
-                fwd_clean = True
-                match layout:
-                    case self.LAYOUT.single:
-                        pass
-                    case self.LAYOUT.paired:
-                        raise ValueError('layout mismatch')
-                    case _: raise ValueError('invalid layout')
-            case self.PAIRED_CLEAN:
-                fwd_clean = True
-                match layout:
-                    case self.LAYOUT.single:
-                        raise ValueError('layout mismatch')
-                    case self.LAYOUT.paired:
-                        pass
-                    case _: raise ValueError('invalid layout')
-            case self.FWD_DIRTY:
-                fwd_clean = False
-            case _: raise ValueError('invalid mode')
+        if fwd_primer := read_mode['fwd_clean']:
+            fwd_clean = True
+        elif fwd_primer := read_mode['fwd_dirty']:
+            fwd_clean = False
+        else:
+            raise RuntimeError('invalid case')
 
-        match rev:
-            case self.SINGLE_CLEAN:
-                rev_clean = True
-                match layout:
-                    case self.LAYOUT.single:
-                        pass
-                    case self.LAYOUT.paired:
-                        raise ValueError('layout mismatch')
-                    case _: raise ValueError('invalid layout')
-            case self.PAIRED_CLEAN:
-                rev_clean = True
-                match layout:
-                    case self.LAYOUT.single:
-                        raise ValueError('layout mismatch')
-                    case self.LAYOUT.paired:
-                        pass
-                    case _: raise ValueError('invalid layout')
-            case self.REV_DIRTY:
-                rev_clean = False
-            case _: raise ValueError('invalid mode')
+        if rev_primer := read_mode['rev_clean']:
+            rev_clean = True
+        elif rev_primer := read_mode['rev_dirty']:
+            rev_clean = False
+        else:
+            raise RuntimeError('invalid case')
 
-        fwd_primer, _, rev_primer = primers.partition(m.group(0))
-
-        return self(hmm, start, end, layout, fwd_primer, rev_primer, fwd_clean,
-                    rev_clean, swapped, rc_mode)
+        return cls(hmm, start, end, layout, fwd_primer, rev_primer,
+                   fwd_clean, rev_clean, swapped, rc_mode)
 
     @property
     def target(self):
@@ -368,7 +356,7 @@ def dispatch(data):
             target = assignment.target
             mode = str(assignment).partition(':')[2]
         else:
-            target = assignment  # "UNKNOWN"
+            target = str(assignment)  # e.g. "UNKNOWN"
             mode = None
         if target not in groups:
             groups[target] = {'count': 0, 'modes': set()}
@@ -395,14 +383,17 @@ def dispatch(data):
         (top_target, top_grp_info), (minor_target, minor_grp_info) = groups.items()
         top_count = top_grp_info['count']
         top_modes = top_grp_info['modes']
+        minor_count = minor_grp_info['count']
         if minor_target == UNKNOWN and len(top_modes) == 1:
-            # Have a single distinct assignment and some UNKNOWNs
+            top_spec = top_target + ':' + top_modes.pop()
+            del top_modes
+            # Have a single distinct assignment plus some UNKNOWNs
             if (top_count / len(data)) >= SINGLE_MODE_THRESHOLT:
                 print(
                     f'Single-target-mode detected, overriding {minor_count} '
-                    f'stray (unknown) target assignments to {top_assignment}'
+                    f'stray (unknown) target assignments to {top_spec}'
                 )
-                top_mode = top_modes.pop()
+                top_assignment = Assignment.from_spec(top_spec)
                 for row in data:
                     if row['assignment'] == UNKNOWN and not row['override']:
                         row['override'] = top_assignment
@@ -435,9 +426,10 @@ def write_assignments(data, groups, output_file):
             '# the workflow.\n'
         )
         example_lines = []
-        for assignment, count in groups.items():
+        for assignment, grp_info in groups.items():
             if assignment == UNKNOWN:
                 continue
+            count = grp_info['count']
             example_lines.append(f'# {count:>4}  x  {assignment}\n')
         if example_lines:
             tmpfile.write('# Detected targets:\n')
@@ -664,13 +656,12 @@ def get_assignments(
                 # header line
                 continue
 
-            if manual_overrides_only:
-                if override:
-                    if not override[0].startswith(AUTO_OVERRIDE_PREFIX):
-                        data[sample_id] = ' '.join(override)  # incl. comments
-                continue
+            override = ' '.join(override)
+            override, _, _ = override.partition('#')  # remove any comment
+            override = override.strip()
 
-            override = override[0] if override else ''
+            if manual_overrides_only and not override.startswith(AUTO_OVERRIDE_PREFIX):
+                continue
 
             assignment = override.removeprefix(AUTO_OVERRIDE_PREFIX) or assignment
 
@@ -682,10 +673,12 @@ def get_assignments(
 
             try:
                 data[sample_id] = Assignment.from_spec(assignment)
-            except ValueError as e:
-                raise ValueError(
-                    f'Failed parsing the assignment ({sample_id=}) on line {lnum}: {e}'
-                ) from e
+            except InvalidAssignment as e:
+                print(f'[ERROR] Failed parsing the assignment ({sample_id=}) '
+                      f'on line {lnum}: {e}')
+                if manual_overrides_only:
+                    continue
+                data[sample_id] = Assignment.INVALID
     return data
 
 
