@@ -3215,7 +3215,9 @@ rule standardize_bins:
     input:
         #"data/projects/{project}/{sample_type}/{sample}/bins/CONCOCT/cut_contigs_10K.fa",
         #"data/projects/{project}/{sample_type}/{sample}/assembly/megahit_noNORM/final.contigs.renamed.fa",
-        "data/projects/{project}/{sample_type}/{sample}/bins/semibin",
+        # SemiBin2 is the default SemiBin for GLAMR; SemiBin 1 (rule semibin) is deprecated but kept in the pipeline, and
+        # standardize_bins.R still collects its bins for older samples that have them
+        "data/projects/{project}/{sample_type}/{sample}/bins/semibin2/.done",
         "data/projects/{project}/{sample_type}/{sample}/bins/METABAT2/.done/",
         "data/projects/{project}/{sample_type}/{sample}/bins/maxbin/.done", 
         "data/projects/{project}/{sample_type}/{sample}/bins/VAMB",
@@ -3299,7 +3301,7 @@ rule make_das_and_drep_inputs:
         maxbin_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/maxbin_contigs.tsv",
         concoct_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/concoct_contigs.tsv",
         metadecoder_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/metadecoder_contigs.tsv",
-        semibin_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/semibin_contigs.tsv",
+        semibin2_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/semibin2_contigs.tsv",
         VAMB_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/VAMB_contigs.tsv"
     singularity: "docker://eandersk/r_microbiome"
     benchmark: "benchmarks/make_das_and_drep_inputs/{sample_type}-{project}__{sample}.txt"
@@ -3341,7 +3343,7 @@ checkpoint dastool_new:
         maxbin_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/maxbin_contigs.tsv",
         concoct_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/concoct_contigs.tsv",
         metadecoder_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/metadecoder_contigs.tsv",
-        semibin_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/semibin_contigs.tsv",
+        semibin2_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/semibin2_contigs.tsv",
         VAMB_contigs = "data/projects/{project}/{sample_type}/{sample}/bins/das_tool/VAMB_contigs.tsv"
     output: 
         #summary = "data/projects/{project}/{sample_type}/{sample}/bins/DASTool/_DASTool_summary.txt",
@@ -3358,10 +3360,10 @@ checkpoint dastool_new:
         mkdir -p $(dirname {params.das_prefix})
         
         DAS_Tool \
-            -i {params.metabat2_contigs},{params.maxbin_contigs},{params.concoct_contigs},{params.metadecoder_contigs},{params.semibin_contigs},{params.VAMB_contigs} \
+            -i {params.metabat2_contigs},{params.maxbin_contigs},{params.concoct_contigs},{params.metadecoder_contigs},{params.semibin2_contigs},{params.VAMB_contigs} \
             -c {input.contigs} \
             -o {params.das_prefix} \
-            -l metabat2,maxbin,concoct,metadecoder,semibin,VAMB \
+            -l metabat2,maxbin,concoct,metadecoder,semibin2,VAMB \
             --threads {threads} \
             --write_bins \
              | tee {log}

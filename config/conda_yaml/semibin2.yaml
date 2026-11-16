@@ -1,12 +1,12 @@
-# SemiBin2 2.6.0 for both semibin2 rules (features on CPU; training and binning on a GPU with --engine auto, which
-# falls back to CPU when no GPU is usable). CUDA build of pytorch per the 2.6.0 GPU install docs (pytorch-gpu from
-# conda-forge). 2.6.0 needs Python >= 3.11, torch >= 2.4, and pandas >= 3.
+# SemiBin2 2.6.1 for both semibin2 rules (features on CPU; training and binning on a GPU with --engine auto, which
+# falls back to CPU when no GPU is usable). CUDA build of pytorch per the 2.6 GPU install docs (pytorch-gpu from
+# conda-forge). 2.6 needs Python >= 3.11, torch >= 2.4, and pandas >= 3.
 # Building on a node without an NVIDIA driver needs CONDA_OVERRIDE_CUDA=12.6 so the solver accepts the CUDA build.
 name: semibin2
 channels:
   - conda-forge
   - bioconda
 dependencies:
-  - semibin=2.6.0
+  - semibin=2.6.1
   - pytorch-gpu
   - cuda-version=12.6
