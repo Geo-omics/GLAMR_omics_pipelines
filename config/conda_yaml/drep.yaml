@@ -1,8 +1,8 @@
+# dRep 4 uses skani for both primary and secondary clustering (dRep 3.2.0 used Mash + fastANI). CheckM is not
+# needed: make_das_and_drep_inputs writes genome_info.csv with completeness and contamination for every bin.
 channels:
-  - bioconda
   - conda-forge
-  - defaults
+  - bioconda
 dependencies:
-  - drep=3.2.0
-  - checkm-genome=1.1.3
-  - pandas=1.5.1
+  - drep=4.0.3
+  - skani=0.4.0
