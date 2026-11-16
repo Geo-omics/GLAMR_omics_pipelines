@@ -2,7 +2,7 @@
 title: "R Notebook"
 output: html_notebook
 editor_options: 
-  chunk_output_type: console
+  chunk_output_type: inline
 ---
 
 ```{r setup, include=FALSE}
@@ -289,6 +289,340 @@ read_tsv_to_pg <- function(path, sample) {
 }
 
 walk2(new_read_count_paths$path, new_read_count_paths$sample, read_tsv_to_pg)
+```
+
+## Read stats (seqkit)
+```{r}
+# Rule seqkit_stats writes `seqkit stats --all --tabular` for each read file to
+# data/omics/{sample_type}/{sample}/reads/read_stats/{reads}.txt. Intended to replace the
+# read_count table above (count_reads_fastp) as the primary source of read stats.
+read_stats_table <- "read_stats"
+
+# Optionally limit loading to specific studies, NULL loads every sample with read stats
+read_stats_studies <- NULL # e.g. c("set_132", "set_127")
+
+# Dedup key is (sample, reads), not just sample: read stats files for a sample are produced
+# by separate jobs (and metaT samples get extra read states), so they can arrive over several runs
+if (DBI::dbExistsTable(pg, read_stats_table)) {
+  existing_read_stats <- tbl(pg, read_stats_table) %>%
+    select(sample, reads) %>%
+    distinct() %>%
+    collect()
+} else {
+  existing_read_stats <- tibble(sample = character(), reads = character())
+}
+
+# Find all seqkit stats files
+read_stats_paths <- Sys.glob("data/omics/*/*/reads/read_stats/*.txt") %>%
+  data.frame(path = .) %>%
+  bind_cols(., unglue::unglue_data(.$path, "data/omics/{sample_type}/{sample}/reads/read_stats/{reads}.txt"))
+
+if (!is.null(read_stats_studies)) {
+  read_stats_study_samples <- tbl(pg, "glamr_samples") %>%
+    filter(StudyID %in% read_stats_studies) %>%
+    pull(SampleID)
+
+  read_stats_paths <- read_stats_paths %>%
+    filter(sample %in% read_stats_study_samples)
+}
+
+# Filter to only those not already loaded into the database
+new_read_stats <- read_stats_paths %>%
+  anti_join(existing_read_stats, by = c("sample", "reads")) %>%
+  filter(str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_"))
+
+# Initialize the mirai cluster for parallel tsv parsing prior to upload
+n_cores <- parallel::detectCores() - 1
+daemons(n_cores)
+
+message(paste("Processing", nrow(new_read_stats), "seqkit stats files across", n_cores, "cores..."))
+
+everywhere({
+  library(dplyr)
+  library(readr)
+  library(stringr)
+  library(janitor)
+})
+
+# Explicit column types so files with zero reads (empty min/avg/max etc.) don't get guessed
+# as logical and clash with the others when binding. clean_names() turns e.g. "Q20(%)" into
+# q20_percent and "GC(%)" into gc_percent.
+read_seqkit_stats_parallel <- function(path, sample_type, sample, reads) {
+  tryCatch({
+    read_tsv(path, show_col_types = FALSE,
+             col_types = cols(file = "c", format = "c", type = "c", .default = "d")) %>%
+      janitor::clean_names() %>%
+      select(-file) %>%
+      mutate(sample_type = sample_type,
+             sample = sample,
+             reads = reads,
+             # e.g. decon_fwd_reads_fastp -> direction "fwd", read_state "decon_reads_fastp"
+             direction = str_extract(reads, "(?<=_)(fwd|rev)(?=_)"),
+             read_state = str_remove(reads, "_(fwd|rev)(?=_)"),
+             mod_time = file.info(path)$mtime) %>%
+      relocate(sample_type, sample, reads, read_state, direction)
+  }, error = function(e) return(conditionMessage(e)))
+}
+
+combined_read_stats_results <- mirai_map(
+  .x = new_read_stats %>% select(path, sample_type, sample, reads),
+  .f = read_seqkit_stats_parallel
+)
+
+# This waits for all workers to finish
+read_stats_results_list <- combined_read_stats_results[]
+
+# read_seqkit_stats_parallel returns the error message instead of a data frame when a file fails to parse
+failed_read_stats <- read_stats_results_list %>% discard(is.data.frame)
+if (length(failed_read_stats) > 0) {
+  warning(length(failed_read_stats), " seqkit stats files failed to parse and were skipped:\n",
+          paste(new_read_stats$path[!map_lgl(read_stats_results_list, is.data.frame)], unlist(failed_read_stats), sep = ": ", collapse = "\n"))
+}
+
+combined_read_stats_data <- read_stats_results_list %>%
+  keep(is.data.frame) %>%
+  list_rbind()
+
+daemons(0)
+
+if (nrow(combined_read_stats_data) > 0) {
+  message("Uploading to Postgres...")
+
+  dbExecute(pg, 'DROP INDEX IF EXISTS public.read_stats_sample')
+  dbExecute(pg, 'DROP INDEX IF EXISTS public.read_stats_reads')
+
+  dbWriteTable(pg, read_stats_table, combined_read_stats_data, append = TRUE, row.names = FALSE)
+
+  dbExecute(pg, str_glue('CREATE INDEX "read_stats_sample" ON "{read_stats_table}" ("sample")'))
+  dbExecute(pg, str_glue('CREATE INDEX "read_stats_reads" ON "{read_stats_table}" ("reads")'))
+
+  message("Success!")
+}
+```
+
+## Sylph
+Rules sylph, sylph_ribodeplete, and sylph_hifi each write a genome-level `sylph profile` tsv
+({read_set}profile-{database}.tsv) plus a clade-level `sylph-tax taxprof` file named after the
+read file ({read_file}.fastq.gz.sylphmpa). The two tables can be joined on (sample, read_file).
+
+##### Genome profiles
+```{r}
+sylph_profile_table <- "sylph_profile"
+
+# Optionally limit loading to specific studies, NULL loads every sample with sylph results
+sylph_studies <- NULL # e.g. c("set_115")
+
+# Dedup key is (sample, read_set, database): metaT samples get both standard and ribodepleted
+# profiles, and profiles against new databases can be added later
+if (DBI::dbExistsTable(pg, sylph_profile_table)) {
+  existing_sylph_profiles <- tbl(pg, sylph_profile_table) %>%
+    select(sample, read_set, database) %>%
+    distinct() %>%
+    collect()
+} else {
+  existing_sylph_profiles <- tibble(sample = character(), read_set = character(), database = character())
+}
+
+# Find all sylph profiles, read_set is the profile name prefix ("" for the standard rule)
+sylph_profile_paths <- Sys.glob("data/omics/*/*/sylph/*profile-*.tsv") %>%
+  data.frame(path = .) %>%
+  bind_cols(., unglue::unglue_data(.$path, "data/omics/{sample_type}/{sample}/sylph/{profile_file}.tsv")) %>%
+  mutate(read_set = str_remove(profile_file, "_?profile-.*") %>% na_if("") %>% replace_na("standard"),
+         database = str_remove(profile_file, ".*profile-"))
+
+if (!is.null(sylph_studies)) {
+  sylph_study_samples <- tbl(pg, "glamr_samples") %>%
+    filter(StudyID %in% sylph_studies) %>%
+    pull(SampleID)
+
+  sylph_profile_paths <- sylph_profile_paths %>%
+    filter(sample %in% sylph_study_samples)
+}
+
+# Filter to only those not already loaded into the database
+new_sylph_profiles <- sylph_profile_paths %>%
+  anti_join(existing_sylph_profiles, by = c("sample", "read_set", "database")) %>%
+  filter(str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_"))
+
+# Initialize the mirai cluster for parallel tsv parsing prior to upload
+n_cores <- parallel::detectCores() - 1
+daemons(n_cores)
+
+message(paste("Processing", nrow(new_sylph_profiles), "sylph profiles across", n_cores, "cores..."))
+
+everywhere({
+  library(dplyr)
+  library(readr)
+  library(stringr)
+  library(janitor)
+})
+
+# Explicit column types: Eff_lambda is "HIGH" or a number, and the percentile/containment
+# columns are ranges/ratios (e.g. "NA-NA", "17821/19424"), so those are kept as text
+read_sylph_profile_parallel <- function(path, sample_type, sample, read_set, database) {
+  tryCatch({
+    read_tsv(path, show_col_types = FALSE,
+             col_types = cols(Sample_file = "c", Genome_file = "c", `ANI_5-95_percentile` = "c",
+                              Eff_lambda = "c", `Lambda_5-95_percentile` = "c", Containment_ind = "c",
+                              Contig_name = "c", .default = "d")) %>%
+      janitor::clean_names() %>%
+      # Older sylph versions (e.g. samp_447's early test run) called true_cov eff_cov
+      dplyr::rename(any_of(c(true_cov = "eff_cov"))) %>%
+      mutate(sample_type = sample_type,
+             sample = sample,
+             read_set = read_set,
+             database = database,
+             read_file = basename(sample_file) %>% str_remove("\\.f(ast)?q\\.gz$"),
+             # Matches the t__ strain accession in the sylph-tax output
+             genome = basename(genome_file) %>% str_remove("_genomic\\.fna\\.gz$")) %>%
+      select(-sample_file) %>%
+      relocate(sample_type, sample, read_set, database, read_file, genome)
+  }, error = function(e) return(conditionMessage(e)))
+}
+
+combined_sylph_profile_results <- mirai_map(
+  .x = new_sylph_profiles %>% select(path, sample_type, sample, read_set, database),
+  .f = read_sylph_profile_parallel
+)
+
+sylph_profile_results_list <- combined_sylph_profile_results[]
+
+# read_sylph_profile_parallel returns the error message instead of a data frame when a file fails to parse
+failed_sylph_profiles <- sylph_profile_results_list %>% discard(is.data.frame)
+if (length(failed_sylph_profiles) > 0) {
+  warning(length(failed_sylph_profiles), " sylph profiles failed to parse and were skipped:\n",
+          paste(new_sylph_profiles$path[!map_lgl(sylph_profile_results_list, is.data.frame)], unlist(failed_sylph_profiles), sep = ": ", collapse = "\n"))
+}
+
+combined_sylph_profile_data <- sylph_profile_results_list %>%
+  keep(is.data.frame) %>%
+  list_rbind()
+
+daemons(0)
+
+if (nrow(combined_sylph_profile_data) > 0) {
+  message("Uploading to Postgres...")
+
+  dbExecute(pg, 'DROP INDEX IF EXISTS public.sylph_profile_sample')
+  dbExecute(pg, 'DROP INDEX IF EXISTS public.sylph_profile_genome')
+
+  dbWriteTable(pg, sylph_profile_table, combined_sylph_profile_data, append = TRUE, row.names = FALSE)
+
+  dbExecute(pg, str_glue('CREATE INDEX "sylph_profile_sample" ON "{sylph_profile_table}" ("sample")'))
+  dbExecute(pg, str_glue('CREATE INDEX "sylph_profile_genome" ON "{sylph_profile_table}" ("genome")'))
+
+  message("Success!")
+}
+```
+
+##### Taxonomic profiles (sylph-tax)
+```{r}
+sylph_taxprof_table <- "sylph_taxprof"
+
+# Optionally limit loading to specific studies, NULL loads every sample with sylph results
+sylph_studies <- NULL # e.g. c("set_115")
+
+if (DBI::dbExistsTable(pg, sylph_taxprof_table)) {
+  existing_sylph_taxprofs <- tbl(pg, sylph_taxprof_table) %>%
+    select(sample, read_file) %>%
+    distinct() %>%
+    collect()
+} else {
+  existing_sylph_taxprofs <- tibble(sample = character(), read_file = character())
+}
+
+# Find all sylph-tax outputs
+sylph_taxprof_paths <- Sys.glob("data/omics/*/*/sylph/*.sylphmpa") %>%
+  data.frame(path = .) %>%
+  bind_cols(., unglue::unglue_data(.$path, "data/omics/{sample_type}/{sample}/sylph/{read_file}.sylphmpa")) %>%
+  mutate(read_file = str_remove(read_file, "\\.f(ast)?q\\.gz$"))
+
+if (!is.null(sylph_studies)) {
+  sylph_study_samples <- tbl(pg, "glamr_samples") %>%
+    filter(StudyID %in% sylph_studies) %>%
+    pull(SampleID)
+
+  sylph_taxprof_paths <- sylph_taxprof_paths %>%
+    filter(sample %in% sylph_study_samples)
+}
+
+# Filter to only those not already loaded into the database
+new_sylph_taxprofs <- sylph_taxprof_paths %>%
+  anti_join(existing_sylph_taxprofs, by = c("sample", "read_file")) %>%
+  filter(str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_"))
+
+# Initialize the mirai cluster for parallel tsv parsing prior to upload
+n_cores <- parallel::detectCores() - 1
+daemons(n_cores)
+
+message(paste("Processing", nrow(new_sylph_taxprofs), "sylph-tax profiles across", n_cores, "cores..."))
+
+everywhere({
+  library(dplyr)
+  library(readr)
+  library(stringr)
+  library(tidyr)
+})
+
+# The first line is a "#SampleID ... Taxonomies_used:['GTDB_r232']" comment, the header is on line 2.
+# Each row is one clade (domain down to t__ strain/genome), with the lineage split into rank columns
+# so e.g. genus-level rows are simply rank == "genus".
+read_sylph_taxprof_parallel <- function(path, sample_type, sample, read_file) {
+  tryCatch({
+    taxonomy <- read_lines(path, n_max = 1) %>% str_extract("(?<=Taxonomies_used:\\[').*(?='\\])")
+
+    read_tsv(path, skip = 1, show_col_types = FALSE,
+             col_types = cols(clade_name = "c", .default = "d")) %>%
+      dplyr::rename(ani = "ANI (if strain-level)", coverage = "Coverage (if strain-level)") %>%
+      mutate(rank = str_extract(clade_name, "[a-z](?=__[^|]*$)") %>%
+               recode(d = "domain", p = "phylum", c = "class", o = "order", f = "family", g = "genus", s = "species", t = "genome"),
+             taxon = str_remove(clade_name, ".*\\|") %>% str_remove("^[a-z]__")) %>%
+      separate_wider_delim(clade_name, delim = "|", names = c("domain", "phylum", "class", "order", "family", "genus", "species", "genome"),
+                           too_few = "align_start", cols_remove = FALSE) %>%
+      mutate(across(domain:genome, ~ str_remove(.x, "^[a-z]__")),
+             sample_type = sample_type,
+             sample = sample,
+             read_file = read_file,
+             taxonomy = taxonomy) %>%
+      relocate(sample_type, sample, read_file, taxonomy, rank, taxon, clade_name)
+  }, error = function(e) return(conditionMessage(e)))
+}
+
+combined_sylph_taxprof_results <- mirai_map(
+  .x = new_sylph_taxprofs %>% select(path, sample_type, sample, read_file),
+  .f = read_sylph_taxprof_parallel
+)
+
+sylph_taxprof_results_list <- combined_sylph_taxprof_results[]
+
+# read_sylph_taxprof_parallel returns the error message instead of a data frame when a file fails to parse
+failed_sylph_taxprofs <- sylph_taxprof_results_list %>% discard(is.data.frame)
+if (length(failed_sylph_taxprofs) > 0) {
+  warning(length(failed_sylph_taxprofs), " sylph-tax profiles failed to parse and were skipped:\n",
+          paste(new_sylph_taxprofs$path[!map_lgl(sylph_taxprof_results_list, is.data.frame)], unlist(failed_sylph_taxprofs), sep = ": ", collapse = "\n"))
+}
+
+combined_sylph_taxprof_data <- sylph_taxprof_results_list %>%
+  keep(is.data.frame) %>%
+  list_rbind()
+
+daemons(0)
+
+if (nrow(combined_sylph_taxprof_data) > 0) {
+  message("Uploading to Postgres...")
+
+  dbExecute(pg, 'DROP INDEX IF EXISTS public.sylph_taxprof_sample')
+  dbExecute(pg, 'DROP INDEX IF EXISTS public.sylph_taxprof_rank')
+  dbExecute(pg, 'DROP INDEX IF EXISTS public.sylph_taxprof_taxon')
+
+  dbWriteTable(pg, sylph_taxprof_table, combined_sylph_taxprof_data, append = TRUE, row.names = FALSE)
+
+  dbExecute(pg, str_glue('CREATE INDEX "sylph_taxprof_sample" ON "{sylph_taxprof_table}" ("sample")'))
+  dbExecute(pg, str_glue('CREATE INDEX "sylph_taxprof_rank" ON "{sylph_taxprof_table}" ("rank")'))
+  dbExecute(pg, str_glue('CREATE INDEX "sylph_taxprof_taxon" ON "{sylph_taxprof_table}" ("taxon")'))
+
+  message("Success!")
+}
 ```
 
 
@@ -653,7 +987,8 @@ uniref_LCA_reports <- Sys.glob("data/omics/metagenomes/*/*_report_w_standardized
 
 new_uniref_LCA_reports <- uniref_LCA_reports %>% 
   filter(!sample %in% mapped_samples$sample,
-         str_detect(sample, "^samp_*")) %>% 
+         sample2 == sample, # some dirs also hold an older report named by the original sample name
+         str_detect(sample, "^samp_*")) %>%
   mutate(fs::file_info(path))
 
 #tax_of_interest <- googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/1izMOKyA6ecy2lZsXLoXGnftcyFDdlQI39ncUXnfDw_Y/edit#gid=0")
@@ -679,7 +1014,7 @@ read_report <- function(path, samp_name){
 #sql('DROP INDEX public.read_mapping_LCA_summary') %>% DBI::dbSendQuery(pg, .)
 #sql('DROP INDEX public.read_mapping_LCA_summary') %>% DBI::dbSendQuery(pg, .)
 
-community_comp <- walk2(uniref_LCA_reports$path, uniref_LCA_reports$sample, read_report)
+community_comp <- walk2(new_uniref_LCA_reports$path, new_uniref_LCA_reports$sample, read_report)
 
 sql('CREATE INDEX "read_mapping_LCA_summary_sample" ON "read_mapping_LCA_summary" ("SampleID")') %>% DBI::dbSendQuery(pg, .)
 sql('CREATE INDEX "read_mapping_LCA_summary_taxonomy" ON "read_mapping_LCA_summary" ("tax_id")') %>% DBI::dbSendQuery(pg, .)
@@ -883,6 +1218,211 @@ walk2(new_GTDB$path, new_GTDB$sample, read_gtdb_to_pg)
 dbExecute(pg,'CREATE INDEX "gtdb_bin" ON "GTDB" ("bin")')
 dbExecute(pg,'CREATE INDEX "gtdb_sample" ON "GTDB" ("sample")')
 
+```
+
+## GTDB (versioned)
+```{r}
+# GTDB-Tk gets periodically re-run against newer GTDB releases (see rule GTDB_r232 in the
+# Snakefile). Unlike the legacy `GTDB` table above (which only ever holds r207 results),
+# this table carries the release alongside every row so multiple releases can coexist.
+gtdb_release <- "r232"
+gtdb_out_dir <- "GTDB_r232"  # matches params$out_dir basename in rule GTDB_r232
+gtdb_table <- "GTDB_versioned"
+
+# Dedup key is (sample, gtdb_marker_set), not just sample: a sample's bins are classified
+# into a bac120 and/or an ar53 summary file, and those files don't always land in the same
+# run, so deduping on `sample` alone risks never loading a later-arriving file.
+if (DBI::dbExistsTable(pg, gtdb_table)) {
+  existing_gtdb_versioned <- tbl(pg, gtdb_table) %>%
+    filter(gtdb_release == .env$gtdb_release) %>%
+    select(sample, gtdb_marker_set) %>%
+    distinct() %>%
+    collect()
+} else {
+  existing_gtdb_versioned <- tibble(sample = character(), gtdb_marker_set = character())
+}
+
+# Find all GTDB_r232 summary tsvs
+GTDB_versioned_paths <- Sys.glob(str_glue("data/omics/metagenomes/*/bins/{gtdb_out_dir}/*.summary.tsv")) %>%
+  data.frame(path = .) %>%
+  bind_cols(., unglue::unglue_data(.$path, str_glue("data/omics/{{sample_type}}/{{sample}}/bins/{gtdb_out_dir}/gtdbtk.{{gtdb_marker_set}}.summary.tsv"))) %>%
+  bind_cols(file.info(.$path))
+
+# Filter list of summary tsvs to only those not already loaded into the database
+new_GTDB_versioned <- GTDB_versioned_paths %>%
+  anti_join(existing_gtdb_versioned, by = c("sample", "gtdb_marker_set")) %>%
+  filter(str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_"))
+
+# Initialize the mirai cluster for parallel tsv parsing prior to upload
+n_cores <- parallel::detectCores() - 1
+daemons(n_cores)
+
+message(paste("Processing", nrow(new_GTDB_versioned), "GTDB_r232 summary files across", n_cores, "cores..."))
+
+# everywhere() only evaluates in the daemon processes (never in this calling session), so it
+# is used solely to load packages remotely; the worker function itself must be a real object
+# in this session for mirai_map() to find and ship it.
+everywhere({
+  library(dplyr)
+  library(readr)
+  library(stringr)
+  library(tidyr)
+})
+
+# Read every column as character here -- some summary.tsv files have entirely-NA numeric
+# columns (e.g. closest_placement_* when no placement was found, or most columns in an
+# ar53 file with only a couple of archaeal bins), which makes readr infer col_logical()
+# for that file. Reading everything as character sidesteps per-file type drift so
+# list_rbind() across hundreds of files never hits a type clash; real types are cast once
+# below via type_convert(), after all files are combined.
+read_gtdb_versioned_parallel <- function(path, sample, gtdb_marker_set, gtdb_release) {
+  tryCatch({
+    read_tsv(path, na = "N/A", col_types = cols(.default = col_character())) %>%
+      separate(classification, into = c("domain","phylum","class","order","family","genus","species"), sep = ";[a-z]__", remove = FALSE) %>%
+      mutate(domain = str_remove(domain, "d__"),
+             sample = sample,
+             gtdb_marker_set = gtdb_marker_set,
+             gtdb_release = gtdb_release) %>%
+      dplyr::rename(bin = "user_genome") %>%
+      relocate(gtdb_release, sample, bin, gtdb_marker_set)
+  }, error = function(e) return(conditionMessage(e)))
+}
+
+combined_gtdb_versioned_results <- mirai_map(
+  .x = new_GTDB_versioned %>% select(path, sample, gtdb_marker_set),
+  .f = read_gtdb_versioned_parallel,
+  .args = list(gtdb_release = gtdb_release)
+)
+
+# Cast numeric columns once, over the combined data, to match the existing GTDB table's
+# postgres types exactly (double precision for these 9 columns; text -- the .default -- for
+# everything else, including the new gtdb_release/gtdb_marker_set columns).
+combined_gtdb_versioned_data <- combined_gtdb_versioned_results[] %>%
+  list_rbind() %>%
+  type_convert(col_types = cols(
+    closest_genome_reference_radius = col_double(),
+    closest_genome_ani = col_double(),
+    closest_genome_af = col_double(),
+    closest_placement_radius = col_double(),
+    closest_placement_ani = col_double(),
+    closest_placement_af = col_double(),
+    msa_percent = col_double(),
+    translation_table = col_double(),
+    red_value = col_double(),
+    .default = col_character()
+  ))
+
+daemons(0)
+
+if (nrow(combined_gtdb_versioned_data) > 0) {
+  message("Uploading to Postgres...")
+
+  dbExecute(pg, 'DROP INDEX IF EXISTS public.gtdb_versioned_release')
+  dbExecute(pg, 'DROP INDEX IF EXISTS public.gtdb_versioned_sample')
+  dbExecute(pg, 'DROP INDEX IF EXISTS public.gtdb_versioned_bin')
+
+  dbWriteTable(pg, gtdb_table, combined_gtdb_versioned_data, append = TRUE, row.names = FALSE)
+
+  dbExecute(pg, str_glue('CREATE INDEX "gtdb_versioned_release" ON "{gtdb_table}" ("gtdb_release")'))
+  dbExecute(pg, str_glue('CREATE INDEX "gtdb_versioned_sample" ON "{gtdb_table}" ("sample")'))
+  dbExecute(pg, str_glue('CREATE INDEX "gtdb_versioned_bin" ON "{gtdb_table}" ("bin")'))
+
+  message("Success!")
+}
+```
+
+## GTDB to NCBI taxonomy
+```{r}
+# Rule GTDB_to_NCBI runs gtdb_to_ncbi_majority_vote.py over the GTDB-Tk output, translating each
+# bin's GTDB classification into a majority-vote NCBI classification. Like the versioned GTDB
+# table above, the release is carried on every row so multiple releases can coexist; pointing
+# this at another release is just a change to the two variables below.
+gtdb_ncbi_release <- "r232"
+gtdb_ncbi_out_dir <- "GTDB_r232"  # matches params$out_dir basename in rule GTDB_to_NCBI
+gtdb_ncbi_table <- "gtdb_to_ncbi"
+
+# Guarded because the table doesn't exist until the first successful load
+if (DBI::dbExistsTable(pg, gtdb_ncbi_table)) {
+  existing_gtdb_to_ncbi <- tbl(pg, gtdb_ncbi_table) %>%
+    filter(gtdb_release == .env$gtdb_ncbi_release) %>%
+    select(sample) %>%
+    distinct() %>%
+    collect()
+} else {
+  existing_gtdb_to_ncbi <- tibble(sample = character())
+}
+
+# Find all gtdb_to_ncbi results
+gtdb_to_ncbi_paths <- Sys.glob(str_glue("data/omics/metagenomes/*/bins/{gtdb_ncbi_out_dir}/gtdb_to_ncbi_taxonmy.tsv")) %>%
+  data.frame(path = .) %>%
+  bind_cols(., unglue::unglue_data(.$path, str_glue("data/omics/{{sample_type}}/{{sample}}/bins/{gtdb_ncbi_out_dir}/gtdb_to_ncbi_taxonmy.tsv"))) %>%
+  bind_cols(file.info(.$path))
+
+# Filter to only those not already loaded into the database
+new_gtdb_to_ncbi <- gtdb_to_ncbi_paths %>%
+  filter(!sample %in% existing_gtdb_to_ncbi$sample,
+         str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_"))
+
+# Initialize the mirai cluster for parallel tsv parsing prior to upload
+n_cores <- parallel::detectCores() - 1
+daemons(n_cores)
+
+message(paste("Processing", nrow(new_gtdb_to_ncbi), "gtdb_to_ncbi files across", n_cores, "cores..."))
+
+everywhere({
+  library(dplyr)
+  library(readr)
+  library(stringr)
+  library(tidyr)
+})
+
+# All three columns are text, so no type inference/casting is needed after binding.
+read_gtdb_to_ncbi_parallel <- function(path, sample, gtdb_release) {
+  tryCatch({
+    read_tsv(path, col_types = cols(.default = col_character())) %>%
+      dplyr::rename(bin = "Genome ID",
+                    gtdb_classification = "GTDB classification",
+                    ncbi_classification = "Majority vote NCBI classification") %>%
+      # fill = "right" because bins the majority vote couldn't place come through as a bare
+      # "Unclassified"/"Unclassified Bacteria" with no rank prefixes at all; those get the string
+      # in ncbi_domain and NA for the remaining ranks instead of a warning per file.
+      separate(ncbi_classification,
+               into = c("ncbi_domain","ncbi_phylum","ncbi_class","ncbi_order","ncbi_family","ncbi_genus","ncbi_species"),
+               sep = ";[a-z]__", remove = FALSE, fill = "right") %>%
+      mutate(ncbi_domain = str_remove(ncbi_domain, "d__"),
+             sample = sample,
+             gtdb_release = gtdb_release) %>%
+      relocate(gtdb_release, sample, bin)
+  }, error = function(e) return(conditionMessage(e)))
+}
+
+combined_gtdb_to_ncbi_results <- mirai_map(
+  .x = new_gtdb_to_ncbi %>% select(path, sample),
+  .f = read_gtdb_to_ncbi_parallel,
+  .args = list(gtdb_release = gtdb_ncbi_release)
+)
+
+# This waits for all workers to finish and binds the resulting data frames
+combined_gtdb_to_ncbi_data <- combined_gtdb_to_ncbi_results[] %>%
+  list_rbind()
+
+daemons(0)
+
+if (nrow(combined_gtdb_to_ncbi_data) > 0) {
+  message("Uploading to Postgres...")
+
+  dbExecute(pg, 'DROP INDEX IF EXISTS public.gtdb_to_ncbi_release')
+  dbExecute(pg, 'DROP INDEX IF EXISTS public.gtdb_to_ncbi_sample')
+  dbExecute(pg, 'DROP INDEX IF EXISTS public.gtdb_to_ncbi_bin')
+
+  dbWriteTable(pg, gtdb_ncbi_table, combined_gtdb_to_ncbi_data, append = TRUE, row.names = FALSE)
+
+  dbExecute(pg, str_glue('CREATE INDEX "gtdb_to_ncbi_release" ON "{gtdb_ncbi_table}" ("gtdb_release")'))
+  dbExecute(pg, str_glue('CREATE INDEX "gtdb_to_ncbi_sample" ON "{gtdb_ncbi_table}" ("sample")'))
+  dbExecute(pg, str_glue('CREATE INDEX "gtdb_to_ncbi_bin" ON "{gtdb_ncbi_table}" ("bin")'))
+
+  message("Success!")
+}
 ```
 
 ## CheckM
@@ -1173,14 +1713,21 @@ gene_abundance <- tbl(pg, "gene_abundance")
 
 gene_abundance_samples <- get_pg_table_samples(pg, "gene_abundance", "sample")
 
-gene_abundance_files <- Sys.glob("data/omics/metagenomes/*/genes/*_READSvsGENES.rpkm") %>% 
-  data.frame(path = .) %>% 
-  unglue::unglue_unnest(path, "data/omics/metagenomes/{sample}/genes/{sample2}_READSvsGENES.rpkm",remove = FALSE) %>% 
+gene_abundance_files <- Sys.glob(c("data/omics/metagenomes/*/genes/*_READSvsGENES.rpkm",
+                                   "data/omics/metatranscriptomes/*/genes/*_READSvsGENES.rpkm")) %>%
+  data.frame(path = .) %>%
+  unglue::unglue_unnest(path, "data/omics/{sample_type}/{sample}/genes/{sample2}_READSvsGENES.rpkm",remove = FALSE) %>%
   mutate(file_size = fs::file_size(path))
 
-new_gene_abundance_files <- gene_abundance_files %>% 
+# metaT assemblies get re-run (e.g. the Oct 2026 RNAspades re-assembly on rRNA-removed reads); an rpkm
+# file older than its assembly has gene/contig IDs from the old assembly, so skip it until it's rebuilt
+metaT_assembly <- function(sample) str_glue("data/omics/metatranscriptomes/{sample}/assembly/RNAspades/contigs.renamed.fasta")
+
+new_gene_abundance_files <- gene_abundance_files %>%
   filter(!sample %in% gene_abundance_samples$sample,
-         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_*") | str_detect(sample, "^GVHDsamp_")) %>% 
+         str_detect(sample, "^samp_*") | str_detect(sample, "^coassembly_*") | str_detect(sample, "^GVHDsamp_")) %>%
+  filter(sample_type != "metatranscriptomes" |
+           (file.exists(metaT_assembly(sample)) & fs::file_info(path)$modification_time > fs::file_info(metaT_assembly(sample))$modification_time)) %>%
   mutate(fs::file_info(path))
 
 #path <- "data/omics/metagenomes/samp_447/genes/samp_447_READSvsGENES.rpkm"
@@ -1244,18 +1791,11 @@ read_gene_abundance <- function(path, sample_name){
   return(NULL)
 }
 
-# Drop indices to load faster
-# For the indexes created by this script
-sql('DROP INDEX gene_abundance_sample') %>% DBI::dbSendQuery(pg, .)
-sql('DROP INDEX gene_abundance_gene') %>%  DBI::dbSendQuery(pg, .)
-sql('DROP INDEX gene_abundance_contig') %>% DBI::dbSendQuery(pg, .)
-
+# Indexes are left in place while appending: the table is ~2.5 billion rows, so rebuilding them takes
+# hours, while a typical batch of new samples appends fine with them maintained. (The live indexes are
+# idx_gene_abundance_{sample,gene,contig} plus gene_abundance_sample; the old drop/create lines here
+# targeted names that no longer exist.) For a very large first load, drop and recreate those instead.
 walk2(new_gene_abundance_files$path, new_gene_abundance_files$sample, read_gene_abundance,.progress = TRUE)
-
-# Create new indices
-sql('CREATE INDEX "gene_abundance_sample" ON "gene_abundance" ("sample")') %>%  DBI::dbSendQuery(pg, .)
-sql('CREATE INDEX "gene_abundance_gene" ON "gene_abundance" ("gene")') %>% DBI::dbSendQuery(pg, .)
-sql('CREATE INDEX "gene_abundance_contig" ON "gene_abundance" ("contig")') %>% DBI::dbSendQuery(pg, .)
 
 ```
 
@@ -1560,6 +2100,38 @@ message("The Materialized View creation is running in the background...")
  kofam_mv_task$data         # Access the return message once finished
 ```
 
+The index creation above never actually completed -- the materialized view existed with
+no indexes at all, so every `WHERE sample = ...` was a parallel sequential scan of the
+whole 62 GB view (481M rows, 8.1M pages).
+
+A BRIN index is a much better fit here than the btree originally attempted. The view is
+built with `row_number() OVER (PARTITION BY gene ...)`, which leaves it physically sorted
+by gene, and gene ids start with the sample name -- so `pg_stats` reports a correlation of
+0.99998 on `sample`. BRIN stores only per-block-range min/max, which is why it costs 11 MB
+and 2.5 minutes instead of ~15 GB and several hours.
+
+```{r}
+pg <- DBI::dbConnect(RPostgres::Postgres(),dbname = "glamr_data", host = "cayman.earth.lsa.umich.edu", port = "5432", user = "glamr_admin", password = "glamr2023")
+
+dbExecute(pg, "CREATE INDEX IF NOT EXISTS idx_kofam_signif_anvio_sample_brin
+                 ON public.kofam_scan_signif_anvio USING brin (sample)
+                 WITH (pages_per_range = 32)")   # 2m22s, 11 MB
+
+dbExecute(pg, "ANALYZE public.kofam_scan_signif_anvio")   # 32s
+
+# Confirm the plan is a Bitmap Heap Scan rather than a Seq Scan.
+# Measured: 6.4s for a sample returning 408k rows (was an 8.8M-cost seq scan).
+dbGetQuery(pg, "EXPLAIN (ANALYZE, BUFFERS)
+                  SELECT gene, ko FROM kofam_scan_signif_anvio WHERE sample = 'GVHDsamp_1'")
+```
+
+The `(gene)` and `(ko)` indexes from the chunk above are deliberately still absent -- nothing
+queries the view that way, and the `CREATE UNIQUE INDEX ... (gene)` is the most likely reason
+the original background task died partway through.
+
+See `code/kegg_completeness_funcs.R`, which depends on this index; its
+`check_kegg_completeness_prereqs()` verifies the plan contains no `Seq Scan` before running.
+
 
 kofam significant hit table
 ```{r}
@@ -1618,6 +2190,221 @@ message("The kofam_scan_signif view creation (with IF EXISTS guards) is running.
 
 unresolved(kofam_sig_view_task)
 
+```
+
+
+# eggNOG-mapper
+```{r eggnog}
+# Rule eggnog writes data/omics/{sample_type}/{sample}/eggnog/{sample}.emapper.annotations.
+# Loaded as two tables joined on gene:
+#   eggnog: one row per gene with the single-valued fields (seed ortholog, hit stats, preferred name)
+#   eggnog_annotations: long format, one row per gene and annotation value (KO, EC, GO, PFAM, ...),
+#     with annotation types stored as smallint ids described in eggnog_annotation_types
+#
+# The annotation_confidence column of the .emapper.annotations file is a positional string with one
+# h/m/l/- character per field (Preferred_name, GOs, EC, KEGG_ko, KEGG_Pathway, KEGG_Module,
+# KEGG_Reaction, KEGG_rclass, BRITE, KEGG_TC, CAZy, BiGG_Reaction, PFAMs). It is split up so each
+# eggnog_annotations row carries the confidence of its own annotation (NULL for COG_category and
+# eggNOG_OGs, which have none) and preferred_name_confidence is kept on the eggnog row.
+#
+# The files in the GVHD sample folders are symlinks into another turbo volume, so when running in the
+# r_microbiome container it needs --bind /nfs:/nfs or those samples are silently not found.
+eggnog_table <- "eggnog"
+eggnog_annot_table <- "eggnog_annotations"
+
+# Optionally limit loading to specific samples, NULL loads every sample with eggnog results
+eggnog_samples_to_load <- NULL # e.g. c("samp_2053", "samp_7915")
+
+# Workers write directly to the database, keep this modest so the server isn't overwhelmed
+n_eggnog_workers <- 8
+
+# Index builds on these tables take hours. FALSE only prints the SQL, to run it with psql on the
+# database host (a dropped tunnel connection kills a build run from here).
+eggnog_run_index_sql <- TRUE
+
+eggnog_annotation_types <- tibble(
+  annotation_type = c("KEGG_ko", "EC", "GOs", "PFAMs", "COG_category", "KEGG_Pathway", "KEGG_Module",
+                      "KEGG_Reaction", "KEGG_rclass", "BRITE", "KEGG_TC", "CAZy", "BiGG_Reaction", "eggNOG_OGs")) %>%
+  mutate(annotation_type_id = row_number(), .before = 1)
+
+# Order of the characters in the annotation_confidence string
+eggnog_confidence_order <- c("Preferred_name", "GOs", "EC", "KEGG_ko", "KEGG_Pathway", "KEGG_Module",
+                             "KEGG_Reaction", "KEGG_rclass", "BRITE", "KEGG_TC", "CAZy", "BiGG_Reaction", "PFAMs")
+
+# Create the tables on the first run with explicit types
+if (!DBI::dbExistsTable(pg, "eggnog_annotation_types")) {
+  dbWriteTable(pg, "eggnog_annotation_types", eggnog_annotation_types,
+               field.types = c(annotation_type_id = "smallint", annotation_type = "text"))
+}
+if (!DBI::dbExistsTable(pg, eggnog_table)) {
+  dbExecute(pg, str_glue('CREATE TABLE "{eggnog_table}" (
+    gene text, sample text, seed_ortholog text, evalue double precision,
+    score double precision, tax_ceiling text, farthest_donor_lineage text, preferred_name text,
+    preferred_name_confidence "char")'))
+  # extra holds the PFAM domain coordinates (start_end), split off of the PFAM name
+  # confidence is eggnog-mapper\'s h/m/l (high/medium/low) for the annotation
+  dbExecute(pg, str_glue('CREATE TABLE "{eggnog_annot_table}" (
+    gene text, sample text, annotation_type_id smallint, value text, extra text, confidence "char")'))
+}
+
+eggnog_samples <- get_pg_table_samples(pg, eggnog_table, "sample")
+
+# Find all eggnog annotation files
+eggnog_files <- Sys.glob("data/omics/*/*/eggnog/*.emapper.annotations") %>%
+  data.frame(path = .) %>%
+  bind_cols(., unglue::unglue_data(.$path, "data/omics/{sample_type}/{sample}/eggnog/{sample2}.emapper.annotations")) %>%
+  filter(sample == sample2) %>%
+  select(-sample2)
+
+if (!is.null(eggnog_samples_to_load)) {
+  eggnog_files <- eggnog_files %>%
+    filter(sample %in% eggnog_samples_to_load)
+}
+
+# Filter to only those not already loaded into the database
+new_eggnog_files <- eggnog_files %>%
+  filter(!sample %in% eggnog_samples$sample,
+         str_detect(sample, "^samp_") | str_detect(sample, "^coassembly_") | str_detect(sample, "^GVHDsamp_"))
+
+# Each worker parses one sample and writes both tables in a single transaction, so a sample
+# is either fully loaded or not at all and an interrupted load can simply be re-run
+load_eggnog_parallel <- function(path, sample, eggnog_table, eggnog_annot_table, annotation_types, confidence_order) {
+  tryCatch({
+    # The annotations file is written incrementally, only completed runs end with the timing footer
+    if (!any(str_detect(system2("tail", c("-n", "3", shQuote(path)), stdout = TRUE), "^## Total time"))) {
+      return("incomplete annotations file (no '## Total time' footer)")
+    }
+
+    col_names <- c("gene", "seed_ortholog", "evalue", "score", "eggNOG_OGs", "tax_ceiling",
+                   "farthest_donor_lineage", "COG_category", "preferred_name", "GOs", "EC", "KEGG_ko",
+                   "KEGG_Pathway", "KEGG_Module", "KEGG_Reaction", "KEGG_rclass", "BRITE", "KEGG_TC",
+                   "CAZy", "BiGG_Reaction", "PFAMs", "annotation_confidence")
+
+    # eggnog uses "-" for empty fields
+    annot <- read_tsv(pipe(str_glue("grep -v '^#' {shQuote(path)}")), col_names = col_names,
+                      col_types = cols(.default = "c", evalue = "d", score = "d"),
+                      na = c("", "-"), quote = "", progress = FALSE)
+
+    # annotation_confidence has one character per field in confidence_order, "-" where not annotated
+    stopifnot(all(nchar(annot$annotation_confidence) == length(confidence_order)))
+    confidence_of <- function(field) {
+      pos <- match(field, confidence_order)
+      if (is.na(pos)) return(rep(NA_character_, nrow(annot)))
+      conf <- str_sub(annot$annotation_confidence, pos, pos)
+      if_else(conf == "-", NA_character_, conf)
+    }
+
+    gene_df <- annot %>%
+      transmute(gene, sample = !!sample, seed_ortholog, evalue, score,
+                tax_ceiling, farthest_donor_lineage, preferred_name,
+                preferred_name_confidence = confidence_of("Preferred_name"))
+
+    # Multi-valued fields are comma separated. PFAMs carry domain coordinates (e.g. DUF262_15_241),
+    # CAZy a family description (e.g. GT2|Glycosyltransferase Family 2.), and EC an "ec:" prefix
+    annot_long <- annotation_types$annotation_type %>%
+      map(\(type) tibble(gene = annot$gene, annotation_type = type, value = annot[[type]],
+                         confidence = confidence_of(type))) %>%
+      list_rbind() %>%
+      filter(!is.na(value)) %>%
+      separate_longer_delim(value, ",") %>%
+      mutate(extra = if_else(annotation_type == "PFAMs", str_extract(value, "(?<=_)\\d+_\\d+$"), NA_character_),
+             value = case_when(annotation_type == "PFAMs" ~ str_remove(value, "_\\d+_\\d+$"),
+                               annotation_type == "CAZy" ~ str_remove(value, "\\|.*$"),
+                               annotation_type == "EC" ~ str_remove(value, "^ec:"),
+                               .default = value),
+             sample = !!sample) %>%
+      inner_join(annotation_types, by = "annotation_type") %>%
+      select(gene, sample, annotation_type_id, value, extra, confidence)
+
+    worker_pg <- DBI::dbConnect(RPostgres::Postgres(), dbname = "glamr_data", host = "cayman.earth.lsa.umich.edu", port = "5432", user = "glamr_admin", password = "glamr2023")
+    on.exit(DBI::dbDisconnect(worker_pg))
+
+    DBI::dbWithTransaction(worker_pg, {
+      DBI::dbWriteTable(worker_pg, eggnog_table, gene_df, append = TRUE)
+      DBI::dbWriteTable(worker_pg, eggnog_annot_table, annot_long, append = TRUE)
+    })
+
+    tibble(sample = sample, genes = nrow(gene_df), annotations = nrow(annot_long))
+  }, error = function(e) return(conditionMessage(e)))
+}
+
+# Index names follow the table names so a rebuilt copy of the tables can be indexed beside the originals
+eggnog_index_sql <- c(
+  str_glue('CREATE INDEX IF NOT EXISTS "{eggnog_table}_sample" ON "{eggnog_table}" ("sample")'),
+  str_glue('CREATE INDEX IF NOT EXISTS "{eggnog_table}_gene" ON "{eggnog_table}" ("gene")'),
+  # Gene-name lookups (e.g. preferred_name = 'isiA') are otherwise a scan of every gene
+  str_glue('CREATE INDEX IF NOT EXISTS "{eggnog_table}_preferred_name" ON "{eggnog_table}" ("preferred_name")'),
+  # Covering index: "which genes/samples have annotation X (at confidence Y)" is answered without
+  # touching the 1.5 TB table
+  str_glue('CREATE INDEX IF NOT EXISTS "{eggnog_annot_table}_type_value_cov" ON "{eggnog_annot_table}" ("annotation_type_id", "value") INCLUDE ("gene", "sample", "confidence")'),
+  str_glue('CREATE INDEX IF NOT EXISTS "{eggnog_annot_table}_gene" ON "{eggnog_annot_table}" ("gene")'),
+  str_glue('CREATE INDEX IF NOT EXISTS "{eggnog_annot_table}_sample" ON "{eggnog_annot_table}" ("sample")'))
+
+daemons(n_eggnog_workers)
+
+message(paste("Loading", nrow(new_eggnog_files), "eggnog annotation files across", n_eggnog_workers, "workers..."))
+
+everywhere({
+  library(dplyr)
+  library(readr)
+  library(stringr)
+  library(tidyr)
+  library(tibble)
+  library(purrr)
+  library(DBI)
+})
+
+eggnog_load_results <- mirai_map(
+  .x = new_eggnog_files %>% select(path, sample),
+  .f = load_eggnog_parallel,
+  .args = list(eggnog_table = eggnog_table, eggnog_annot_table = eggnog_annot_table,
+               annotation_types = eggnog_annotation_types, confidence_order = eggnog_confidence_order)
+)
+
+# This waits for all workers to finish
+eggnog_load_results_list <- eggnog_load_results[.progress]
+
+daemons(0)
+
+# load_eggnog_parallel returns the error message instead of a data frame when a sample fails
+failed_eggnog <- eggnog_load_results_list %>% discard(is.data.frame)
+if (length(failed_eggnog) > 0) {
+  warning(length(failed_eggnog), " eggnog samples failed to load and were skipped:\n",
+          paste(new_eggnog_files$sample[!map_lgl(eggnog_load_results_list, is.data.frame)], unlist(failed_eggnog), sep = ": ", collapse = "\n"))
+}
+
+eggnog_loaded <- eggnog_load_results_list %>%
+  keep(is.data.frame) %>%
+  list_rbind()
+
+message("Loaded ", nrow(eggnog_loaded), " samples: ", sum(eggnog_loaded$genes), " genes, ",
+        sum(eggnog_loaded$annotations), " annotations")
+
+# Autovacuum waits for 20% of rows to change by default, far too late for tables this size
+for (tbl_name in c(eggnog_table, eggnog_annot_table)) {
+  dbExecute(pg, str_glue('ALTER TABLE "{tbl_name}" SET (autovacuum_vacuum_scale_factor = 0.01,
+    autovacuum_vacuum_insert_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.01)'))
+}
+
+if (eggnog_run_index_sql) {
+  # Launch mirai to handle the index creation
+  eggnog_index_task <- mirai({
+    worker_pg <- DBI::dbConnect(RPostgres::Postgres(), dbname = "glamr_data", host = "cayman.earth.lsa.umich.edu", port = "5432", user = "glamr_admin", password = "glamr2023")
+    DBI::dbExecute(worker_pg, "SET maintenance_work_mem = '16GB'")
+    for (sql in index_sql) DBI::dbExecute(worker_pg, sql)
+    DBI::dbDisconnect(worker_pg)
+    return("eggnog indices created successfully")
+  }, index_sql = as.character(eggnog_index_sql))
+
+  message("Indices for eggnog are being created in the background...")
+
+  # To check if it's done later:
+  unresolved(eggnog_index_task) # Returns TRUE if still running
+  #eggnog_index_task[]          # Returns the result (blocks until finished)
+} else {
+  message("Index SQL (run with psql, then VACUUM (FREEZE, ANALYZE) both tables):")
+  message(paste(eggnog_index_sql, collapse = ";\n"), ";")
+}
 ```
 
 
@@ -2033,6 +2820,230 @@ sql('CREATE INDEX "amplicon_region_summary_sample" ON "amplicon_region_summary" 
 sql('CREATE INDEX "amplicon_region_summary_direction" ON "amplicon_region_summary" ("read_direction")') %>% DBI::dbSendQuery(pg, .)
 ```
 
+## Amplicon ASVs (DADA2)
+
+Loads the outputs of the amplicon pipeline (`data/projects/{dataset}/dada2.{target_spec}/`) for datasets with
+`amplicon_pipeline_done`. `target_spec` is `{gene model}.{hmm start}-{hmm end}`, e.g. `16S_rRNA_bac.524-776`.
+
+| Table | One row per | Contents |
+|---|---|---|
+| `amplicon_primers` | primer | `pypelib/amplicon/primers.json`: sequence, direction, gene, HMM coordinates, and region |
+| `amplicon_dada2_runs` | dataset × target_spec | gene, region, HMM coordinates, main primer pair, taxonomy DB, and load bookkeeping |
+| `amplicon_sample_target` | sample × dataset | the gene, primers, and region the pipeline detected for each sample (`target_info.tsv`) |
+| `amplicon_asv` | unique sequence | `asv_id` (MD5 of the sequence) and the sequence |
+| `amplicon_asv_abundance` | ASV × sample × run | read counts (zeros dropped) |
+| `amplicon_asv_taxonomy` | ASV × run × source × rank | taxonomy in long format, since rank names differ between SILVA, PR2, MIDORI2, and UNITE |
+
+`asv_id` is the primary key: the MD5 hash of the ASV sequence, so the same sequence gets the same ID in every
+dataset (the same scheme QIIME 2 uses). `local_asv_id` keeps the pipeline's own ID (`tasv1`, ...), which is only
+unique within one DADA2 run. Abundance and taxonomy are linked to gene, region, and primers through
+`dataset` + `target_spec` in `amplicon_dada2_runs`.
+
+A run is loaded once, and deleted and reloaded when its DADA2 files are newer than the load
+(`files_mtime` in `amplicon_dada2_runs`). The taxonomy DB recorded for a run is the one in `config/default.conf`
+at load time.
+
+```{r}
+amplicon_config <- yaml::read_yaml("config/default.conf")
+
+# Tables are created up front so asv_id can be the primary key and the column types are fixed
+dbExecute(pg, "CREATE TABLE IF NOT EXISTS amplicon_asv (
+                 asv_id text PRIMARY KEY, sequence text, length integer, gene text)")
+dbExecute(pg, "CREATE TABLE IF NOT EXISTS amplicon_asv_abundance (
+                 asv_id text, local_asv_id text, sample text, dataset text, target_spec text,
+                 count integer, opposite_strand boolean)")
+dbExecute(pg, "CREATE TABLE IF NOT EXISTS amplicon_asv_taxonomy (
+                 asv_id text, local_asv_id text, dataset text, target_spec text, source text, db text,
+                 rank_level smallint, rank text, taxon text)")
+dbExecute(pg, "CREATE TABLE IF NOT EXISTS amplicon_sample_target (
+                 sample text, dataset text, gene text, fwd_primer text, rev_primer text, region text,
+                 fwd_hmmfrom integer, fwd_hmmto integer, rev_hmmfrom integer, rev_hmmto integer,
+                 layout text, swapped text, overlap_pct text, override text, errors text)")
+dbExecute(pg, "CREATE TABLE IF NOT EXISTS amplicon_dada2_runs (
+                 dataset text, target_spec text, gene text, region text, hmm_start integer, hmm_end integer,
+                 fwd_primer text, rev_primer text, n_samples integer, n_asvs integer,
+                 taxonomy_db text, taxonomy_method text, files_mtime timestamptz, loaded_at timestamptz,
+                 PRIMARY KEY (dataset, target_spec))")
+
+# Primers: small reference table, rewritten every time so edits to primers.json carry through
+amplicon_primers <- jsonlite::fromJSON("pypelib/amplicon/primers.json") %>%
+  as_tibble() %>%
+  select(name, sequence, direction, gene_target, hmm_name, start, end, region, citation)
+
+dbWriteTable(pg, "amplicon_primers", amplicon_primers, overwrite = TRUE)
+
+# Region spanned by a primer pair, from the primers' region fields, e.g. "V4-" + "-V4" -> "V4", "V3-" + "-V4" -> "V3-V4"
+primer_pair_region <- function(fwd_primer, rev_primer) {
+  fwd_region <- str_remove(amplicon_primers$region[match(fwd_primer, amplicon_primers$name)], "-$")
+  rev_region <- str_remove(amplicon_primers$region[match(rev_primer, amplicon_primers$name)], "^-")
+  case_when(is.na(fwd_region) | is.na(rev_region) ~ NA_character_,
+            fwd_region == rev_region ~ fwd_region,
+            TRUE ~ str_c(fwd_region, "-", rev_region))
+}
+
+# DADA2 runs in finished datasets; the target_spec pattern skips leftovers such as *_OLD and *_ERROR
+dada2_runs <- Sys.glob("data/projects/*/amplicon_pipeline_done") %>%
+  dirname() %>%
+  map(~ Sys.glob(file.path(.x, "dada2.*"))) %>%
+  unlist() %>%
+  data.frame(dir = .) %>%
+  bind_cols(., unglue::unglue_data(.$dir, "data/projects/{dataset}/dada2.{target_spec}")) %>%
+  filter(str_detect(target_spec, "^[A-Za-z0-9_]+\\.[0-9]+-[0-9]+$"),
+         file.exists(file.path(dir, "asv_table.tsv"))) %>%
+  mutate(gene = str_extract(target_spec, "^[^.]+"),
+         hmm_start = as.integer(str_extract(target_spec, "(?<=\\.)[0-9]+")),
+         hmm_end = as.integer(str_extract(target_spec, "[0-9]+$")),
+         files_mtime = map(dir, ~ max(file.mtime(Sys.glob(file.path(.x, c("asv_table.tsv", "rep_seqs.fasta", "asvs.fasta", "taxonomy*.tsv"))))))) %>%
+  unnest(files_mtime)
+
+loaded_dada2_runs <- tbl(pg, "amplicon_dada2_runs") %>%
+  select(dataset, target_spec, loaded_mtime = files_mtime) %>%
+  collect()
+
+# New runs, plus runs whose files changed since they were loaded (1 s slack for the timestamp round trip)
+new_dada2_runs <- dada2_runs %>%
+  left_join(loaded_dada2_runs, by = c("dataset", "target_spec")) %>%
+  filter(is.na(loaded_mtime) | files_mtime > loaded_mtime + 1)
+
+message(nrow(new_dada2_runs), " of ", nrow(dada2_runs), " DADA2 runs to load")
+
+# Per-sample gene, primers, and region detected by the pipeline. Column sets differ between pipeline
+# versions (e.g. model_rc vs swapped), so everything is read as character and only shared columns kept.
+read_sample_targets <- function(dataset) {
+  target_info <- read_tsv(file.path("data/projects", dataset, "target_info.tsv"),
+                          col_types = cols(.default = "c"), show_col_types = FALSE)
+  assignments_path <- file.path("data/projects", dataset, "amplicon_target_assignments.tsv")
+  assignments <- if (file.exists(assignments_path)) {
+    read_tsv(assignments_path, col_types = cols(.default = "c"), show_col_types = FALSE) %>% select(sample, override)
+  } else tibble(sample = character(), override = character())
+
+  target_info %>%
+    select(any_of(c("sample", "model_name", "fwd_primer", "rev_primer", "fwd_hmmfrom", "fwd_hmmto",
+                    "rev_hmmfrom", "rev_hmmto", "layout", "swapped", "overlap_pct", "errors"))) %>%
+    left_join(assignments, by = "sample") %>%
+    mutate(dataset = dataset,
+           region = primer_pair_region(fwd_primer, rev_primer),
+           across(any_of(c("fwd_hmmfrom", "fwd_hmmto", "rev_hmmfrom", "rev_hmmto")), as.integer)) %>%
+    rename(gene = model_name) %>%
+    relocate(sample, dataset, gene, fwd_primer, rev_primer, region)
+}
+
+# Taxonomy files are keyed by local ID (tasv1) in newer runs and by sequence in older ones
+read_run_taxonomy <- function(path, asvs) {
+  taxonomy <- read_tsv(path, col_types = cols(.default = "c"), show_col_types = FALSE)
+  key <- if (all(str_detect(taxonomy$asv_id, "^tasv"))) "local_asv_id" else "sequence"
+
+  taxonomy %>%
+    rename(!!key := asv_id) %>%
+    pivot_longer(-all_of(key), names_to = "rank", values_to = "taxon") %>%
+    group_by(across(all_of(key))) %>%
+    mutate(rank_level = row_number()) %>%
+    ungroup() %>%
+    filter(!is.na(taxon)) %>%
+    inner_join(asvs %>% select(asv_id, local_asv_id, sequence), by = key) %>%
+    select(asv_id, local_asv_id, rank_level, rank, taxon)
+}
+
+load_dada2_run <- function(dir, dataset, target_spec, gene, hmm_start, hmm_end, files_mtime, sample_targets) {
+  # asvs.fasta is rep_seqs.fasta after the HMM check, with opposite_strand flagged in the header
+  fasta <- if (file.exists(file.path(dir, "asvs.fasta"))) file.path(dir, "asvs.fasta") else file.path(dir, "rep_seqs.fasta")
+  seqs <- Biostrings::readDNAStringSet(fasta)
+  asvs <- tibble(local_asv_id = str_extract(names(seqs), "^\\S+"),
+                 opposite_strand = str_detect(names(seqs), "opposite_strand"),
+                 sequence = toupper(as.character(seqs))) %>%
+    mutate(asv_id = as.character(openssl::md5(sequence)),
+           length = nchar(sequence)) %>%
+    relocate(asv_id)
+
+  abundance <- read_tsv(file.path(dir, "asv_table.tsv"), show_col_types = FALSE) %>%
+    pivot_longer(-sample, names_to = "local_asv_id", values_to = "count") %>%
+    filter(count > 0) %>%
+    inner_join(asvs %>% select(asv_id, local_asv_id, opposite_strand), by = "local_asv_id") %>%
+    mutate(dataset = dataset, target_spec = target_spec, count = as.integer(count)) %>%
+    select(asv_id, local_asv_id, sample, dataset, target_spec, count, opposite_strand)
+
+  # Main taxonomy plus the PR2 organelle reclassification for 16S_rRNA_bac chloroplast and mitochondria ASVs
+  taxonomy_sources <- tibble(source = c("main", names(amplicon_config$amplicon_organelle_taxonomy))) %>%
+    mutate(path = file.path(dir, if_else(source == "main", "taxonomy.tsv", str_c("taxonomy_", source, ".tsv"))),
+           db = if_else(source == "main",
+                        basename(amplicon_config$amplicon_taxonomy_dbs[[gene]] %||% NA_character_),
+                        map_chr(source, ~ basename(amplicon_config$amplicon_organelle_taxonomy[[.x]]$db %||% NA_character_)))) %>%
+    filter(file.exists(path))
+
+  taxonomy <- taxonomy_sources %>%
+    mutate(tax = map(path, read_run_taxonomy, asvs = asvs)) %>%
+    select(source, db, tax) %>%
+    unnest(tax) %>%
+    mutate(dataset = dataset, target_spec = target_spec, rank_level = as.integer(rank_level)) %>%
+    select(asv_id, local_asv_id, dataset, target_spec, source, db, rank_level, rank, taxon)
+
+  # Main primer pair for the run, from the samples in its ASV table
+  run_primers <- sample_targets %>%
+    filter(sample %in% abundance$sample) %>%
+    count(fwd_primer, rev_primer, sort = TRUE) %>%
+    slice_head(n = 1)
+
+  run <- tibble(dataset = dataset, target_spec = target_spec, gene = gene,
+                region = primer_pair_region(run_primers$fwd_primer[1], run_primers$rev_primer[1]),
+                hmm_start = hmm_start, hmm_end = hmm_end,
+                fwd_primer = run_primers$fwd_primer[1], rev_primer = run_primers$rev_primer[1],
+                n_samples = n_distinct(abundance$sample), n_asvs = nrow(asvs),
+                taxonomy_db = taxonomy_sources$db[taxonomy_sources$source == "main"][1],
+                taxonomy_method = if_else(gene %in% names(amplicon_config$amplicon_taxonomy_vsearch), "vsearch consensus", "assignTaxonomy"),
+                files_mtime = files_mtime, loaded_at = Sys.time())
+
+  # One transaction per run, so a failure doesn't leave it half loaded
+  dbWithTransaction(pg, {
+    for (table in c("amplicon_asv_abundance", "amplicon_asv_taxonomy", "amplicon_dada2_runs")) {
+      dbExecute(pg, str_glue("DELETE FROM {table} WHERE dataset = $1 AND target_spec = $2"), params = list(dataset, target_spec))
+    }
+
+    existing_asvs <- tbl(pg, "amplicon_asv") %>% filter(asv_id %in% local(asvs$asv_id)) %>% pull(asv_id)
+    asvs %>%
+      filter(!asv_id %in% existing_asvs) %>%
+      distinct(asv_id, .keep_all = TRUE) %>%
+      transmute(asv_id, sequence, length, gene = gene) %>%
+      dbWriteTable(pg, "amplicon_asv", ., append = TRUE)
+
+    dbWriteTable(pg, "amplicon_asv_abundance", abundance, append = TRUE)
+    dbWriteTable(pg, "amplicon_asv_taxonomy", taxonomy, append = TRUE)
+    dbWriteTable(pg, "amplicon_dada2_runs", run, append = TRUE)
+  })
+
+  message(dataset, " ", target_spec, ": ", nrow(asvs), " ASVs, ", nrow(abundance), " abundance rows, ", nrow(taxonomy), " taxonomy rows")
+}
+
+# Sample targets are replaced for every dataset with a run being (re)loaded
+amplicon_sample_targets <- new_dada2_runs %>%
+  distinct(dataset) %>%
+  filter(file.exists(file.path("data/projects", dataset, "target_info.tsv"))) %>%
+  pull(dataset) %>%
+  map(read_sample_targets) %>%
+  list_rbind()
+
+if (nrow(amplicon_sample_targets) > 0) {
+  dbWithTransaction(pg, {
+    dbExecute(pg, "DELETE FROM amplicon_sample_target WHERE dataset = ANY($1)",
+              params = list(str_c("{", str_c(unique(amplicon_sample_targets$dataset), collapse = ","), "}")))
+    dbWriteTable(pg, "amplicon_sample_target", amplicon_sample_targets, append = TRUE)
+  })
+}
+
+pwalk(new_dada2_runs %>% select(dir, dataset, target_spec, gene, hmm_start, hmm_end, files_mtime),
+      load_dada2_run,
+      sample_targets = amplicon_sample_targets,
+      .progress = TRUE)
+
+# Indexes (IF NOT EXISTS, so re-running the chunk is safe)
+dbExecute(pg, 'CREATE INDEX IF NOT EXISTS "amplicon_asv_abundance_asv_id" ON "amplicon_asv_abundance" ("asv_id")')
+dbExecute(pg, 'CREATE INDEX IF NOT EXISTS "amplicon_asv_abundance_sample" ON "amplicon_asv_abundance" ("sample")')
+dbExecute(pg, 'CREATE INDEX IF NOT EXISTS "amplicon_asv_abundance_run" ON "amplicon_asv_abundance" ("dataset", "target_spec")')
+dbExecute(pg, 'CREATE INDEX IF NOT EXISTS "amplicon_asv_taxonomy_asv_id" ON "amplicon_asv_taxonomy" ("asv_id")')
+dbExecute(pg, 'CREATE INDEX IF NOT EXISTS "amplicon_asv_taxonomy_run" ON "amplicon_asv_taxonomy" ("dataset", "target_spec")')
+dbExecute(pg, 'CREATE INDEX IF NOT EXISTS "amplicon_asv_taxonomy_taxon" ON "amplicon_asv_taxonomy" ("rank", "taxon")')
+dbExecute(pg, 'CREATE INDEX IF NOT EXISTS "amplicon_sample_target_sample" ON "amplicon_sample_target" ("sample")')
+```
+
 
 # Tax abund summary from contig LCA
 ```{r}
@@ -2417,32 +3428,44 @@ everywhere({
   library(readr)
   library(stringr)
   library(fs)
-  
-  read_eukcc_parallel <- function(path, sample) {
-    tryCatch({
-      df <- readr::read_tsv(path, show_col_types = FALSE) %>%
-        dplyr::mutate(
-          bin = stringr::str_remove(bin, ".fa"),
-          sample = sample,
-          ncbi_tax = str_remove(ncbi_lng, ".*-")
-        ) %>% 
-        #separate_wider_delim(cols = ncbi_lng,delim = "-",names_sep = "_",too_few = "align_start")
-        dplyr::rename(ncbi_lineage = "ncbi_lng") %>% 
-        dplyr::relocate(sample)
-      
-      return(df)
-    }, error = function(e) return(conditionMessage(e)))
-  }
 })
 
+read_eukcc_parallel <- function(path, sample) {
+  tryCatch({
+    # Explicit column types: header-only files (no bins passing EukCC) otherwise
+    # get guessed as all-character and can't be combined with the others
+    df <- readr::read_tsv(path, show_col_types = FALSE,
+                          col_types = readr::cols(bin = "c", completeness = "d", contamination = "d", ncbi_lng = "c")) %>%
+      dplyr::mutate(
+        bin = stringr::str_remove(bin, "\\.fa$"),
+        sample = sample,
+        ncbi_tax = as.numeric(stringr::str_remove(ncbi_lng, ".*-")) # bigint in postgres
+      ) %>%
+      #separate_wider_delim(cols = ncbi_lng,delim = "-",names_sep = "_",too_few = "align_start")
+      dplyr::rename(ncbi_lineage = "ncbi_lng") %>%
+      dplyr::relocate(sample)
+
+    return(df)
+  }, error = function(e) return(conditionMessage(e)))
+}
 
 combined_eukcc_results <- mirai_map(
-  .x = new_eukcc %>% select(path,sample), 
+  .x = new_eukcc %>% select(path,sample),
   .f = read_eukcc_parallel
 )
 
 # This waits for all workers to finish and binds the resulting data frames
-combined_eukcc_data <-  combined_eukcc_results[] %>% 
+eukcc_results_list <- combined_eukcc_results[]
+
+# read_eukcc_parallel returns the error message instead of a data frame when a file fails to parse
+failed_eukcc <- eukcc_results_list %>% discard(is.data.frame)
+if (length(failed_eukcc) > 0) {
+  warning(length(failed_eukcc), " EukCC files failed to parse and were skipped:\n",
+          paste(new_eukcc$path[!map_lgl(eukcc_results_list, is.data.frame)], unlist(failed_eukcc), sep = ": ", collapse = "\n"))
+}
+
+combined_eukcc_data <- eukcc_results_list %>%
+  keep(is.data.frame) %>%
   list_rbind()
 
 # Shut down daemons once data is collected
