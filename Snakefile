@@ -5551,12 +5551,24 @@ rule genomad:
     shell:
         """
         genomad end-to-end \
-            --cleanup \
             --splits {params.splits} \
             --threads {threads} \
             {input.contigs} \
             {output.genomad_dir} \
             {params.db_path} > {log} 2>&1
+
+        # Remove the intermediates that --cleanup would have. geNomad's own cleanup (shutil.rmtree) crashes on NFS when
+        # mmseqs2 still holds a file open (.nfs* placeholder -> "Directory not empty"), so do it here, retry once, and
+        # never fail the job over leftover scratch files.
+        pre=$(basename {input.contigs} .fa)
+        out={output.genomad_dir}/$pre
+        tmp="${{out}}_annotate/${{pre}}_mmseqs2
+             ${{out}}_find_proviruses/${{pre}}_provirus_mmseqs2
+             ${{out}}_find_proviruses/${{pre}}_provirus_mmseqs2_input.faa
+             ${{out}}_find_proviruses/${{pre}}_provirus_aragorn_input.fna
+             ${{out}}_nn_classification/${{pre}}_encoded_sequences
+             ${{out}}_nn_classification/${{pre}}_encoded_proviruses"
+        rm -rf $tmp 2>/dev/null || {{ sleep 60; rm -rf $tmp || echo "WARNING: could not remove all geNomad intermediates" >> {log}; }}
         """
 
 rule gutsmash:
