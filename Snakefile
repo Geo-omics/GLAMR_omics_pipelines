@@ -4582,6 +4582,7 @@ rule amplicon_dada2_target:
         seqs = "data/projects/{dataset}/dada2.{target_spec}/rep_seqs.fasta",
         abund = "data/projects/{dataset}/dada2.{target_spec}/asv_table.tsv",
     params:
+        fastq_base_dir = "data/projects/{dataset}",
         outdir = subpath(output.abund, parent=True),
         quality_threshold=25,
         concatenate = lambda wc: '--concatenate' if concatenate_pairs(wc.target_spec) else '',
@@ -4598,6 +4599,7 @@ rule amplicon_dada2_target:
             --outdir {params.outdir} \
             --assignments {input.assignments} \
             --input {input.dada2_input} \
+            --input-base {params.fastq_base_dir} \
             --cpus {threads} \
             {params.concatenate} \
             {wildcards.target_spec}

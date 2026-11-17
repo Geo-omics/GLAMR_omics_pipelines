@@ -3,7 +3,7 @@
 'Using dada2 with amplicon sequencing data
 
 Usage:
-  ampliconTrunc.R [--glamr-root <PATH>] --quality <N> --outdir <PATH> [--cpus <N>] [--concatenate] --assignments <PATH> --input <PATH> <target_spec>
+  ampliconTrunc.R --quality <N> --outdir <PATH> [--cpus <N>] [--concatenate] --assignments <PATH> --input <PATH> [--input-base <PATH>] <target_spec>
 
 Options:
   -h --help             Show this screen
@@ -14,9 +14,7 @@ Options:
                         by the amplicon-dispatch script.
   --input <PATH>        Input data for each sample, e.g. paths to the samples and files listings as produced by
                         the amplicon-dispatch script.
-  --glamr-root <PATH>   GLAMR root directory, certain paths read from the other
-                        input files will be interpreted as relative to this root directory
-                        [default: ./]
+  --input-base <PATH>   Directory to which paths in input data file are relative to. [default: ./]
   -q --quality=<N>      Quality threshold
   --cpus=<N>            Number of threads/cpus [default: 1]
   --concatenate         Do not merge pairs by overlap, instead truncate fwd and
@@ -53,7 +51,7 @@ assignments <- read.delim(
     comment='#',
 ) |> tibble() |>
     mutate(override = sub('^__AUTO__', '', override)) |>
-    mutate(assigned=if_else(override == "", target, override, missing=target)) |>
+    mutate(assigned=if_else(override == "", assignment, override, missing=assignment)) |>
     # remove primer info, if any
     mutate(assigned=sub(':.*$', '', assigned)) |>
     filter(assigned==args$target_spec)
@@ -81,20 +79,14 @@ samples <- samples |>
     semi_join(assignments, by=join_by('sample')) |>
     mutate(filt_reads_fwd=str_glue('{args$outdir}/filtered/{sample}_fwd.fastq.gz')) |>
     mutate(filt_reads_rev=str_glue('{args$outdir}/filtered/{sample}_rev.fastq.gz')) |>
-    # below: paste glamr_root and paths, but respect absolute paths in data,
+    # below: paste input_base and paths, but respect absolute paths in data,
     # make some effort to avoid double slashes
-    mutate(sample_dir=if_else(str_starts(sample_dir, '/'),
-                              sample_dir,
-                              file.path(str_remove(args$glamr_root, '/$'), sample_dir))
-    ) |>
-    mutate(fwd_fastq=if_else(str_starts(sample_dir, '/'),
-                              fwd_fastq,
-                              file.path(str_remove(args$glamr_root, '/$'), fwd_fastq))
-    ) |>
-    mutate(rev_fastq=if_else(str_starts(sample_dir, '/'),
-                              rev_fastq,
-                              file.path(str_remove(args$glamr_root, '/$'), rev_fastq))
-    )
+    mutate(fwd_fastq=if_else(str_starts(fwd_fastq, '/'),
+                            fwd_fastq,
+                            file.path(args$input_base, fwd_fastq))) |>
+    mutate(rev_fastq=if_else(str_starts(rev_fastq, '/'),
+                            rev_fastq,
+                            file.path(args$input_base, rev_fastq)))
 
 if (nrow(assignments) != nrow(samples)) {
     stop('the sample file listing is missing rows for some samples??')
