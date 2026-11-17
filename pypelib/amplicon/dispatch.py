@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 from tempfile import NamedTemporaryFile
+from types import SimpleNamespace
 
 from ..utils import UsageError
 from . import get_models
@@ -199,8 +200,7 @@ class SpecialAssignment:
     @classmethod
     def _get_object(cls, objtype, name):
         if (objtype, name) not in cls._objects:
-            args = [None] * 4  # Assignment() expects four positional args
-            cls._objects[(objtype, name)] = objtype(*args, special=name)
+            cls._objects[(objtype, name)] = objtype(name)
         return cls._objects[(objtype, name)]
 
     def __set_name__(self, owner, name):
@@ -212,7 +212,47 @@ class SpecialAssignment:
         return self._get_object(objtype, self.name)
 
 
-class Assignment:
+class UniqueAndSpecial(type):
+    """ Metaclass to get unique Assignment instances per spec """
+    def __call__(cls, *args, **kwargs):
+        """
+        Allow the contructor Assignment() to be called either with a single
+        positional argument, the "spec," or with an *args, **kwargs combination
+        to be passed to __init__() for first-time construction from target
+        table data.  In either case the instance cache is consulted.
+        """
+        if len(args) == 1 and not kwargs:
+            obj = None
+            spec = args[0]
+        else:
+            # direct contruction, first get spec to allow checking the cache,
+            # so may or may not keep the instance we create here
+            obj = cls.__new__(cls)
+            cls.__init__(obj, *args, **kwargs)
+            spec = str(obj)
+
+        if spec not in cls._instances:
+            if obj is None:
+                if spec in cls._specials:
+                    kwargs = {'special': spec}
+                else:
+                    kwargs = cls.spec_to_kwargs(spec)
+                obj = cls.__new__(cls)
+                cls.__init__(obj, **kwargs)
+            cls._instances[spec] = obj
+
+        return cls._instances[spec]
+
+    def __init__(cls, name, bases, attrs):
+        super().__init__(name, bases, attrs)
+        cls._instances = {}
+        cls._specials = [
+            name for name, attr in attrs.items()
+            if isinstance(attr, SpecialAssignment)
+        ]
+
+
+class Assignment(metaclass=UniqueAndSpecial):
     """ Representation of a sample's target assignment """
     # Read-mode indicator codes for string representation:
     single = r'(?P<single>-(-|(?P<rc_mode>x))-)'  # --- or -x-
@@ -232,10 +272,10 @@ class Assignment:
 
     def __init__(
         self,
-        hmm,
-        start,
-        end,
-        layout,
+        hmm=None,
+        start=None,
+        end=None,
+        layout=None,
         fwd_primer=None,
         rev_primer=None,
         fwd_clean=True,
@@ -292,22 +332,21 @@ class Assignment:
         return f'{fwd}{infix}{rev}'
 
     @classmethod
-    def from_spec(cls, spec):
+    def spec_to_kwargs(cls, spec):
         """
-        Create instance from string representation
+        Parse regular amnplicon target assignment spec strings into __init__() kwargs.
 
-        Raises ValueError for misformed input.
+        Takes a str and returns a dict.  Raises InvalidAssignment for invalid
+        specs.
         """
-        for name, attr in vars(cls).items():
-            if name == spec and isinstance(attr, SpecialAssignment):
-                return getattr(cls, name)
+        kwargs = SimpleNamespace()
 
         target, _, read_mode = spec.partition(':')
-        hmm, _, coords = target.partition('.')
+        kwargs.hmm, _, coords = target.partition('.')
         start, _, end = coords.partition('-')
         try:
-            start = int(start)
-            end = int(end)
+            kwargs.start = int(start)
+            kwargs.end = int(end)
         except ValueError as e:
             raise InvalidAssignment(f'failed parsing start/end: {e}') from e
 
@@ -319,31 +358,32 @@ class Assignment:
 
         read_mode = m.groupdict()
 
-        swapped = False if read_mode['swapped'] is None else True
-        rc_mode = False if read_mode['rc_mode'] is None else True
+        kwargs.swapped = False if read_mode['swapped'] is None else True
+        kwargs.rc_mode = False if read_mode['rc_mode'] is None else True
         if read_mode['single'] is None and read_mode['paired'] is not None:
-            layout = cls.LAYOUT.paired
+            kwargs.layout = cls.LAYOUT.paired
         elif read_mode['single'] is not None and read_mode['paired'] is None:
-            layout = cls.LAYOUT.single
+            kwargs.layout = cls.LAYOUT.single
         else:
             raise RuntimeError('invalid case')
 
         if fwd_primer := read_mode['fwd_clean']:
-            fwd_clean = True
+            kwargs.fwd_clean = True
         elif fwd_primer := read_mode['fwd_dirty']:
-            fwd_clean = False
+            kwargs.fwd_clean = False
         else:
             raise RuntimeError('invalid case')
 
         if rev_primer := read_mode['rev_clean']:
-            rev_clean = True
+            kwargs.rev_clean = True
         elif rev_primer := read_mode['rev_dirty']:
-            rev_clean = False
+            kwargs.rev_clean = False
         else:
             raise RuntimeError('invalid case')
 
-        return cls(hmm, start, end, layout, fwd_primer, rev_primer,
-                   fwd_clean, rev_clean, swapped, rc_mode)
+        kwargs.fwd_primer = fwd_primer
+        kwargs.rev_primer = rev_primer
+        return vars(kwargs)
 
     @property
     def target(self):
@@ -396,7 +436,7 @@ def dispatch(data):
                     f'Single-target-mode detected, overriding {minor_count} '
                     f'stray (unknown) target assignments to {top_spec}'
                 )
-                top_assignment = Assignment.from_spec(top_spec)
+                top_assignment = Assignment(top_spec)
                 for row in data:
                     if row['assignment'] is Assignment.UNKNOWN and not row['override']:
                         row['override'] = top_assignment
@@ -677,7 +717,7 @@ def get_assignments(
                 raise RuntimeError(f'duplicate sample at line {lnum} in {path}')
 
             try:
-                data[sample_id] = Assignment.from_spec(assignment)
+                data[sample_id] = Assignment(assignment)
             except InvalidAssignment as e:
                 print(f'[ERROR] Failed parsing the assignment ({sample_id=}) '
                       f'on line {lnum}: {e}')
