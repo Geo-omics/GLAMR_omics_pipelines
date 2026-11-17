@@ -18,18 +18,20 @@ from Bio.Seq import Seq
 
 from ..utils import conda_run, logme
 from . import get_models
+from .dispatch import Assignment, InvalidAssignment
 
 
 def cli():
     argp = argparse.ArgumentParser(description=__doc__)
-    argp.add_argument('target_info', help='The target info file.')
     argp.add_argument(
-        'raw_fwd_fastq',
-        help='Forward (or single) raw fastq file, gzipped',
+        'assignment',
+        help='The amplicon target assignment in spec format',
     )
     argp.add_argument(
-        'raw_rev_fastq',
-        help='Reverse raw fastq file, gzipped',
+        'fastqs',
+        nargs='+',
+        help='Raw fastq files, gzipped, provide one single-ended file or two '
+             'files (forward and reverse reads)',
     )
     argp.add_argument('--fwd-out', required=True,
                       help='forward (or single) output file')
@@ -37,28 +39,38 @@ def cli():
     argp.add_argument('--log', help='log file, will otherwise go to stdout')
     args = argp.parse_args()
 
+    if len(args.fastqs) > 2:
+        argp.error('give at most two fastq files')
+
+    try:
+        assignment = Assignment(args.assignment)
+    except InvalidAssignment as e:
+        argp.error(f'Invalid assignment: {e}')
+
     with ExitStack() as estack:
         if args.log:
             log = estack.enter_context(open(args.log, 'w'))
         else:
             log = None
 
-        if args.raw_rev_fastq:
+        if len(args.fastqs) == 2:
             main_paired(
-                target_info=args.target_info,
-                fwd_fastq=args.raw_fwd_fastq,
-                rev_fastq=args.raw_rev_fastq,
+                assignment,
+                fwd_fastq=args.fastqs[0],
+                rev_fastq=args.fastqs[1],
                 fwd_out=args.fwd_out,
                 rev_out=args.rev_out,
                 log=log,
             )
-        else:
+        elif len(args.fastqs) == 1:
             main_single(
-                target_info=args.target_info,
-                single_fastq=args.raw_fwd_fastq,
+                assignment,
+                single_fastq=args.fastqs[0],
                 single_out=args.fwd_out,
                 log=log,
             )
+        else:
+            raise RuntimeError('invalid choice')
 
 
 class Prof(Enum):
@@ -68,15 +80,19 @@ class Prof(Enum):
     CONSISTENT = auto()
 
 
-def find_5p_primer(primer_sequence, fastq, test_profile, log, conda_env):
+def find_5p_primer(primer, fastq, test_profile, log, conda_env):
     """
     Get indexes of sequences with imperfect 5' primer
     """
     stats = Counter()
     with NamedTemporaryFile('w+t') as info_file:
+        g_args = []
+        for i in primer:
+            g_args += ['-g', i.sequence]
+
         cmd = [
             'cutadapt',
-            '-g', primer_sequence,
+            *g_args,
             '--info-file', info_file.name,
             fastq,
         ]
@@ -103,8 +119,10 @@ def find_5p_primer(primer_sequence, fastq, test_profile, log, conda_env):
 
     match test_profile:
         case Prof.STRICT:
+            primer_len_min = min(len(i.sequence) for i in primer)
+            primer_len_max = max(len(i.sequence) for i in primer)
             for idx, a, b in data:
-                if a == '0' and b == len(primer_sequence):
+                if a == '0' and primer_len_min <= b <= primer_len_max:
                     # keep if perfect
                     continue
                 else:
@@ -160,51 +178,47 @@ def rc(seq):
 
 @logme()
 def main_single(
-    target_info=None,
+    assignment,
     single_fastq=None,
     single_out=None,
     log=None,
     conda_env=None,
 ):
-    fwd_pr, rev_pr, swapped, clean, rc_mode = load_target_info(target_info)
-
-    if swapped:
+    if assignment.swapped:
         raise ValueError('single data should not be swapped')
 
-    if rc_mode:
+    if assignment.rc_mode:
         # Reads look like the reverse reads of paired-ended data.
         # What we call the reverse primer is actually sequenced at the
         # single read's 5' end, so just for cutadapts benefit, here we're
         # swapping the notion of fwd and rev primers
-        fwd_clean = clean['rev']
-        rev_clean = clean['fwd']
-        fwd_pr_sequence = rev_pr.sequence
-        rev_pr_sequence = fwd_pr.sequence
+        fwd_clean = assignment.rev_clean
+        # rev_clean = assignment.fwd_clean
+        fwd_primer = assignment.rev_primer
+        rev_primer = assignment.fwd_primer
     else:
-        fwd_clean = clean['fwd']
-        rev_clean = clean['rev']
-        fwd_pr_sequence = fwd_pr.sequence
-        rev_pr_sequence = rev_pr.sequence
+        fwd_clean = assignment.fwd_clean
+        # rev_clean = assignment.rev_clean
+        fwd_primer = assignment.fwd_primer
+        rev_primer = assignment.rev_primer
 
     args = []  # args for cutadapt
-    try:
-        if not fwd_clean:
-            args += ['-g', fwd_pr_sequence]
-        if not rev_clean:
-            args += ['-a', rc(rev_pr_sequence)]
-    except AttributeError as e:
-        # e.g. primer is None
-        raise RuntimeError(
-            f'something is marked "not clean" but no corresponding primer '
-            f'was given? {e}'
-        )
+
+    if not fwd_clean:
+        for i in fwd_primer:
+            args += ['-g', i.sequence]
+
+    # always look for read-through primers
+    for i in rev_primer:
+        args += ['-a', rc(i.sequence)]
+
     if not args:
-        raise RuntimeError('No args?  Something should not be clean!')
+        raise RuntimeError('No args, no primers?')
 
     with ExitStack() as estack:
         if not fwd_clean:
             discards = find_5p_primer(
-                fwd_pr_sequence,
+                fwd_primer,
                 single_fastq,
                 Prof.CONSISTENT,
                 log,
@@ -229,7 +243,7 @@ def main_single(
 
 @logme()
 def main_paired(
-    target_info=None,
+    assignment,
     fwd_fastq=None,
     rev_fastq=None,
     fwd_out=None,
@@ -237,12 +251,12 @@ def main_paired(
     log=None,
     conda_env=None,
 ):
-    fwd_pr, rev_pr, swapped, clean, rc_mode = load_target_info(target_info)
+    # fwd_pr, rev_pr, swapped, clean, rc_mode = load_target_info(target_info)
 
-    if rc_mode:
+    if assignment.rc_mode:
         raise ValueError('RC\'d paired data should not be a thing')
 
-    if swapped:
+    if assignment.swapped:
         print('WARNING: swapping fwd <-> rev fastq files',
               flush=True, file=log)
         temp = fwd_fastq
@@ -250,37 +264,32 @@ def main_paired(
         rev_fastq = temp
         del temp
 
-    fwd_pr_sequence = fwd_pr.sequence
-    rev_pr_sequence = rev_pr.sequence
-
     args = []
-    try:
-        if not clean['fwd']:
-            args += ['-g', fwd_pr_sequence]
-        if not clean['fwd_rev']:
-            args += ['-a', rc(rev_pr_sequence)]
-        if not clean['rev']:
-            args += ['-G', rev_pr_sequence]
-        if not clean['rev_fwd']:
-            args += ['-A', rc(fwd_pr_sequence)]
-    except AttributeError as e:
-        # e.g. primer is None
-        raise RuntimeError(
-            f'something is marked "not clean" but no corresponding '
-            f'primer was given? {e}'
-        )
-    if not args:
-        raise RuntimeError('No args?  Something should not be clean!')
+    if not assignment.fwd_clean:
+        for i in assignment.fwd_primer:
+            args += ['-g', i.sequence]
+    # always look for read-through primers
+    for i in assignment.rev_primer:
+        args += ['-a', rc(i.sequence)]
+    if not assignment.rev_clean:
+        for i in assignment.rev_primer:
+            args += ['-G', i.sequence]
+    # always look for read-through primers
+    for i in assignment.fwd_primer:
+        args += ['-A', rc(i.sequence)]
 
-    if clean['fwd']:
+    if not args:
+        raise RuntimeError('No args, no primers?')
+
+    if assignment.fwd_clean:
         fwd_discards = set()
     else:
-        fwd_discards = find_5p_primer(fwd_pr_sequence, fwd_fastq, Prof.CONSISTENT, log, conda_env)  # noqa:E501
+        fwd_discards = find_5p_primer(assignment.fwd_primer, fwd_fastq, Prof.CONSISTENT, log, conda_env)  # noqa:E501
 
-    if clean['rev']:
+    if assignment.rev_clean:
         rev_discards = set()
     else:
-        rev_discards = find_5p_primer(rev_pr_sequence, rev_fastq, Prof.CONSISTENT, log, conda_env)  # noqa:E501
+        rev_discards = find_5p_primer(assignment.rev_primer, rev_fastq, Prof.CONSISTENT, log, conda_env)  # noqa:E501
 
     with ExitStack() as estack:
         if discards := set(fwd_discards).union(rev_discards):
@@ -294,7 +303,8 @@ def main_paired(
             'cutadapt',
             *args,
             '--times', '2',  # remove both 5' primer and read-through 3' primer
-            '--minimum-length', '50',  # e.g. primer dimers, avoid dada2 qual plotting breaking
+            # e.g. primer dimers, avoid dada2 qual plotting breaking
+            '--minimum-length', '50',
             '--output', fwd_out,
             '--paired-output', rev_out,
             '--info-file', Path(fwd_out).with_name('trim_info.txt'),
