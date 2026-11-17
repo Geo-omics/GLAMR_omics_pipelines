@@ -3,7 +3,7 @@
 'Using dada2 with single-ended amplicon sequencing data
 
 Usage:
-  amplicon_single.R [--glamr-root <PATH>] --quality <N> --outdir <PATH> [--cpus <N>] --assignments <PATH> --input <PATH> <target_spec>
+  amplicon_single.R --quality <N> --outdir <PATH> [--cpus <N>] --assignments <PATH> --input <PATH> [--input-base <PATH>] <target_spec>
 
 Options:
   -h --help             Show this screen
@@ -14,9 +14,7 @@ Options:
                         by the amplicon-dispatch script.
   --input <PATH>        Input data for each sample, e.g. paths to the samples and files listings as produced by
                         the amplicon-dispatch script.
-  --glamr-root <PATH>   GLAMR root directory, certain paths read from the other
-                        input files will be interpreted as relative to this root directory
-                        [default: ./]
+  --glamr-root <PATH>   GLAMR root directory, certain paths read from the other [default: ./]
   -q --quality=<N>      Quality threshold
   --cpus=<N>            Number of threads/cpus [default: 1]
 ' -> doc
@@ -46,7 +44,7 @@ assignments <- read.delim(
     comment='#',
 ) |> tibble() |>
     mutate(override = sub('^__AUTO__', '', override)) |>
-    mutate(assigned=if_else(override == "", target, override, missing=target)) |>
+    mutate(assigned=if_else(override == "", assignment, override, missing=assignment)) |>
     # remove primer info, if any
     mutate(assigned=sub(':.*$', '', assigned)) |>
     filter(assigned==args$target_spec)
@@ -61,15 +59,15 @@ samples <- read.delim(
 ) |> tibble() |>
     semi_join(assignments, by=join_by('sample')) %>%
     mutate(filt_reads_single=str_glue('{args$outdir}/filtered/{sample}_single.fastq.gz')) %>%
-    # below: paste glamr_root and paths, but respect absolute paths in data,
+    # below: paste input_base and paths, but respect absolute paths in data,
     # make some effort to avoid double slashes
     mutate(sample_dir=if_else(str_starts(sample_dir, '/'),
                               sample_dir,
-                              file.path(str_remove(args$glamr_root, '/$'), sample_dir))
+                              file.path(str_remove(args$input_base, '/$'), sample_dir))
     ) |>
     mutate(single_fastq=if_else(str_starts(sample_dir, '/'),
                               single_fastq,
-                              file.path(str_remove(args$glamr_root, '/$'), single_fastq))
+                              file.path(str_remove(args$input_base, '/$'), single_fastq))
     )
 
 if (nrow(assignments) != nrow(samples)) {
