@@ -240,6 +240,7 @@ class UniqueAndSpecial(type):
             name for name, attr in attrs.items()
             if isinstance(attr, SpecialAssignment)
         ]
+        cls._hmm_models = get_models()
 
 
 class Assignment(metaclass=UniqueAndSpecial):
@@ -278,14 +279,40 @@ class Assignment(metaclass=UniqueAndSpecial):
             self.special = str(special)
             return
 
-        self.hmm = hmm
-        self.start = start
-        self.end = end
+        try:
+            self.hmm = self._hmm_models[hmm]
+        except KeyError:
+            raise InvalidAssignment(f'invalid hmm model name: {hmm}')
+
+        if 0 <= start < self.hmm.length:
+            self.start = start
+        else:
+            raise InvalidAssignment(f'invalid start value: {start}')
+
+        if start < end <= self.hmm.length:
+            self.end = end
+        else:
+            raise InvalidAssignment(f'invalid end value: {end}')
+
         self.layout = self.LAYOUT(layout)
-        self.fwd_primer = fwd_primer
-        self.rev_primer = rev_primer
+
+        self.fwd_primer = []
+        for i in fwd_primer.split(','):
+            try:
+                self.fwd_primer.append(self.hmm.fwd_primer[i])
+            except KeyError:
+                raise InvalidAssignment(f'{self.hmm} has no such fwd primer: {i}')
+
+        self.rev_primer = []
+        for i in rev_primer.split(','):
+            try:
+                self.rev_primer.append(self.hmm.rev_primer[i])
+            except KeyError:
+                raise InvalidAssignment(f'{self.hmm} has no such rev primer: {i}')
+
         self.fwd_clean = fwd_clean
         self.rev_clean = rev_clean
+
         if swapped and self.layout is self.LAYOUT.single:
             raise ValueError('can not be swapped w/single layout')
         if rc_mode and self.layout is self.LAYOUT.paired:
@@ -317,8 +344,11 @@ class Assignment(metaclass=UniqueAndSpecial):
         else:
             raise ValueError('invalid case')
 
-        fwd = '[' + self.fwd_primer + ']' if self.fwd_clean else self.fwd_primer
-        rev = '[' + self.rev_primer + ']' if self.rev_clean else self.rev_primer
+        fwd_primer = ','.join(i.name for i in self.fwd_primer)
+        rev_primer = ','.join(i.name for i in self.rev_primer)
+
+        fwd = '[' + fwd_primer + ']' if self.fwd_clean else fwd_primer
+        rev = '[' + rev_primer + ']' if self.rev_clean else rev_primer
         return f'{fwd}{infix}{rev}'
 
     @classmethod
