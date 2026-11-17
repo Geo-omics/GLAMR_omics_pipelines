@@ -39,13 +39,6 @@ def cli():
         help='Do the dispatching, so make the three dispatch output files.',
     )
     makep.add_argument(
-        'project_directory',
-        help='The project directory, usually data/projects/<dataset> where the'
-             ' last component of the given path is interpreted as the dataset '
-             'ID.  This directory is expected to contain an "amplicon" '
-             'subdirectory that in turn contains one subdirectory per sample.',
-    )
-    makep.add_argument(
         'target_tabular_input',
         help='Input file, as made by amplicon.tabular_targets module',
     )
@@ -80,7 +73,6 @@ def cli():
             case 'make':
                 make(
                     args.target_tabular_input,
-                    args.project_directory,
                     out_assignments=args.out_assignments,
                     out_dada2_input=args.out_dada2_input,
                 )
@@ -96,11 +88,9 @@ def cli():
 
 def make(
     target_tab,
-    project_dir,
     out_assignments=None,
     out_dada2_input=None,
 ):
-    project_dir = Path(project_dir).resolve()
     data = load_target_table(target_tab)
     if not data:
         raise UsageError(f'No data in input file: {target_tab}')
@@ -126,7 +116,7 @@ def make(
 
     groups = dispatch(data)
     write_assignments(data, groups, out_assignments)
-    write_dada2_input(get_dada2_input(data, project_dir), out_dada2_input)
+    write_dada2_input(get_dada2_input(data), out_dada2_input)
 
 
 def load_target_table(input_file):
@@ -514,12 +504,8 @@ def write_assignments(data, groups, output_file):
     print('[Done]')
 
 
-def get_dada2_input(data, project_dir):
-    """
-    Compile the dada input from the data
-
-        project_dir: A resolved() pathlib.Path.
-    """
+def get_dada2_input(data):
+    """ Compile the dada input from the data """
     # For testing, set env variable to pass the raw reads to dada2
     USE_CLEAN = not bool(environ.get('NO_PRIMER_REMOVAL'))
 
@@ -530,20 +516,16 @@ def get_dada2_input(data, project_dir):
     """ bits to be copied, as needed by code/ampliconTrunc.R or amplicon_single.R
     Will be omitted for samples with assignment override. """
 
-    # paths as written to output will be relative to the data root
-    glamr_root = project_dir.parent.parent.parent
     all_info = []
     for row in data:
         assignment = row['override'] or row['assignment']
         if assignment.special:
             continue
 
-        samp_dir = project_dir / 'amplicons' / row['sample']
-        samp_dir = samp_dir.resolve().relative_to(glamr_root)
+        base = Path('amplicons', row['sample'])
 
         info = {
             'sample': row['sample'],
-            'sample_dir': samp_dir,
         }
 
         if row['layout'] == 'paired':
@@ -589,8 +571,8 @@ def get_dada2_input(data, project_dir):
             rev_fq = f'{rev_prefix}_{rev_infix}_reads.fastq.gz'
 
             # these should work as Snakemake output files:
-            info['fwd_fastq'] = samp_dir / 'reads' / fwd_fq
-            info['rev_fastq'] = samp_dir / 'reads' / rev_fq
+            info['fwd_fastq'] = base / 'reads' / fwd_fq
+            info['rev_fastq'] = base / 'reads' / rev_fq
 
         elif row['layout'] == 'single':
             if None in (row['fwd_clean'], row['rev_clean']):
@@ -603,7 +585,7 @@ def get_dada2_input(data, project_dir):
 
                 # will work as Snakemake output file
                 info['single_fastq'] = \
-                    samp_dir / 'reads' / f'{prefix}_single_reads.fastq.gz'
+                    base / 'reads' / f'{prefix}_single_reads.fastq.gz'
         else:
             raise ValueError('invalid layout')
 
@@ -630,17 +612,44 @@ def write_dada2_input(rows, output_file):
     print('[Done]')
 
 
-def get_fastq_files(dada2_input_tmpl, assignments_tmpl, **wildcards):
+def get_fastq_files(dada2_input_tmpl, assignments_tmpl, base_dir=None, **wildcards):
     """
     Return list of all fastq files for a dada2 run
 
-    Helper for some Snakemake input function
+    Helper for some Snakemake input function.  This is a wrapper around
+    get_fastq_files_paths that accepts Snakemake checkpoint input file
+    templates.
 
     The path templates must accept the wildcard formattings as needed.  Returns
     a list of paths, as found in the fastq column(s).
     """
-    assignments = get_assignments(path=Path(assignments_tmpl.format(**wildcards)))
+    assignments = Path(assignments_tmpl.format(**wildcards))
     dada2_input = Path(dada2_input_tmpl.format(**wildcards))
+    return get_fastq_files_paths(
+        dada2_input,
+        assignments,
+        wildcards.get('target_spec'),
+        base_dir=base_dir,
+    )
+
+
+def get_fastq_files_paths(dada2_input, assignments, target_spec=None, base_dir=None):
+    """
+    Get selected list of fastq files from dada2_input file
+
+    dada2_input: str or Path to a dada2_input file
+    assignments: str or Path to a assignments file
+    target_spec:
+        The selected assignment.  If None, then data for all sample is
+        returned.
+    base_dir:
+        Path to be prepended to output.
+
+    Returns list of pathlib.Path.
+    """
+    if base_dir:
+        base_dir = Path(base_dir)
+    assignments = get_assignments(path=assignments)
     with open(dada2_input) as ifile:
         head = ifile.readline().strip().split('\t')
         if head[0] != 'sample':
@@ -660,13 +669,17 @@ def get_fastq_files(dada2_input_tmpl, assignments_tmpl, **wildcards):
         file_list = []
         for line in ifile:
             row = line.strip().split('\t')
-            if target_spec := wildcards.get('target_spec'):
+            if target_spec:
                 sample = row[0]
                 if target_spec != assignments[sample].target:
                     # target does not match
                     continue
             for i in col_idxs:
-                file_list.append(row[i])
+                if base_dir:
+                    path = base_dir / row[i]
+                else:
+                    path = Path(row[i])
+                file_list.append(path)
 
     return file_list
 

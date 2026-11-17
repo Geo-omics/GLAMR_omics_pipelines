@@ -4337,15 +4337,12 @@ checkpoint amplicon_dispatch:
     output:
         assignments=update("data/projects/{dataset}/amplicon_target_assignments.tsv"),
         dada2_input="data/projects/{dataset}/amplicon_dada2_input.tsv",
-    params:
-        project_dir = subpath(output.assignments, parent=True)
     resources: mem_mb=100, time_min=2
     log: "logs/amplicon_dispatch/{dataset}.log"
     run:
         with logme(log):
             pypelib.amplicon.dispatch.make(
                 input.target_tab,
-                params.project_dir,
                 out_assignments=output.assignments,
                 out_dada2_input=output.dada2_input,
             )
@@ -4353,21 +4350,22 @@ checkpoint amplicon_dispatch:
 
 rule remove_primers_pe:
     input:
-        target_info=rules.amplicon_guess_target.output.target_info,
+        assignments=rules.amplicon_dispatch.output.assignments,
         fwd=rules.get_reads_paired.output.fwd_reads,
         rev=rules.get_reads_paired.output.rev_reads,
     output:
-        fwd="data/omics/{sample_type}/{sample}/reads/clean_fwd_reads.fastq.gz",
-        rev="data/omics/{sample_type}/{sample}/reads/clean_rev_reads.fastq.gz",
+        fwd="data/projects/{dataset}/{sample_type}/{sample}/reads/clean_fwd_reads.fastq.gz",
+        rev="data/projects/{dataset}/{sample_type}/{sample}/reads/clean_rev_reads.fastq.gz",
     params:
         reads_dir = subpath(output.fwd, parent=True)
     resources: mem_mb=6000, time_min=20
     conda: "config/conda_yaml/cutadapt.yaml"
-    benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
-    log: "logs/remove_primers/{sample_type}-{sample}.log"
+    benchmark: "benchmarks/remove_primers/{dataset}_{sample_type}_{sample}.tsv"
+    log: "logs/remove_primers/{dataset}_{sample_type}-{sample}.log"
     run:
+        assignment = pypelib.amplicon.dispatch.get_assignments(path=input.assignments)[wildcards.sample]
         pypelib.amplicon.remove_primers.main_paired(
-            input.target_info,
+            assignment,
             input.fwd,
             input.rev,
             output.fwd,
@@ -4379,19 +4377,20 @@ rule remove_primers_pe:
 
 rule remove_primers_se:
     input:
-        target_info=rules.amplicon_guess_target.output.target_info,
+        assignments=rules.amplicon_dispatch.output.assignments,
         single=rules.get_reads_single.output.single_reads,
     output:
-        single="data/omics/{sample_type}/{sample}/reads/clean_single_reads.fastq.gz"
+        single="data/projects/{dataset}/{sample_type}/{sample}/reads/clean_single_reads.fastq.gz"
     params:
         reads_dir = subpath(output.single, parent=True)
     resources: mem_mb=6000, time_min=20
     conda: "config/conda_yaml/cutadapt.yaml"
-    benchmark: "benchmarks/remove_primers/{sample_type}_{sample}.tsv"
-    log: "logs/remove_primers/{sample_type}-{sample}.log"
+    benchmark: "benchmarks/remove_primers/{dataset}_{sample_type}_{sample}.tsv"
+    log: "logs/remove_primers/{dataset}_{sample_type}-{sample}.log"
     run:
+        assignment = pypelib.amplicon.dispatch.get_assignments(path=input.assignments)[wildcards.sample]
         pypelib.amplicon.remove_primers.main_single(
-            input.target_info,
+            assignment,
             input.single,
             output.single,
             log=log,
@@ -4561,7 +4560,7 @@ def get_dada2_input(wc):
     """ collect input files needed for a dada2 job, those of the split 18S reads if applicable """
     dada2_input = checkpoints.amplicon_dispatch.get(**wc).output.dada2_input
     assignments = checkpoints.amplicon_dispatch.get(**wc).output.assignments
-    fastq_files = pypelib.amplicon.dispatch.get_fastq_files(dada2_input, assignments, **wc)
+    fastq_files = pypelib.amplicon.dispatch.get_fastq_files(dada2_input, assignments, **wc, base_dir=f'data/projects/{wc.dataset}')
 
     if wc.target_spec == SPLIT_18S_SPEC:
         split_out = rules.amplicon_split_18S_dispatch.output
