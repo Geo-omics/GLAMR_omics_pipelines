@@ -354,7 +354,7 @@ class Assignment(metaclass=UniqueAndSpecial):
     @classmethod
     def spec_to_kwargs(cls, spec):
         """
-        Parse regular amnplicon target assignment spec strings into __init__() kwargs.
+        Parse regular amplicon target assignment spec strings into __init__() kwargs.
 
         Takes a str and returns a dict.  Raises InvalidAssignment for invalid
         specs.
@@ -537,7 +537,7 @@ def write_assignments(data, groups, output_file):
 def get_dada2_input(data):
     """ Compile the dada input from the data """
     # For testing, set env variable to pass the raw reads to dada2
-    USE_CLEAN = not bool(environ.get('NO_PRIMER_REMOVAL'))
+    prefix = 'raw' if bool(environ.get('NO_PRIMER_REMOVAL')) else 'clean'
 
     EXTRA_KEYS_PAIRED = [
         'fwd_hmmfrom', 'fwd_hmmto', 'rev_hmmfrom', 'rev_hmmto', 'overlap_start',
@@ -588,19 +588,15 @@ def get_dada2_input(data):
 
             # remove_primers already un-swaps the clean reads, so only the
             # raw reads get the swap fix
-            if USE_CLEAN and not assignment.fwd_clean:
+            if not bool(environ.get('NO_PRIMER_REMOVAL')):
                 fwd_infix = 'fwd'
-
-            if USE_CLEAN and not assignment.rev_clean:
                 rev_infix = 'rev'
 
-            # FIXME: what about read-through?
-            fwd_prefix = 'clean' if USE_CLEAN and not assignment.fwd_clean else 'raw'
-            rev_prefix = 'clean' if USE_CLEAN and not assignment.rev_clean else 'raw'
-            fwd_fq = f'{fwd_prefix}_{fwd_infix}_reads.fastq.gz'
-            rev_fq = f'{rev_prefix}_{rev_infix}_reads.fastq.gz'
+            fwd_fq = f'{prefix}_{fwd_infix}_reads.fastq.gz'
+            rev_fq = f'{prefix}_{rev_infix}_reads.fastq.gz'
 
-            # these should work as Snakemake output files:
+            # Modulo starting with amplicons/ these must correspond to output
+            # files of Snakemake rule get_reads_paired or remove_primers_pe
             info['fwd_fastq'] = base / 'reads' / fwd_fq
             info['rev_fastq'] = base / 'reads' / rev_fq
 
@@ -608,12 +604,9 @@ def get_dada2_input(data):
             if None in (row['fwd_clean'], row['rev_clean']):
                 info['single_fastq'] = None
             else:
-                if assignment.fwd_clean and assignment.rev_clean or not USE_CLEAN:
-                    prefix = 'raw'
-                else:
-                    prefix = 'clean'
-
-                # will work as Snakemake output file
+                # Modulo starting with amplicons/ this must correspond to
+                # output file of Snakemake rule get_reads_single or
+                # remove_primers_se
                 info['single_fastq'] = \
                     base / 'reads' / f'{prefix}_single_reads.fastq.gz'
         else:
