@@ -537,7 +537,7 @@ def write_assignments(data, groups, output_file):
 def get_dada2_input(data):
     """ Compile the dada input from the data """
     # For testing, set env variable to pass the raw reads to dada2
-    prefix = 'raw' if bool(environ.get('NO_PRIMER_REMOVAL')) else 'clean'
+    skip_cleaning = bool(environ.get('NO_PRIMER_REMOVAL'))
 
     EXTRA_KEYS_PAIRED = [
         'fwd_hmmfrom', 'fwd_hmmto', 'rev_hmmfrom', 'rev_hmmto', 'overlap_start',
@@ -546,6 +546,7 @@ def get_dada2_input(data):
     """ bits to be copied, as needed by code/ampliconTrunc.R or amplicon_single.R
     Will be omitted for samples with assignment override. """
 
+    prefix = 'raw' if skip_cleaning else 'clean'
     all_info = []
     for row in data:
         assignment = row['override'] or row['assignment']
@@ -565,10 +566,17 @@ def get_dada2_input(data):
             for key in EXTRA_KEYS_PAIRED:
                 info[key] = None
 
+            fwd_infix = 'fwd'
+            rev_infix = 'rev'
             if assignment.swapped:
                 # "Fix" the swap
-                fwd_infix = 'rev'
-                rev_infix = 'fwd'
+                if skip_cleaning:
+                    # Normally the remove_primer module will switch the raw
+                    # files for us and the clean files will always get the
+                    # correct names, but if we skip cleaning the raw files must
+                    # be switched here
+                    fwd_infix = 'rev'
+                    rev_infix = 'fwd'
                 if not row['override']:
                     for key in EXTRA_KEYS_PAIRED:
                         if 'fwd' in key:
@@ -579,18 +587,10 @@ def get_dada2_input(data):
                             key2 = key
                         info[key2] = row[key]
             else:
-                # keep as-is
-                fwd_infix = 'fwd'
-                rev_infix = 'rev'
+                # keep all as-is
                 if not row['override']:
                     for key in EXTRA_KEYS_PAIRED:
                         info[key] = row[key]
-
-            # remove_primers already un-swaps the clean reads, so only the
-            # raw reads get the swap fix
-            if not bool(environ.get('NO_PRIMER_REMOVAL')):
-                fwd_infix = 'fwd'
-                rev_infix = 'rev'
 
             fwd_fq = f'{prefix}_{fwd_infix}_reads.fastq.gz'
             rev_fq = f'{prefix}_{rev_infix}_reads.fastq.gz'

@@ -251,13 +251,11 @@ def main_paired(
     log=None,
     conda_env=None,
 ):
-    # fwd_pr, rev_pr, swapped, clean, rc_mode = load_target_info(target_info)
-
     if assignment.rc_mode:
         raise ValueError('RC\'d paired data should not be a thing')
 
     if assignment.swapped:
-        print('WARNING: swapping fwd <-> rev fastq files',
+        print('NOTICE: swapping fwd <-> rev raw fastq files',
               flush=True, file=log)
         temp = fwd_fastq
         fwd_fastq = rev_fastq
