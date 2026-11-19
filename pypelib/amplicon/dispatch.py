@@ -250,8 +250,8 @@ class Assignment(metaclass=UniqueAndSpecial):
     paired = r'(?P<paired>=(=|(?P<swapped>s))=)'  # === or =s=
     primer_name = r'[a-zA-Z0-9_-]+'  # a single primer name
     primer_list = rf'{primer_name}(,{primer_name})*'
-    fwd = rf'((?P<fwd_clean>{primer_list})|\[(?P<fwd_dirty>{primer_list})\])'
-    rev = rf'((?P<rev_clean>{primer_list})|\[(?P<rev_dirty>{primer_list})\])'
+    fwd = rf'((?P<fwd_dirty>{primer_list})|\[(?P<fwd_clean>{primer_list})\])'
+    rev = rf'((?P<rev_dirty>{primer_list})|\[(?P<rev_clean>{primer_list})\])'
 
     read_mode_pat = re.compile(rf'^{fwd}({single}|{paired}){rev}$')
 
