@@ -635,44 +635,16 @@ def write_dada2_input(rows, output_file):
     print('[Done]')
 
 
-def get_fastq_files(dada2_input_tmpl, assignments_tmpl, base_dir=None, **wildcards):
-    """
-    Return list of all fastq files for a dada2 run
-
-    Helper for some Snakemake input function.  This is a wrapper around
-    get_fastq_files_paths that accepts Snakemake checkpoint input file
-    templates.
-
-    The path templates must accept the wildcard formattings as needed.  Returns
-    a list of paths, as found in the fastq column(s).
-    """
-    assignments = Path(assignments_tmpl.format(**wildcards))
-    dada2_input = Path(dada2_input_tmpl.format(**wildcards))
-    return get_fastq_files_paths(
-        dada2_input,
-        assignments,
-        wildcards.get('target_spec'),
-        base_dir=base_dir,
-    )
-
-
-def get_fastq_files_paths(dada2_input, assignments, target_spec=None, base_dir=None):
+def get_fastq_files(dada2_input, samples):
     """
     Get selected list of fastq files from dada2_input file
 
     dada2_input: str or Path to a dada2_input file
-    assignments: str or Path to a assignments file
-    target_spec:
-        The selected assignment.  If None, then data for all sample is
-        returned.
-    base_dir:
-        Path to be prepended to output.
+    samples: list of sample IDs
 
-    Returns list of pathlib.Path.
+    Returns list of str
     """
-    if base_dir:
-        base_dir = Path(base_dir)
-    assignments = get_assignments(path=assignments)
+    samples = set(samples)
     with open(dada2_input) as ifile:
         head = ifile.readline().strip().split('\t')
         if head[0] != 'sample':
@@ -692,17 +664,10 @@ def get_fastq_files_paths(dada2_input, assignments, target_spec=None, base_dir=N
         file_list = []
         for line in ifile:
             row = line.strip().split('\t')
-            if target_spec:
-                sample = row[0]
-                if target_spec != assignments[sample].target:
-                    # target does not match
-                    continue
+            if row[0] not in samples:
+                continue
             for i in col_idxs:
-                if base_dir:
-                    path = base_dir / row[i]
-                else:
-                    path = Path(row[i])
-                file_list.append(path)
+                file_list.append(row[i])
 
     return file_list
 

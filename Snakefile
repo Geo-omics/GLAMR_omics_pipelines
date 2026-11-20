@@ -4560,7 +4560,16 @@ def get_dada2_input(wc):
     """ collect input files needed for a dada2 job, those of the split 18S reads if applicable """
     dada2_input = checkpoints.amplicon_dispatch.get(**wc).output.dada2_input
     assignments = checkpoints.amplicon_dispatch.get(**wc).output.assignments
-    fastq_files = pypelib.amplicon.dispatch.get_fastq_files(dada2_input, assignments, **wc, base_dir=f'data/projects/{wc.dataset}')
+    samples = [
+        k for k, v
+        in pypelib.amplicon.dispatch.get_assignments(path=assignments).items()
+        if v.target == wc.target_spec
+    ]
+    basedir = Path(f'data/projects/{wc.dataset}')
+    fastq_files = [
+        basedir / i for i
+        in pypelib.amplicon.dispatch.get_fastq_files(dada2_input, samples)
+    ]
 
     if wc.target_spec == SPLIT_18S_SPEC:
         split_out = rules.amplicon_split_18S_dispatch.output
