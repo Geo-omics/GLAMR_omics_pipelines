@@ -4570,6 +4570,7 @@ def get_dada2_input(wc):
         basedir / i for i
         in pypelib.amplicon.dispatch.get_fastq_files(dada2_input, samples)
     ]
+    stats_files = expand(rules.raw_reads_stats.output.stats, sample_type=['amplicons'], sample=samples)
 
     if wc.target_spec == SPLIT_18S_SPEC:
         split_out = rules.amplicon_split_18S_dispatch.output
@@ -4577,11 +4578,13 @@ def get_dada2_input(wc):
             'assignments': split_out.assignments.format(dataset=wc.dataset),
             'dada2_input': split_out.samples.format(dataset=wc.dataset),  # FIXME: this won't have right format
             'fastq_files': fastq_files,
+            'stats_files': stats_files,
         }
     return {
         'assignments': rules.amplicon_dispatch.output.assignments.format(dataset=wc.dataset),
         'dada2_input': rules.amplicon_dispatch.output.dada2_input.format(dataset=wc.dataset),
         'fastq_files': fastq_files,
+        'stats_files': stats_files,
     }
 
 
@@ -4590,6 +4593,7 @@ rule amplicon_dada2_target:
     output:
         seqs = "data/projects/{dataset}/dada2.{target_spec}/rep_seqs.fasta",
         abund = "data/projects/{dataset}/dada2.{target_spec}/asv_table.tsv",
+        read_counts = "data/projects/{dataset}/dada2.{target_spec}/read_counts.tsv",
     params:
         fastq_base_dir = "data/projects/{dataset}",
         outdir = subpath(output.abund, parent=True),
@@ -4613,6 +4617,7 @@ rule amplicon_dada2_target:
             {params.concatenate} \
             {wildcards.target_spec}
         status=$?
+        python3 -m pypelib.amplicon.finish_read_counts {params.outdir}/track_read_counts.tsv {input.stats_files} > {output.read_counts}
         if [[ $status -ne 0 ]]; then
             mv -v --backup=numbered -T -- {params.outdir} {params.outdir}_ERROR
             exit $?
